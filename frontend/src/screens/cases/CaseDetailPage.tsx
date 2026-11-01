@@ -12,6 +12,7 @@ import { CaseHistory } from "./CaseHistory";
 import { CaseImpacts } from "./CaseImpacts";
 import { CaseLegalDuties } from "./CaseLegalDuties";
 import { CasePreliminaryReport } from "./CasePreliminaryReport";
+import { CaseReporterContact } from "./CaseReporterContact";
 import { CaseReview } from "./CaseReview";
 import { Timestamp } from "@/components/timestamp";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -125,6 +126,9 @@ export function CaseDetailPage({ caseId, permissions }: Props) {
           />
 
           <CaseAssignments caseId={detail.id} closed={closed} canAssign={abilities.canAssign} />
+
+          {/* Keyed by case so a contact read for one case never shows on another. Nothing is read until the button is pressed. */}
+          {abilities.canReadReporterContact && <CaseReporterContact key={detail.id} caseId={detail.id} />}
 
           {abilities.canReadRecords && (
             <>

@@ -24,6 +24,8 @@ export interface CaseAbilities {
   canWriteRecords: boolean;
   // cases:read_all. The full view: free text of the case record, and the preliminary report.
   canReadFullView: boolean;
+  // reporter_contact:read. Read the contact the reporter gave. Every read is audited.
+  canReadReporterContact: boolean;
 }
 
 export function hasPermission(permissions: readonly string[], name: string): boolean {
@@ -51,5 +53,6 @@ export function caseAbilities(permissions: readonly string[]): CaseAbilities {
     canReadRecords: canReadCases(permissions),
     canWriteRecords: hasPermission(permissions, "cases:triage"),
     canReadFullView: hasPermission(permissions, "cases:read_all"),
+    canReadReporterContact: hasPermission(permissions, "reporter_contact:read"),
   };
 }

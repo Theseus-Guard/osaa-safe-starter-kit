@@ -481,6 +481,33 @@ describe("case and evidence endpoints", () => {
     expect(methodOf(1)).toBe("DELETE");
   });
 
+  it("reads the reporter contact of a case", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { case_id: "case/1", contact: "example@example.com" }));
+
+    await expect(api.getReporterContact("case/1")).resolves.toBe("example@example.com");
+
+    expect(urlOf(0)).toBe("/api/v1/reports/case%2F1/contact");
+    expect(methodOf(0)).toBe("GET");
+  });
+
+  it("resolves to null when the case has no contact recorded", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { case_id: "case-1", contact: null }));
+
+    await expect(api.getReporterContact("case-1")).resolves.toBeNull();
+  });
+
+  it("resolves to null when the case was not opened through the reporter channel", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(404, { detail: "reporter contact not found" }));
+
+    await expect(api.getReporterContact("case-1")).resolves.toBeNull();
+  });
+
+  it("rethrows a case that is not visible instead of reporting no contact", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(404, { detail: "case not found" }));
+
+    await expect(api.getReporterContact("case-1")).rejects.toMatchObject({ status: 404, code: "case not found" });
+  });
+
   it("lists every review of a case", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, []));
 
