@@ -194,7 +194,7 @@ def sample_assignment() -> Assignment:
 def test_unknown_or_invisible_case_is_404_on_every_read(client, caller, monkeypatch):
     monkeypatch.setattr(api, "find_visible_case", lambda case_id, scope: None)
     monkeypatch.setattr(api, "list_assignments", lambda case_id, scope: None)
-    monkeypatch.setattr(api, "case_history", lambda case_id, scope, limit, offset: None)
+    monkeypatch.setattr(api, "case_history", lambda case_id, scope, limit, offset, **kwargs: None)
     assert client.get(f"/api/v1/cases/{CASE_ID}").status_code == 404
     assert client.get(f"/api/v1/cases/{CASE_ID}/assignments").status_code == 404
     assert client.get(f"/api/v1/cases/{CASE_ID}/history").status_code == 404
@@ -433,7 +433,7 @@ def test_history_gives_triager_the_details_and_reporter_only_actions(client, cal
         details={"status": {"old": "open", "new": "closed"}},
     )
 
-    def fake_history(case_id, scope, limit, offset):
+    def fake_history(case_id, scope, limit, offset, **kwargs):
         return [entry], 1
 
     monkeypatch.setattr(api, "case_history", fake_history)
@@ -449,6 +449,21 @@ def test_history_gives_triager_the_details_and_reporter_only_actions(client, cal
     assert stripped["items"][0]["action"] == audit.CASE_CLOSE
     assert stripped["items"][0]["details"] is None
     assert stripped["items"][0]["actor_id"] is None
+
+
+def test_history_leaves_out_evidence_entries_unless_the_caller_holds_evidence_read(client, caller, monkeypatch):
+    seen = []
+
+    def fake_history(case_id, scope, limit, offset, **kwargs):
+        seen.append(kwargs["include_evidence"])
+        return [], 0
+
+    monkeypatch.setattr(api, "case_history", fake_history)
+    as_role(caller, REPORTER_ID, "reporter")
+    assert client.get(f"/api/v1/cases/{CASE_ID}/history").status_code == 200
+    as_role(caller, INVESTIGATOR_ID, "investigator")
+    assert client.get(f"/api/v1/cases/{CASE_ID}/history").status_code == 200
+    assert seen == [False, True]
 
 
 def test_history_is_paged_with_the_standard_bounds(client, caller):
@@ -797,6 +812,72 @@ def test_history_shows_details_only_to_the_triager(db_client, people):
     dumped = json.dumps(full)
     assert "Database case title" not in dumped
     assert "Confidential reviewer note" not in dumped
+
+
+@requires_database
+def test_close_and_reopen_reasons_are_stored_as_text(db_client, people):
+    case_id = create_case_via_api(db_client, people["reporter"])
+    triager = db_client(people["triager"])
+    triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]})
+    db_client(people["reviewer"]).post(f"/api/v1/cases/{case_id}/reviews", json={"outcome": "pass"})
+    for kind, task_id in task_ids(db_client, people["triager"], case_id).items():
+        triager.patch(
+            f"/api/v1/cases/{case_id}/deadlines/{task_id}",
+            json={"status": "not_applicable", "reason": f"{kind} is not applicable here"},
+        )
+    close_reason = "Confirmed root cause in the vendor patch"
+    reopen_reason = "New facts found"
+    assert triager.get(f"/api/v1/cases/{case_id}").json()["reopen_reason"] is None
+    assert triager.post(f"/api/v1/cases/{case_id}/close", json={"reason": close_reason}).status_code == 200
+    assert triager.post(f"/api/v1/cases/{case_id}/reopen", json={"reason": reopen_reason}).status_code == 200
+    assert triager.get(f"/api/v1/cases/{case_id}").json()["reopen_reason"] == reopen_reason
+
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT action, reason, actor_id::text FROM case_status_changes
+            WHERE case_id = %s AND NOT is_deleted ORDER BY changed_at
+            """,
+            (case_id,),
+        ).fetchall()
+    assert rows == [
+        ("closed", close_reason, people["triager"]),
+        ("reopened", reopen_reason, people["triager"]),
+    ]
+
+    history = triager.get(f"/api/v1/cases/{case_id}/history").json()["items"]
+    closed = next(item for item in history if item["action"] == audit.CASE_CLOSE)
+    reopened = next(item for item in history if item["action"] == audit.CASE_REOPEN)
+    assert closed["details"]["reason"] == close_reason
+    assert reopened["details"]["reason"] == reopen_reason
+    # The audit row itself still keeps only the length of each reason.
+    assert closed["details"]["close_reason"]["new"] == {"length": len(close_reason)}
+    assert reopened["details"]["reopen_reason"]["new"] == {"length": len(reopen_reason)}
+
+    stripped = db_client(people["reporter"]).get(f"/api/v1/cases/{case_id}/history").json()["items"]
+    assert all(item["details"] is None and item["actor_id"] is None for item in stripped)
+
+
+@requires_database
+def test_evidence_history_entries_need_evidence_read(db_client, people):
+    case_id = create_case_via_api(db_client, people["reporter"])
+    # Evidence rows are written against the evidence item. This row stands in for an evidence entry on the case.
+    with connect() as conn:
+        audit.record(
+            conn,
+            audit.EVIDENCE_UPLOADED,
+            "case",
+            case_id,
+            actor_id=people["investigator"],
+            details={"case_id": case_id},
+        )
+
+    with_read = db_client(people["triager"]).get(f"/api/v1/cases/{case_id}/history").json()
+    # The reporter can see the case but holds no evidence:read.
+    without_read = db_client(people["reporter"]).get(f"/api/v1/cases/{case_id}/history").json()
+    assert audit.EVIDENCE_UPLOADED in {item["action"] for item in with_read["items"]}
+    assert audit.EVIDENCE_UPLOADED not in {item["action"] for item in without_read["items"]}
+    assert without_read["total"] == with_read["total"] - 1
 
 
 @requires_database

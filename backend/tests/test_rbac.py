@@ -28,3 +28,18 @@ def test_migration_seed_matches_the_defaults():
     for role, permissions in DEFAULT_ROLE_PERMISSIONS.items():
         for permission in permissions:
             assert f"('{role}', '{permission}')" in seed, (role, permission)
+
+
+@pytest.mark.parametrize("role", ["investigator", "reviewer", "triager"])
+def test_roles_that_work_on_cases_may_read_evidence(role):
+    assert "evidence:read" in DEFAULT_ROLE_PERMISSIONS[role]
+
+
+@pytest.mark.parametrize("role", ["reporter", "disclosure_approver", "auditor", "admin"])
+def test_other_roles_may_not_read_evidence(role):
+    assert "evidence:read" not in DEFAULT_ROLE_PERMISSIONS[role]
+
+
+def test_only_the_investigator_may_upload_evidence():
+    holders = {role for role, permissions in DEFAULT_ROLE_PERMISSIONS.items() if "evidence:write" in permissions}
+    assert holders == {"investigator"}

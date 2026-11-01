@@ -110,7 +110,7 @@ def client(monkeypatch, provider):
     app = FastAPI()
     app.include_router(evidence_api.evidence_router)
     app.dependency_overrides[auth.current_user] = lambda: INVESTIGATOR
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"evidence:write"}))
+    monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"evidence:read", "evidence:write"}))
     monkeypatch.setattr(evidence, "case_visible", lambda case_id, scope: True)
     monkeypatch.setattr(evidence_api, "_PROVIDER", provider)
     monkeypatch.setenv("SAFE_EVIDENCE_MAX_BYTES", "1000")
@@ -541,6 +541,46 @@ def test_upload_needs_evidence_write(client, monkeypatch):
     body, content_type = multipart("scan.pdf", "application/pdf", PDF[:100])
     response = client.post(f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={"Content-Type": content_type})
     assert response.status_code == 403
+
+
+# --- reading evidence: list, download, and custody need evidence:read ---------------------------------------------
+
+READ_ENDPOINTS = [
+    "/api/v1/cases/{}/evidence",
+    "/api/v1/evidence/{}/download",
+    "/api/v1/evidence/{}/custody",
+]
+
+
+def refuse(*args, **kwargs):
+    raise AssertionError("must not run without evidence:read")
+
+
+@pytest.mark.parametrize("url_template", READ_ENDPOINTS)
+def test_reading_evidence_needs_evidence_read(client, monkeypatch, url_template):
+    monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"evidence:write", "cases:read_assigned"}))
+    monkeypatch.setattr(evidence, "case_visible", refuse)
+    monkeypatch.setattr(evidence, "find_stored", refuse)
+    monkeypatch.setattr(evidence, "list_evidence", refuse)
+    response = client.get(url_template.format(uuid.uuid4()))
+    assert response.status_code == 403
+    assert response.json() == {"detail": "forbidden"}
+
+
+@pytest.mark.parametrize("url_template", READ_ENDPOINTS)
+def test_reading_evidence_is_404_when_the_case_is_not_visible(client, monkeypatch, url_template):
+    monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"evidence:read"}))
+    monkeypatch.setattr(evidence, "case_visible", lambda case_id, scope: False)
+    monkeypatch.setattr(evidence, "find_stored", lambda evidence_id, scope: None)
+    assert client.get(url_template.format(uuid.uuid4())).status_code == 404
+
+
+def test_listing_with_evidence_read_returns_the_page(client, monkeypatch):
+    monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"evidence:read"}))
+    monkeypatch.setattr(evidence, "list_evidence", lambda case_id, limit, offset: ([], 0))
+    response = client.get(f"/api/v1/cases/{uuid.uuid4()}/evidence")
+    assert response.status_code == 200
+    assert response.json() == {"items": [], "total": 0, "limit": 50, "offset": 0}
 
 
 # --- custody and reconciliation: database-backed -----------------------------------------------------------------

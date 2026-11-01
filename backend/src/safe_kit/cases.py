@@ -124,6 +124,8 @@ class Case:
     closed_at: datetime | None = None
     closed_by: str | None = None
     close_reason: str | None = None
+    # The reason of the latest reopening, from case_status_changes. Only find_visible_case fills it in.
+    reopen_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -180,7 +182,16 @@ def redact_history(entries: Sequence[HistoryEntry]) -> list[HistoryEntry]:
 
 def _text_marker(text: str | None) -> dict[str, int] | None:
     # Free text (reasons and notes) is never written to the audit log. Only its length is recorded.
+    # Closure and reopening reasons are kept as text in case_status_changes instead.
     return None if text is None else {"length": len(text)}
+
+
+def _record_status_change(conn, case_id: str, action: str, reason: str, actor_id: str) -> None:
+    """Store the reason of a closure or reopening. changed_at is the transaction time, as is the audit row's."""
+    conn.execute(
+        "INSERT INTO case_status_changes (case_id, action, reason, actor_id) VALUES (%s, %s, %s, %s)",
+        (case_id, action, reason, actor_id),
+    )
 
 
 def _change(old: Any, new: Any) -> dict[str, Any]:
@@ -298,15 +309,20 @@ def insert_case(conn, title: str, awareness_time: datetime, created_by: str) -> 
 def find_visible_case(case_id: str, scope: CaseScope) -> Case | None:
     """Return the case with its deadline tasks if the scope may see it. Otherwise None, the same as a missing case."""
     visibility, params = scope.visibility_sql()
+    latest_reopen_reason = (
+        "(SELECT csc.reason FROM case_status_changes csc WHERE csc.case_id = cases.id "
+        "AND csc.action = 'reopened' AND NOT csc.is_deleted ORDER BY csc.changed_at DESC, csc.id DESC LIMIT 1)"
+    )
     with connect() as conn:
         row = conn.execute(
-            f"SELECT {_CASE_COLUMNS} FROM cases WHERE id = %s AND NOT is_deleted AND {visibility}",
+            f"SELECT {_CASE_COLUMNS}, {latest_reopen_reason} FROM cases "
+            f"WHERE id = %s AND NOT is_deleted AND {visibility}",
             (case_id, *params),
         ).fetchone()
         if row is None:
             return None
         tasks = _load_tasks(conn, case_id)
-    return replace(_to_case(row), deadlines=tasks)
+    return replace(_to_case(row[:-1]), deadlines=tasks, reopen_reason=row[-1])
 
 
 def list_visible_cases(scope: CaseScope, limit: int, offset: int) -> list[Case]:
@@ -540,6 +556,7 @@ def close_case(case_id: str, reason: str, scope: CaseScope) -> tuple[Outcome, li
             """,
             (scope.user_id, reason, case_id),
         ).fetchone()[0]
+        _record_status_change(conn, case_id, "closed", reason, scope.user_id)
         audit.record(
             conn,
             audit.CASE_CLOSE,
@@ -557,7 +574,10 @@ def close_case(case_id: str, reason: str, scope: CaseScope) -> tuple[Outcome, li
 
 
 def reopen_case(case_id: str, reason: str, scope: CaseScope) -> Outcome:
-    """Reopen a closed case. The reason and the previous closure stay in the audit log."""
+    """Reopen a closed case. The reason is stored as text in case_status_changes; the audit row keeps only its length.
+
+    The previous closure stays in the audit log.
+    """
     with connect() as conn:
         locked = _lock_visible_case(conn, case_id, scope)
         if locked is None:
@@ -569,6 +589,7 @@ def reopen_case(case_id: str, reason: str, scope: CaseScope) -> Outcome:
             "UPDATE cases SET status = 'open', closed_at = NULL, closed_by = NULL WHERE id = %s",
             (case_id,),
         )
+        _record_status_change(conn, case_id, "reopened", reason, scope.user_id)
         audit.record(
             conn,
             audit.CASE_REOPEN,
@@ -585,22 +606,46 @@ def reopen_case(case_id: str, reason: str, scope: CaseScope) -> Outcome:
     return Outcome.OK
 
 
-def case_history(case_id: str, scope: CaseScope, limit: int, offset: int) -> tuple[list[HistoryEntry], int] | None:
-    """Audit rows of the case, newest first, or None when the scope may not see the case. Details are not redacted here."""
+def case_history(
+    case_id: str, scope: CaseScope, limit: int, offset: int, *, include_evidence: bool = False
+) -> tuple[list[HistoryEntry], int] | None:
+    """Audit rows of the case, newest first, or None when the scope may not see the case.
+
+    A closure or reopening gets its reason from case_status_changes, under the key "reason" in details.
+    Evidence actions are left out unless include_evidence is set (the caller holds evidence:read).
+    Details are not redacted here: the endpoint decides who sees them.
+    """
+    # The reason row has the same case, actor, and transaction time as its audit row, because both are written
+    # in one transaction and take now() as their timestamp.
+    history_join = """
+        FROM audit_events ae
+        LEFT JOIN case_status_changes csc
+            ON csc.case_id::text = ae.target_id
+            AND csc.changed_at = ae.created_at
+            AND csc.actor_id = ae.actor_id
+            AND csc.action = CASE ae.action WHEN %s THEN 'closed' WHEN %s THEN 'reopened' END
+            AND NOT csc.is_deleted
+        WHERE ae.target_type = 'case' AND ae.target_id = %s AND NOT ae.is_deleted
+            AND (%s OR ae.action <> ALL(%s::text[]))
+    """
+    evidence_filter = (include_evidence, sorted(audit.EVIDENCE_AUDIT_ACTIONS))
     with connect() as conn:
         if not _is_visible(conn, case_id, scope):
             return None
         rows = conn.execute(
-            """
-            SELECT id::text, action, created_at, actor_id::text, details FROM audit_events
-            WHERE target_type = 'case' AND target_id = %s AND NOT is_deleted
-            ORDER BY created_at DESC, id DESC
-            LIMIT %s OFFSET %s
-            """,
-            (case_id, limit, offset),
+            f"SELECT ae.id::text, ae.action, ae.created_at, ae.actor_id::text, ae.details, csc.reason {history_join}"
+            " ORDER BY ae.created_at DESC, ae.id DESC LIMIT %s OFFSET %s",
+            (audit.CASE_CLOSE, audit.CASE_REOPEN, case_id, *evidence_filter, limit, offset),
         ).fetchall()
         total = conn.execute(
-            "SELECT count(*) FROM audit_events WHERE target_type = 'case' AND target_id = %s AND NOT is_deleted",
-            (case_id,),
+            "SELECT count(*) FROM audit_events ae "
+            "WHERE ae.target_type = 'case' AND ae.target_id = %s AND NOT ae.is_deleted AND (%s OR ae.action <> ALL(%s::text[]))",
+            (case_id, *evidence_filter),
         ).fetchone()[0]
-    return [HistoryEntry(id=r[0], action=r[1], created_at=r[2], actor_id=r[3], details=r[4]) for r in rows], total
+    entries = []
+    for row in rows:
+        details = row[4]
+        if row[5] is not None:
+            details = {**(details or {}), "reason": row[5]}
+        entries.append(HistoryEntry(id=row[0], action=row[1], created_at=row[2], actor_id=row[3], details=details))
+    return entries, total

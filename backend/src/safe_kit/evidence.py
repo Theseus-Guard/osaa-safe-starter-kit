@@ -46,8 +46,8 @@ DOWNLOADED = "downloaded"
 VERIFIED = "verified"
 FAILED_EVENT = "failed"
 
-EVIDENCE_UPLOADED = "evidence.uploaded"
-EVIDENCE_DOWNLOADED = "evidence.downloaded"
+EVIDENCE_UPLOADED = audit.EVIDENCE_UPLOADED
+EVIDENCE_DOWNLOADED = audit.EVIDENCE_DOWNLOADED
 EVIDENCE_TARGET = "evidence"
 
 _UNSAFE_NAME_CHARS = re.compile(r'[\x00-\x1f\x7f"<>:|?*\\/]')

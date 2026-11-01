@@ -2,9 +2,9 @@
 
 Access rules, from the case access control in cases.py (CaseScope):
 - upload needs evidence:write, and the case must be visible to the caller;
-- list, download, and custody need the case to be visible to the caller. evidence:write alone does not grant
-  reading the evidence of cases the caller cannot see.
-A case or item the caller may not see answers 404, the same as a missing one.
+- list, download, and custody need evidence:read, and the case must be visible to the caller. evidence:write
+  alone does not grant reading the evidence of cases the caller cannot see.
+A missing permission answers 403. A case or item the caller may not see answers 404, the same as a missing one.
 
 The key provider is loaded once, when this module is imported, if SAFE_EVIDENCE_KEK_FILE or
 SAFE_EVIDENCE_KEY_PROVIDER is set. A missing, empty, or badly permissioned key file raises here, so the API refuses
@@ -29,12 +29,13 @@ from starlette.requests import Request as ParserRequest
 from starlette.types import Message, Receive
 
 from safe_kit import evidence
-from safe_kit.auth import current_user, permissions_of, require_permission
+from safe_kit.auth import permissions_of, require_permission
 from safe_kit.cases import CaseScope
 from safe_kit.evidence_keys import KeyProvider, KeyProviderError, key_provider_from_env
 from safe_kit.evidence_storage import StorageError, storage_from_env
 from safe_kit.users import User
 
+EVIDENCE_READ = "evidence:read"
 EVIDENCE_WRITE = "evidence:write"
 
 # Room for multipart headers and boundaries on top of the file limit.
@@ -208,7 +209,7 @@ def list_case_evidence(
     case_id: uuid.UUID,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission(EVIDENCE_READ)),
 ) -> EvidencePage:
     if not evidence.case_visible(str(case_id), _scope(user)):
         raise HTTPException(status_code=404, detail="case not found")
@@ -217,7 +218,7 @@ def list_case_evidence(
 
 
 @evidence_router.get("/api/v1/evidence/{evidence_id}/download")
-def download_evidence(evidence_id: uuid.UUID, user: User = Depends(current_user)) -> Response:
+def download_evidence(evidence_id: uuid.UUID, user: User = Depends(require_permission(EVIDENCE_READ))) -> Response:
     stored = _readable_stored(str(evidence_id), user)
     if stored.status != evidence.AVAILABLE:
         raise HTTPException(status_code=409, detail="evidence is not available")
@@ -241,7 +242,9 @@ def download_evidence(evidence_id: uuid.UUID, user: User = Depends(current_user)
 
 
 @evidence_router.get("/api/v1/evidence/{evidence_id}/custody", response_model=list[CustodyEventResponse])
-def custody_log(evidence_id: uuid.UUID, user: User = Depends(current_user)) -> list[CustodyEventResponse]:
+def custody_log(
+    evidence_id: uuid.UUID, user: User = Depends(require_permission(EVIDENCE_READ))
+) -> list[CustodyEventResponse]:
     stored = _readable_stored(str(evidence_id), user)
     return [
         CustodyEventResponse(

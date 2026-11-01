@@ -286,7 +286,16 @@ def test_me_with_valid_token(client):
         "first_name": None,
         "last_name": None,
         "title": None,
+        "permissions": sorted(DEFAULT_ROLE_PERMISSIONS["triager"]),
     }
+
+
+def test_me_lists_the_role_permissions_sorted(client):
+    token = login_tokens(client, "alice")["access_token"]
+    permissions = client.get("/api/v1/auth/me", headers=bearer_header(token)).json()["permissions"]
+    assert permissions == sorted(permissions)
+    assert {"cases:read_all", "cases:close", "evidence:read"} <= set(permissions)
+    assert "evidence:write" not in permissions
 
 
 def test_me_without_or_with_bad_token_is_rejected(client):

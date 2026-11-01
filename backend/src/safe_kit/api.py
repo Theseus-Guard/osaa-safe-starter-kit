@@ -175,6 +175,8 @@ class MeResponse(BaseModel):
     first_name: str | None = None
     last_name: str | None = None
     title: str | None = None
+    # Sorted permission names of the caller's role. The frontend uses them to show or hide actions; the API still checks each request.
+    permissions: list[str]
 
 
 class SystemTimezoneResponse(BaseModel):
@@ -371,6 +373,7 @@ def me(user: User = Depends(current_user_pending_change)) -> MeResponse:
         role=user.role,
         password_change_required=user.must_change_password,
         timezone_setup_required=user.role == SETUP_ROLE and current_timezone_name() is None,
+        permissions=sorted(permissions_of(user)),
         **profile_fields(user),
     )
 
@@ -578,6 +581,8 @@ class CaseResponse(BaseModel):
     closed_at: datetime | None
     closed_by: str | None
     close_reason: str | None
+    # Reason of the latest reopening, null when the case was never reopened.
+    reopen_reason: str | None
     deadlines: list[DeadlineTaskResponse]
 
 
@@ -728,6 +733,7 @@ def _case_response(case: Case) -> CaseResponse:
         closed_at=case.closed_at,
         closed_by=case.closed_by,
         close_reason=case.close_reason,
+        reopen_reason=case.reopen_reason,
         deadlines=[
             DeadlineTaskResponse(
                 id=task.id,
@@ -990,12 +996,15 @@ def get_case_history(
     offset: int = Query(default=0, ge=0),
     actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS)),
 ) -> HistoryPage:
-    result = case_history(str(case_id), _scope(actor), limit, offset)
+    permissions = permissions_of(actor)
+    result = case_history(
+        str(case_id), _scope(actor), limit, offset, include_evidence="evidence:read" in permissions
+    )
     if result is None:
         raise CASE_NOT_FOUND
     entries, total = result
     # Full details go to callers who can read every case (the triager). Everyone else sees action and time only.
-    if "cases:read_all" not in permissions_of(actor):
+    if "cases:read_all" not in permissions:
         entries = redact_history(entries)
     return HistoryPage(
         items=[

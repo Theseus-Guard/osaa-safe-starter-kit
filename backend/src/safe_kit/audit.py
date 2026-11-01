@@ -36,6 +36,11 @@ CASE_REVIEW = "case.review_recorded"
 CASE_DEADLINE_UPDATE = "case.deadline_updated"
 # Written against the import record (target_type "case_import"), not the case, so it stays out of the case history.
 CASE_IMPORT = "case.import"
+# Written by safe_kit.evidence against the evidence item (target_type "evidence").
+EVIDENCE_UPLOADED = "evidence.uploaded"
+EVIDENCE_DOWNLOADED = "evidence.downloaded"
+# Case history omits these actions for callers without evidence:read.
+EVIDENCE_AUDIT_ACTIONS = frozenset({EVIDENCE_UPLOADED, EVIDENCE_DOWNLOADED})
 SYSTEM_TIMEZONE_SET = "system.timezone_set"
 SYSTEM_TIMEZONE_CHANGED = "system.timezone_changed"
 
