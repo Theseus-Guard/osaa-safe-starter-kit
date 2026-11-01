@@ -3,13 +3,14 @@
 export const IDLE_LIMIT_MS = 60 * 60 * 1000;
 export const IDLE_WARNING_MS = 5 * 60 * 1000;
 const CHECK_INTERVAL_MS = 15 * 1000;
-const ACTIVITY_EVENTS = ["pointerdown", "keydown", "scroll", "mousemove"] as const;
 
 let lastActivity = Date.now();
+let onActivity: (() => void) | null = null;
 
-// Called on user input and on every API request, so a page that is only polling the API is not idle.
+// Only API requests count as activity. Mouse and keyboard use do not, so a user who only reads the page is signed out.
 export function recordActivity(): void {
   lastActivity = Date.now();
+  onActivity?.();
 }
 
 interface IdleHandlers {
@@ -18,14 +19,13 @@ interface IdleHandlers {
 }
 
 // Reports onWarning(true) once the session has been idle for IDLE_LIMIT_MS - IDLE_WARNING_MS, and onWarning(false)
-// as soon as activity resumes. Calls onExpired() once the session has been idle for IDLE_LIMIT_MS, then stops.
+// as soon as an API request is made. Calls onExpired() once the session has been idle for IDLE_LIMIT_MS, then stops.
 // Returns a function that stops the watch.
 export function watchIdle(handlers: IdleHandlers): () => void {
   let warning = false;
   recordActivity();
 
-  const onActivity = () => {
-    recordActivity();
+  onActivity = () => {
     if (warning) {
       warning = false;
       handlers.onWarning(false);
@@ -47,11 +47,10 @@ export function watchIdle(handlers: IdleHandlers): () => void {
   };
 
   const timer = window.setInterval(check, CHECK_INTERVAL_MS);
-  for (const event of ACTIVITY_EVENTS) window.addEventListener(event, onActivity, { passive: true });
 
   function stop(): void {
     window.clearInterval(timer);
-    for (const event of ACTIVITY_EVENTS) window.removeEventListener(event, onActivity);
+    onActivity = null;
   }
   return stop;
 }
