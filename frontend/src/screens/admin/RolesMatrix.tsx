@@ -12,6 +12,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 // The backend refuses to save the admin role without these, so they stay checked and locked in the grid.
 const ADMIN_REQUIRED = ["users:manage", "users:reset_password", "roles:manage"];
 const REQUIRED_REASON = "The admin role must keep this permission, so admins cannot lock themselves out.";
+// The reporting_owner role reads the reporter contact. Its grant is fixed by the backend and its row is not editable.
+const FIXED_ROLE: Role = "reporting_owner";
+const FIXED_REASON = "This role is fixed. Its grants cannot be changed here.";
 // A bounded height with a scroll container keeps the header sticky.
 const TABLE_FRAME_CLASS = "overflow-hidden rounded-md border";
 
@@ -135,18 +138,23 @@ export function RolesMatrix({ editable }: Props) {
                   {loaded.roles.map((entry) => {
                     const selected = selectionFor(entry.role);
                     const isAdmin = entry.role === "admin";
+                    const isFixed = entry.role === FIXED_ROLE;
                     return (
                       <TableRow key={entry.role}>
-                        <TableCell className="font-medium">{entry.role}</TableCell>
+                        <TableCell className="font-medium">
+                          {entry.role}
+                          {isFixed && <p className="text-xs font-normal text-muted-foreground">{FIXED_REASON}</p>}
+                        </TableCell>
                         {loaded.catalog.map((permission) => {
                           const required = isAdmin && ADMIN_REQUIRED.includes(permission.name);
+                          const reason = required ? REQUIRED_REASON : isFixed ? FIXED_REASON : undefined;
                           return (
                             <TableCell key={permission.name}>
-                              <DisabledHint reason={required ? REQUIRED_REASON : undefined}>
+                              <DisabledHint reason={reason}>
                                 <Checkbox
                                   aria-label={`${entry.role} ${permission.name}`}
                                   checked={selected.has(permission.name)}
-                                  disabled={required || savingRole !== null}
+                                  disabled={required || isFixed || savingRole !== null}
                                   onCheckedChange={(checked) => toggle(entry.role, permission.name, checked)}
                                 />
                               </DisabledHint>
@@ -154,13 +162,15 @@ export function RolesMatrix({ editable }: Props) {
                           );
                         })}
                         <TableCell>
-                          <Button
-                            size="sm"
-                            disabled={!isDirty(entry) || savingRole !== null}
-                            onClick={() => void save(entry)}
-                          >
-                            {savingRole === entry.role ? "Saving…" : "Save"}
-                          </Button>
+                          <DisabledHint reason={isFixed ? FIXED_REASON : undefined}>
+                            <Button
+                              size="sm"
+                              disabled={isFixed || !isDirty(entry) || savingRole !== null}
+                              onClick={() => void save(entry)}
+                            >
+                              {savingRole === entry.role ? "Saving…" : "Save"}
+                            </Button>
+                          </DisabledHint>
                         </TableCell>
                       </TableRow>
                     );

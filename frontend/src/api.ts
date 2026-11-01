@@ -10,6 +10,7 @@ export const ROLES = [
   "reviewer",
   "disclosure_approver",
   "auditor",
+  "reporting_owner",
   "admin",
 ] as const;
 
