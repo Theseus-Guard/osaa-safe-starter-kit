@@ -90,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
     if user is None:
         print(f"user not found: {args.username}", file=sys.stderr)
         return 1
-    reset_password(user.id, password)
+    reset_password(user.id, password, source="cli")
     print(f"password reset for {args.username}; all sessions ended; password change required at next login")
     return 0
 

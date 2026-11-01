@@ -26,7 +26,7 @@ def calls(monkeypatch):
 
     monkeypatch.setattr(admin, "bootstrap_admin", fake_bootstrap)
     monkeypatch.setattr(admin, "find_user", lambda username: None)
-    monkeypatch.setattr(admin, "reset_password", lambda *args: recorded["reset"].append(args))
+    monkeypatch.setattr(admin, "reset_password", lambda *args, **kwargs: recorded["reset"].append(args))
     return recorded, state
 
 

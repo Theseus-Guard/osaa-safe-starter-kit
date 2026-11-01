@@ -24,7 +24,7 @@ def test_non_admin_default_roles_cannot_manage_users_or_roles(role):
 
 
 def test_migration_seed_matches_the_defaults():
-    seed = (MIGRATIONS / "0007_editable_rbac.sql").read_text(encoding="utf-8")
+    seed = "\n".join(path.read_text(encoding="utf-8") for path in sorted(MIGRATIONS.glob("*.sql")))
     for role, permissions in DEFAULT_ROLE_PERMISSIONS.items():
         for permission in permissions:
             assert f"('{role}', '{permission}')" in seed, (role, permission)

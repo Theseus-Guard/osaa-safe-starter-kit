@@ -7,6 +7,7 @@ It is kept in code only so that a test can check the seed against the migration.
 
 from enum import Enum
 
+from safe_kit import audit
 from safe_kit.db import connect
 from safe_kit.users import ROLES
 
@@ -24,7 +25,7 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "auditor": frozenset({"audit:read"}),
     # By design the admin role has no case permissions: platform administration
     # does not grant access to case content.
-    "admin": ADMIN_REQUIRED_PERMISSIONS,
+    "admin": ADMIN_REQUIRED_PERMISSIONS | {"privacy:read"},
 }
 
 
@@ -73,8 +74,11 @@ def list_role_permissions() -> dict[str, list[str]]:
     return matrix
 
 
-def set_role_permissions(role: str, permissions: frozenset[str]) -> RoleOutcome:
-    """Replace the permission set of a role. Granting is an undelete; revoking is a soft delete."""
+def set_role_permissions(role: str, permissions: frozenset[str], actor_id: str | None = None) -> RoleOutcome:
+    """Replace the permission set of a role. Granting is an undelete; revoking is a soft delete.
+
+    The audit row lists the granted and revoked permissions and commits with the change.
+    """
     if role == "admin" and not ADMIN_REQUIRED_PERMISSIONS <= permissions:
         return RoleOutcome.ADMIN_GUARD
     with connect() as conn:
@@ -95,7 +99,9 @@ def set_role_permissions(role: str, permissions: frozenset[str]) -> RoleOutcome:
                 (role,),
             ).fetchall()
         }
-        for permission in sorted(permissions - current):
+        granted = permissions - current
+        revoked = current - permissions
+        for permission in sorted(granted):
             conn.execute(
                 """
                 INSERT INTO role_permissions (role, permission) VALUES (%s, %s)
@@ -103,12 +109,21 @@ def set_role_permissions(role: str, permissions: frozenset[str]) -> RoleOutcome:
                 """,
                 (role, permission),
             )
-        for permission in sorted(current - permissions):
+        for permission in sorted(revoked):
             conn.execute(
                 """
                 UPDATE role_permissions SET is_deleted = true, deleted_at = now()
                 WHERE role = %s AND permission = %s AND NOT is_deleted
                 """,
                 (role, permission),
+            )
+        if granted or revoked:
+            audit.record(
+                conn,
+                audit.ROLE_PERMISSIONS_CHANGE,
+                "role",
+                role,
+                actor_id=actor_id,
+                details={"granted": sorted(granted), "revoked": sorted(revoked)},
             )
     return RoleOutcome.OK

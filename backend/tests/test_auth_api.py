@@ -26,6 +26,7 @@ class FakeStore:
         self.sessions = {}  # raw refresh token -> {"user_id", "family", "revoked"}
         self.revoked_jtis = set()
         self.buckets = {}
+        self.login_failures = []
         self._counter = 0
 
     def add_user(self, user_id, username, role, *, password=PASSWORD, active=True, must_change=False):
@@ -50,7 +51,7 @@ class FakeStore:
     def find_user_by_id(self, user_id):
         return self.users.get(user_id)
 
-    def create_user(self, username, password, role):
+    def create_user(self, username, password, role, actor_id=None):
         if self.find_user(username):
             raise psycopg.errors.UniqueViolation("duplicate username")
         user_id = f"00000000-0000-0000-0000-{len(self.users) + 1:012d}"
@@ -71,8 +72,12 @@ class FakeStore:
                 session["revoked"] = True
         return True
 
-    def reset_password(self, user_id, temporary_password):
+    def reset_password(self, user_id, temporary_password, actor_id=None, source="api"):
         return self._set_password(user_id, temporary_password, must_change=True)
+
+    # --- audit ---
+    def record_login_failure(self, user_id, reason):
+        self.login_failures.append((user_id, reason))
 
     def change_own_password(self, user_id, new_password):
         return self._set_password(user_id, new_password, must_change=False)
@@ -137,6 +142,7 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "find_user_by_id", fake.find_user_by_id)
     monkeypatch.setattr(api, "create_user", fake.create_user)
     monkeypatch.setattr(api, "reset_password", fake.reset_password)
+    monkeypatch.setattr(api, "record_login_failure", fake.record_login_failure)
     monkeypatch.setattr(api, "change_own_password", fake.change_own_password)
     monkeypatch.setattr(api, "hit_rate_limit", fake.hit)
     monkeypatch.setattr(api, "clear_rate_limit", fake.clear)
@@ -424,3 +430,28 @@ def test_short_passwords_are_rejected(client):
         json={"temporary_password": "short"},
     )
     assert response.status_code == 422
+
+
+def test_failed_login_is_audited_by_account_not_by_username_or_address(client, store):
+    response = client.post(
+        "/api/v1/auth/token",
+        headers={"X-Real-IP": "203.0.113.9"},
+        json={"username": "alice", "password": "wrong password here"},
+    )
+    assert response.status_code == 401
+    assert store.login_failures == [(ALICE, "wrong_password")]
+
+
+def test_failed_login_for_unknown_name_is_audited_without_the_name(client, store):
+    login(client, "nobody-by-this-name")
+    assert store.login_failures == [(None, "unknown_user")]
+
+
+def test_login_to_disabled_account_is_audited_as_inactive(client, store):
+    login(client, "bob")
+    assert store.login_failures == [(BOB, "account_inactive")]
+
+
+def test_successful_login_is_not_audited_as_a_failure(client, store):
+    login(client, "alice")
+    assert store.login_failures == []

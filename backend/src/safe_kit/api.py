@@ -1,10 +1,13 @@
+import csv
+import io
 import uuid
 from datetime import UTC, datetime
 
 import psycopg
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, Field, field_validator
 
 from safe_kit.auth import (
     INVALID_CREDENTIALS,
@@ -13,6 +16,8 @@ from safe_kit.auth import (
     current_user_pending_change,
     require_permission,
 )
+from safe_kit.audit import record_login_failure
+from safe_kit.cases import Case, count_own_cases, create_case, find_own_case, list_own_cases
 from safe_kit.db import connect
 from safe_kit.rate_limit import (
     LOGIN_LIMIT_PER_CLIENT,
@@ -21,6 +26,7 @@ from safe_kit.rate_limit import (
 )
 from safe_kit.rate_limit import clear as clear_rate_limit
 from safe_kit.rate_limit import hit as hit_rate_limit
+from safe_kit.privacy import CSV_COLUMNS, inventory, inventory_csv_rows
 from safe_kit.rbac import RoleOutcome, list_catalog, list_role_permissions, set_role_permissions
 from safe_kit.security import (
     MIN_PASSWORD_LENGTH,
@@ -226,6 +232,14 @@ def login(body: LoginRequest, request: Request) -> TokenResponse:
     user = find_user(body.username)
     password_ok = verify_password(user.password_hash if user else None, body.password)
     if user is None or not user.is_active or not password_ok:
+        # The audit row names the account, never the submitted username or the client address.
+        if user is None:
+            reason = "unknown_user"
+        elif not user.is_active:
+            reason = "account_inactive"
+        else:
+            reason = "wrong_password"
+        record_login_failure(user.id if user else None, reason)
         raise INVALID_CREDENTIALS
     clear_rate_limit(f"login:user:{body.username}")
     return _issue_tokens(user, open_session(user.id))
@@ -301,7 +315,7 @@ def admin_create_user(
     actor: User = Depends(require_permission("users:manage")),
 ) -> UserCreatedResponse:
     try:
-        user_id = create_user(body.username, body.temporary_password, body.role)
+        user_id = create_user(body.username, body.temporary_password, body.role, actor_id=actor.id)
     except InvalidUsername as error:
         raise HTTPException(status_code=422, detail=str(error))
     except psycopg.errors.UniqueViolation:
@@ -326,7 +340,7 @@ def admin_update_user(
     # everyone out, and another active admin can always make the change.
     if str(user_id) == actor.id:
         raise HTTPException(status_code=409, detail="cannot change your own role or status")
-    outcome = update_user(str(user_id), role=body.role, is_active=body.is_active)
+    outcome = update_user(str(user_id), role=body.role, is_active=body.is_active, actor_id=actor.id)
     if outcome is UpdateOutcome.NOT_FOUND:
         raise HTTPException(status_code=404, detail="user not found")
     if outcome is UpdateOutcome.PROTECTED:
@@ -347,7 +361,7 @@ def admin_delete_user(
     # Physical removal is done by a database administrator, never through the API.
     if str(user_id) == actor.id:
         raise HTTPException(status_code=409, detail="cannot change your own role or status")
-    outcome = soft_delete_user(str(user_id))
+    outcome = soft_delete_user(str(user_id), actor_id=actor.id)
     if outcome is UpdateOutcome.NOT_FOUND:
         raise HTTPException(status_code=404, detail="user not found")
     if outcome is UpdateOutcome.PROTECTED:
@@ -365,7 +379,7 @@ def admin_reset_password(
 ) -> Response:
     # Self-service reset is intentionally not offered. The admin sets a temporary password
     # and the user must replace it at next login.
-    if not reset_password(str(user_id), body.temporary_password):
+    if not reset_password(str(user_id), body.temporary_password, actor_id=actor.id):
         raise HTTPException(status_code=404, detail="user not found")
     return Response(status_code=204)
 
@@ -391,7 +405,7 @@ def admin_set_role_permissions(
 ) -> RoleSummary:
     if role not in ROLES:
         raise HTTPException(status_code=404, detail="role not found")
-    outcome = set_role_permissions(role, frozenset(body.permissions))
+    outcome = set_role_permissions(role, frozenset(body.permissions), actor_id=actor.id)
     if outcome is RoleOutcome.UNKNOWN_PERMISSION:
         raise HTTPException(status_code=422, detail="unknown permission")
     if outcome is RoleOutcome.ADMIN_GUARD:
@@ -400,3 +414,147 @@ def admin_set_role_permissions(
             detail="the admin role must keep users:manage, users:reset_password and roles:manage",
         )
     return RoleSummary(role=role, permissions=list_role_permissions()[role])
+
+
+class DeadlineTaskResponse(BaseModel):
+    kind: str
+    due_at: datetime
+    status: str
+
+
+class CaseCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    # Must be timezone-aware: a naive time cannot be compared with the deadlines reliably.
+    awareness_time: AwareDatetime
+
+    @field_validator("title")
+    @classmethod
+    def not_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("title must not be blank")
+        return value
+
+    @field_validator("awareness_time")
+    @classmethod
+    def not_in_future(cls, value: datetime) -> datetime:
+        if value > datetime.now(UTC):
+            raise ValueError("awareness_time cannot be in the future")
+        return value
+
+
+class CaseResponse(BaseModel):
+    id: str
+    reference: str
+    title: str
+    awareness_time: datetime
+    status: str
+    calendar_version: str
+    created_at: datetime
+    deadlines: list[DeadlineTaskResponse]
+
+
+class CaseSummary(BaseModel):
+    id: str
+    reference: str
+    title: str
+    awareness_time: datetime
+    status: str
+    created_at: datetime
+
+
+class CasePage(BaseModel):
+    items: list[CaseSummary]
+    total: int
+    limit: int
+    offset: int
+
+
+def _case_response(case: Case) -> CaseResponse:
+    return CaseResponse(
+        id=case.id,
+        reference=case.reference,
+        title=case.title,
+        awareness_time=case.awareness_time,
+        status=case.status,
+        calendar_version=case.calendar_version,
+        created_at=case.created_at,
+        deadlines=[
+            DeadlineTaskResponse(kind=task.kind, due_at=task.due_at, status=task.status)
+            for task in case.deadlines
+        ],
+    )
+
+
+def _case_summary(case: Case) -> CaseSummary:
+    return CaseSummary(
+        id=case.id,
+        reference=case.reference,
+        title=case.title,
+        awareness_time=case.awareness_time,
+        status=case.status,
+        created_at=case.created_at,
+    )
+
+
+@app.post("/api/v1/cases", status_code=201, response_model=CaseResponse)
+def submit_case(
+    body: CaseCreateRequest,
+    actor: User = Depends(require_permission("cases:submit")),
+) -> CaseResponse:
+    return _case_response(create_case(body.title, body.awareness_time, created_by=actor.id))
+
+
+@app.get("/api/v1/cases", response_model=CasePage)
+def list_my_cases(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    actor: User = Depends(require_permission("cases:read_own")),
+) -> CasePage:
+    return CasePage(
+        items=[_case_summary(case) for case in list_own_cases(actor.id, limit, offset)],
+        total=count_own_cases(actor.id),
+        limit=limit,
+        offset=offset,
+    )
+
+
+@app.get("/api/v1/cases/{case_id}", response_model=CaseResponse)
+def get_my_case(
+    case_id: uuid.UUID,
+    actor: User = Depends(require_permission("cases:read_own")),
+) -> CaseResponse:
+    # Another user's case gets the same 404 as a missing one, so existence is not revealed.
+    case = find_own_case(str(case_id), actor.id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    return _case_response(case)
+
+
+@app.get("/api/v1/privacy/inventory")
+def privacy_inventory(actor: User = Depends(require_permission("privacy:read"))) -> dict:
+    # Metadata and row counts only. Row contents and secrets are never read or returned here.
+    return {"generated_at": datetime.now(UTC).isoformat(), "items": inventory()}
+
+
+@app.get("/api/v1/privacy/inventory/export")
+def privacy_inventory_export(
+    format: str = Query(default="json", pattern="^(json|csv)$"),
+    actor: User = Depends(require_permission("privacy:read")),
+) -> Response:
+    generated_at = datetime.now(UTC)
+    items = inventory()
+    if format == "json":
+        return JSONResponse(
+            content={"generated_at": generated_at.isoformat(), "items": items},
+            headers={"Content-Disposition": 'attachment; filename="data-inventory.json"'},
+        )
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(CSV_COLUMNS)
+    writer.writerows(inventory_csv_rows(items))
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="data-inventory.csv"'},
+    )

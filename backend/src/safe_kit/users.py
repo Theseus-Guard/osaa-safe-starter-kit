@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 
+from safe_kit import audit
 from safe_kit.db import connect
 from safe_kit.security import hash_password
 
@@ -71,7 +72,7 @@ def _to_user(row: tuple) -> User:
     )
 
 
-def create_user(username: str, password: str, role: str) -> str:
+def create_user(username: str, password: str, role: str, actor_id: str | None = None) -> str:
     """Create an account with a temporary password. The user must change it at first login."""
     validate_username(username)
     if role not in ROLES:
@@ -81,6 +82,7 @@ def create_user(username: str, password: str, role: str) -> str:
             "INSERT INTO users (username, password_hash, role) VALUES (%s, %s, %s) RETURNING id::text",
             (username, hash_password(password), role),
         ).fetchone()
+        audit.record(conn, audit.USER_CREATE, "user", row[0], actor_id=actor_id, details={"role": role})
     return row[0]
 
 
@@ -112,6 +114,10 @@ def bootstrap_admin(username: str, password: str) -> str:
             "VALUES (%s, %s, 'admin', true) RETURNING id::text",
             (username, hash_password(password)),
         ).fetchone()
+        # No actor: the first admin is created by the operator at the command line.
+        audit.record(
+            conn, audit.USER_CREATE, "user", row[0], details={"role": "admin", "bootstrap": True}
+        )
     return row[0]
 
 
@@ -122,7 +128,14 @@ def _end_sessions(conn, user_id: str) -> None:
     )
 
 
-def _set_password(user_id: str, new_password: str, must_change: bool) -> bool:
+def _set_password(
+    user_id: str,
+    new_password: str,
+    must_change: bool,
+    action: str,
+    actor_id: str | None,
+    details: dict,
+) -> bool:
     """Replace the password and end every session of the user. Returns False if the user does not exist.
 
     Access tokens issued before this moment are rejected by the sessions_valid_after check.
@@ -139,17 +152,35 @@ def _set_password(user_id: str, new_password: str, must_change: bool) -> bool:
         if result.rowcount == 0:
             return False
         _end_sessions(conn, user_id)
+        audit.record(conn, action, "user", user_id, actor_id=actor_id, details=details)
     return True
 
 
-def reset_password(user_id: str, temporary_password: str) -> bool:
-    """Admin or operator reset. The user must choose a new password at next login."""
-    return _set_password(user_id, temporary_password, must_change=True)
+def reset_password(user_id: str, temporary_password: str, actor_id: str | None = None, source: str = "api") -> bool:
+    """Admin or operator reset. The user must choose a new password at next login.
+
+    actor_id is None and source is "cli" when the operator resets a password from the container.
+    """
+    return _set_password(
+        user_id,
+        temporary_password,
+        must_change=True,
+        action=audit.USER_PASSWORD_RESET,
+        actor_id=actor_id,
+        details={"source": source},
+    )
 
 
 def change_own_password(user_id: str, new_password: str) -> bool:
     """User-initiated change, after the current password has been verified by the caller."""
-    return _set_password(user_id, new_password, must_change=False)
+    return _set_password(
+        user_id,
+        new_password,
+        must_change=False,
+        action=audit.USER_PASSWORD_CHANGE,
+        actor_id=user_id,
+        details={},
+    )
 
 
 class UpdateOutcome(Enum):
@@ -159,8 +190,16 @@ class UpdateOutcome(Enum):
     PROTECTED = "protected"
 
 
-def update_user(user_id: str, role: str | None = None, is_active: bool | None = None) -> UpdateOutcome:
-    """Change a user's role and/or active state. Refuses if the change would leave no active admin."""
+def update_user(
+    user_id: str,
+    role: str | None = None,
+    is_active: bool | None = None,
+    actor_id: str | None = None,
+) -> UpdateOutcome:
+    """Change a user's role and/or active state. Refuses if the change would leave no active admin.
+
+    The audit row records only the fields whose value actually changed, and commits with the change.
+    """
     with connect() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (ADMIN_SET_LOCK_KEY,))
         current = conn.execute(
@@ -185,13 +224,20 @@ def update_user(user_id: str, role: str | None = None, is_active: bool | None = 
             if others == 0:
                 return UpdateOutcome.LAST_ADMIN
 
+        changes = {}
+        if new_role != current_role:
+            changes["role"] = {"from": current_role, "to": new_role}
+        if new_active != current_active:
+            changes["is_active"] = {"from": current_active, "to": new_active}
         conn.execute("UPDATE users SET role = %s, is_active = %s WHERE id = %s", (new_role, new_active, user_id))
         if not new_active:
             _end_sessions(conn, user_id)
+        if changes:
+            audit.record(conn, audit.USER_UPDATE, "user", user_id, actor_id=actor_id, details={"changes": changes})
     return UpdateOutcome.OK
 
 
-def soft_delete_user(user_id: str) -> UpdateOutcome:
+def soft_delete_user(user_id: str, actor_id: str | None = None) -> UpdateOutcome:
     """Mark a user as deleted. The row stays in the database. A deleted user is disabled and loses its sessions."""
     with connect() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (ADMIN_SET_LOCK_KEY,))
@@ -216,6 +262,9 @@ def soft_delete_user(user_id: str) -> UpdateOutcome:
             (user_id,),
         )
         _end_sessions(conn, user_id)
+        audit.record(
+            conn, audit.USER_DELETE, "user", user_id, actor_id=actor_id, details={"role": current_role}
+        )
     return UpdateOutcome.OK
 
 

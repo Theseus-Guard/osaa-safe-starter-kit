@@ -42,7 +42,7 @@ def matrix(monkeypatch):
     monkeypatch.setattr(api, "list_role_permissions", lambda: state["roles"])
     monkeypatch.setattr(api, "list_catalog", lambda: [("cases:submit", "Submit a case")])
 
-    def fake_set(role, permissions):
+    def fake_set(role, permissions, **kwargs):
         state["calls"].append((role, permissions))
         return state.get("outcome", RoleOutcome.OK)
 
@@ -92,3 +92,19 @@ def test_caller_without_roles_manage_cannot_change_matrix(client, caller, matrix
     response = client.put("/api/v1/rbac/roles/auditor/permissions", json={"permissions": []})
     assert response.status_code == 403
     assert matrix["calls"] == []
+
+
+def test_permission_change_is_attributed_to_the_acting_admin(client, matrix, monkeypatch):
+    seen = {}
+
+    def fake_set(role, permissions, actor_id=None):
+        seen["actor_id"] = actor_id
+        return RoleOutcome.OK
+
+    monkeypatch.setattr(api, "set_role_permissions", fake_set)
+    response = client.put(
+        "/api/v1/rbac/roles/auditor/permissions",
+        json={"permissions": ["audit:read"]},
+    )
+    assert response.status_code == 200
+    assert seen["actor_id"] == ADMIN_ID
