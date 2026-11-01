@@ -566,6 +566,11 @@ def admin_set_role_permissions(
             status_code=409,
             detail="the admin role must keep users:manage, users:reset_password and roles:manage",
         )
+    if outcome is RoleOutcome.ADMIN_CASE_CONTENT:
+        raise HTTPException(
+            status_code=409,
+            detail="the admin role cannot hold case or reporter contact permissions",
+        )
     return RoleSummary(role=role, permissions=list_role_permissions()[role])
 
 
