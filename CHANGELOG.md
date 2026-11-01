@@ -22,14 +22,25 @@ Every release entry states the **SAFE compatibility baseline**: the SAFE version
 - React and TypeScript web UI, container CLI with case commands.
 - HTTPS-only gateway with a development certificate authority (`scripts/make-dev-cert.sh`) and HSTS.
 - Case lifecycle: assignment, deadline status per task, closing and reopening with stored reasons, and case history. Reasons and evidence events are shown only to roles that hold the matching permission.
-- Case review: an assigned reviewer records an outcome (pass, fail, insufficient evidence, not applicable) with an optional note. Reviews from earlier sessions are not listed yet.
+- Case review: an assigned reviewer records an outcome (pass, fail, insufficient evidence, not applicable) with an optional note. Every review of a case is listed for callers who can read the case. Review notes are shown only to callers with `cases:read_all`; other callers see the outcome and time.
 - Evidence: upload, download, and a custody record for each event. Files are encrypted with AES-256-GCM, keys come from a file, and uploads have a size limit and a media-type allowlist. New permission `evidence:read`; `evidence:write` is needed to upload.
+- Evidence verification: an upload becomes available only after the stored object is read back and checked with the download rules. The worker marks uploads that stay pending for 30 minutes as failed.
 - Case import from a versioned JSON file (`import_format_version` 1), through the API and `safe-kit case import`. Each record reports imported, duplicate, conflict, rejected, or failed.
 - Profile fields (first name, last name, title, email); the top bar shows the full name and username.
 - Test suites for the backend and the frontend, with coverage measured by the commands in the README.
+- Case record: awareness events (incident, near miss, or blocked attempt, with the awareness kind and basis), impacts for each of the six plan areas (an area without a row is reported as not assessed), legal duties with their own due dates that never change deadlines, and a classification stored as versions with the five R01 trigger values. Each classification update must give the expected version. Migrations 0023 and 0024. Writes need `cases:triage`.
+- Preliminary report for a case, which lists the missing fields instead of refusing. It needs `cases:read_all`.
+- Free text in case records is returned only to callers with `cases:read_all`, as close reasons and review notes are. Audit rows keep only the length of the text.
+- Reporter channel: `POST /api/v1/reports` opens a case for a signed-in reporter account and stores an optional follow-up contact (up to 200 characters) apart from the case content (migration 0021). The reporter account is never returned, and the case history hides the actor of the case-creation entry for every caller.
+- Reporter contact: readable only with the new permission `reporter_contact:read`, which no role holds by default (migration 0022). Every read is audited. Reporter-channel cases are hidden from `cases:read_all` callers until the case has an active assignment. An administrator cannot reset the password of a reporter account.
+- Case search: `GET /api/v1/cases` takes `q`, which matches the reference (partial, case-insensitive) or the start of the case ID. The header search uses it. Search only narrows the cases the caller can already see.
+- Case visibility is checked in one place for case reads, lists, history, assignments, reviews, and evidence. An import response names an existing case only when the caller can see it.
+- Sessions end after 60 minutes without activity. The browser renews the token pair on the first request made more than five minutes after the last renewal; refresh tokens rotate on every renewal.
+- Rate limits at the gateway: login is limited to 10 requests per minute per client, with a burst of 5, and the API to 30 requests per second, with a burst of 60. Excess requests get `429`. The API also keeps login counters in PostgreSQL, per username and per client, over a 15-minute window.
+- Validation errors (`422`) no longer repeat the rejected input, so a submitted password is not echoed back.
 
 ### Not yet implemented
 - A production certificate, OIDC/SSO, encryption at rest for the database volume, and backup and restore procedures.
 - The disclosure workflow and the later review framework (F2), including export and recipient packages.
-- The independent reporter channel, the Vault Transit key provider, and object storage for evidence.
+- Anonymous reporter intake. The current reporter channel requires a reporter account. The Vault Transit key provider and object storage for evidence are also not built.
 - Verification on Ubuntu 24.04 and 26.04 LTS, which is planned after all other work.
