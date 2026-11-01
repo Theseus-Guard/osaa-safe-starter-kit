@@ -13,7 +13,7 @@ export function DisabledHint({ reason, children }: Props) {
   return (
     <Tooltip>
       <TooltipTrigger
-        render={<span tabIndex={0} className="inline-flex rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50" />}
+        render={<span tabIndex={0} className="inline-flex rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring" />}
       >
         {children}
       </TooltipTrigger>

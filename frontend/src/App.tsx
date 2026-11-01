@@ -75,7 +75,7 @@ export function App() {
             Open Secure AI Alliance (OSAA)
           </a>
         </nav>
-        <p className="mt-2">SAFE-Starter-Kit is an independent open-source project. It is not an official Alliance product and is not endorsed by the Alliance.</p>
+        <p className="mt-2">SAFE-Starter-Kit is an independent open-source project. It is not an official Alliance product.</p>
       </footer>
     </div>
   );

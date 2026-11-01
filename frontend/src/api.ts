@@ -89,6 +89,8 @@ interface RequestOptions {
   json?: unknown;
   // Set to false for requests that must not carry or renew the session (login, readiness).
   auth?: boolean;
+  // "blob" returns the raw body for file downloads. It goes through the same auth and refresh path.
+  responseType?: "json" | "blob";
 }
 
 let session: Session | null = null;
@@ -170,7 +172,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     }
   }
   if (!response.ok) throw await toApiError(response);
-  return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
+  if (response.status === 204) return undefined as T;
+  if (options.responseType === "blob") return (await response.blob()) as T;
+  return (await response.json()) as T;
 }
 
 export async function login(username: string, password: string): Promise<void> {
@@ -251,6 +255,49 @@ export function updateRolePermissions(role: Role, permissions: string[]): Promis
     method: "PUT",
     json: { permissions },
   });
+}
+
+// Metadata about personal data stored by this installation. Row contents and secrets are never included.
+export interface PrivacyInventoryItem {
+  table: string;
+  description: string;
+  category: string;
+  contains_personal_data: boolean;
+  personal_fields: string[];
+  purpose: string;
+  storage: string;
+  retention: string;
+  retention_defined: boolean;
+  security: string;
+  deletion_mode: string;
+  rows: { total: number; active: number; soft_deleted: number };
+  oldest_created_at: string | null;
+  newest_created_at: string | null;
+}
+
+export interface PrivacyInventory {
+  generated_at: string;
+  items: PrivacyInventoryItem[];
+}
+
+export type PrivacyExportFormat = "json" | "csv";
+
+export function getPrivacyInventory(): Promise<PrivacyInventory> {
+  return request<PrivacyInventory>("/privacy/inventory");
+}
+
+// Downloads the inventory as a file. The bytes come through request(), so bearer auth and refresh apply.
+export async function downloadPrivacyExport(format: PrivacyExportFormat): Promise<void> {
+  const blob = await request<Blob>(`/privacy/inventory/export?format=${format}`, { responseType: "blob" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `privacy-inventory.${format}`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // Revoke after the browser has started the download.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export async function readiness(): Promise<Readiness> {

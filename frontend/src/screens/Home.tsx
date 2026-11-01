@@ -4,6 +4,7 @@ import { AppShell } from "./AppShell";
 import { ChangePassword } from "./ChangePassword";
 import { Overview } from "./Overview";
 import { RolesMatrix } from "./admin/RolesMatrix";
+import { PrivacyPage } from "./admin/PrivacyPage";
 import { UsersPage } from "./admin/UsersPage";
 
 interface Props {
@@ -21,6 +22,7 @@ export function Home({ profile, notice, onLogout, onPasswordChanged }: Props) {
     <AppShell profile={profile} page={page} onLogout={onLogout}>
       {page === "overview" && <Overview profile={profile} notice={notice} />}
       {page === "users" && isAdmin && <UsersPage currentUserId={profile.id} />}
+      {page === "privacy" && isAdmin && <PrivacyPage />}
       {page === "roles" && isAdmin && <RolesMatrix editable />}
       {page === "account" && (
         <ChangePassword

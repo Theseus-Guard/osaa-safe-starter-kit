@@ -9,12 +9,15 @@ import {
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { hashFor, Page, PAGE_INFO, PAGES } from "../routes";
+import { isThemePreference, setPreference, ThemePreference, useThemePreference } from "../theme";
 
 interface Props {
   profile: Me;
@@ -42,8 +45,12 @@ export function AppShell({ profile, page, onLogout, children }: Props) {
               <SheetHeader>
                 <SheetTitle>Navigation</SheetTitle>
               </SheetHeader>
-              <div className="px-3 pb-4">
+              <div className="flex flex-col gap-2 px-3 pb-4">
                 <Navigation pages={visiblePages} current={page} onNavigate={() => setMenuOpen(false)} />
+                <Button variant="outline" className="mt-4 justify-start gap-2" onClick={onLogout}>
+                  <LogOut />
+                  Log out
+                </Button>
               </div>
             </SheetContent>
           </Sheet>
@@ -52,8 +59,12 @@ export function AppShell({ profile, page, onLogout, children }: Props) {
         <UserMenu profile={profile} onLogout={onLogout} />
       </header>
       <div className="flex flex-1">
-        <aside className="hidden w-56 shrink-0 border-r p-3 md:block">
+        <aside className="hidden w-56 shrink-0 flex-col border-r p-3 md:flex">
           <Navigation pages={visiblePages} current={page} />
+          <Button variant="outline" className="mt-auto justify-start gap-2" onClick={onLogout}>
+            <LogOut />
+            Log out
+          </Button>
         </aside>
         <main id="content" className="min-w-0 flex-1 p-4 md:p-6">
           <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
@@ -87,7 +98,7 @@ function Navigation({ pages, current, onNavigate }: NavigationProps) {
             aria-current={active ? "page" : undefined}
             onClick={onNavigate}
             className={cn(
-              "rounded-md px-3 py-2 text-sm transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+              "rounded-md px-3 py-2 text-sm transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring",
               active
                 ? "bg-accent font-medium text-accent-foreground"
                 : "text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -106,7 +117,14 @@ interface UserMenuProps {
   onLogout: () => void;
 }
 
+const APPEARANCE_OPTIONS: { value: ThemePreference; label: string }[] = [
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+  { value: "system", label: "System" },
+];
+
 function UserMenu({ profile, onLogout }: UserMenuProps) {
+  const preference = useThemePreference();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button variant="ghost" className="max-w-full gap-2" />}>
@@ -116,6 +134,22 @@ function UserMenu({ profile, onLogout }: UserMenuProps) {
       <DropdownMenuContent align="end" className="w-56">
         <DropdownMenuGroup>
           <DropdownMenuLabel>Signed in as {profile.username}</DropdownMenuLabel>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Appearance</DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={preference}
+            onValueChange={(value) => {
+              if (isThemePreference(value)) setPreference(value);
+            }}
+          >
+            {APPEARANCE_OPTIONS.map((option) => (
+              <DropdownMenuRadioItem key={option.value} value={option.value}>
+                {option.label}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={onLogout}>
