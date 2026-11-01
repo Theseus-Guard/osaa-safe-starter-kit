@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 import psycopg
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
@@ -109,6 +111,13 @@ from safe_kit.users import (
 )
 
 app = FastAPI(title="SAFE-Starter-Kit API", version="0.1.0")
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    # FastAPI echoes the rejected value in "input". For a password field that would send the password back, so it is dropped.
+    errors = [{key: value for key, value in error.items() if key != "input"} for error in exc.errors()]
+    return JSONResponse(status_code=422, content=jsonable_encoder({"detail": errors}))
 
 
 class LoginRequest(BaseModel):

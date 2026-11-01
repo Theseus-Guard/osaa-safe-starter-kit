@@ -107,13 +107,6 @@ def test_login_and_refresh_write_no_password_or_token_to_the_logs(client, store,
         assert secret not in logged
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "T13: the 422 validation response echoes the submitted password (FastAPI's default RequestValidationError "
-        "handler returns the input value); api.py has no handler that strips it"
-    ),
-)
 def test_validation_error_does_not_echo_the_submitted_password(client, store):
     too_long = "probe-" + uuid.uuid4().hex + "x" * 1024
 
