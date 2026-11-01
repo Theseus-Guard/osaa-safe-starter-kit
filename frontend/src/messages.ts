@@ -7,6 +7,8 @@ const MESSAGES: Record<string, string> = {
   session_expired: "Your session has expired. Please log in again.",
   "password change required": "You must change your password before continuing.",
   "current password is incorrect": "The current password is incorrect.",
+  password_reused:
+    "Choose a password you have not used recently. It must differ from your temporary password and your last three passwords.",
   "username already exists": "That username is already taken.",
   forbidden: "You do not have permission for this action.",
   "user not found": "No user with that ID exists.",

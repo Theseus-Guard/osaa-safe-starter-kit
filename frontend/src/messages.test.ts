@@ -36,6 +36,14 @@ describe("describeError", () => {
   });
 });
 
+describe("password messages", () => {
+  it("explains a reused password without the raw code", () => {
+    expect(describeCode("password_reused")).toBe(
+      "Choose a password you have not used recently. It must differ from your temporary password and your last three passwords.",
+    );
+  });
+});
+
 describe("case and evidence messages", () => {
   it("maps the evidence codes to sentences", () => {
     expect(describeCode("evidence is not available")).toBe("This evidence is not available for download yet.");
