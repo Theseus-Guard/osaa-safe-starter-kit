@@ -106,4 +106,4 @@ def test_reset_password_refuses_a_recent_password(calls, monkeypatch, capsys):
     monkeypatch.setattr(admin, "find_user", lambda username: SimpleNamespace(id="00000000-0000-0000-0000-000000000002"))
     feed_password(monkeypatch, PASSWORD)
     assert admin.main(["reset-password", "--username", "alice"]) == 1
-    assert "password was used recently" in capsys.readouterr().err
+    assert "password cannot be reused" in capsys.readouterr().err

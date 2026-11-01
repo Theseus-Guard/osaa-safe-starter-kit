@@ -21,6 +21,7 @@ MIN_PASSWORD_LENGTH = 12
 # Every password expires this long after it was set, temporary passwords included.
 PASSWORD_MAX_AGE = timedelta(days=180)
 # A new password may not equal any of the account's last this many passwords.
+# Temporary passwords are refused for good, whatever their position in the history.
 PASSWORD_HISTORY_DEPTH = 3
 
 _hasher = PasswordHasher()

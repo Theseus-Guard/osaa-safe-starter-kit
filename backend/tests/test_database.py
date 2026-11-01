@@ -286,6 +286,15 @@ def password_history_hashes(user_id: str) -> list[str]:
     return [row[0] for row in rows]
 
 
+def password_history_temporary_flags(user_id: str) -> list[bool]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT is_temporary FROM password_history WHERE user_id = %s AND NOT is_deleted ORDER BY created_at",
+            (user_id,),
+        ).fetchall()
+    return [row[0] for row in rows]
+
+
 def password_changed_at(user_id: str) -> datetime:
     with connect() as conn:
         return conn.execute("SELECT password_changed_at FROM users WHERE id = %s", (user_id,)).fetchone()[0]
@@ -306,12 +315,25 @@ def test_every_password_write_is_recorded_as_an_argon2_hash():
     assert len(hashes) == 3
     assert all(stored.startswith("$argon2id$") for stored in hashes)
     assert "a new passphrase here" not in hashes
+    # Account creation and the admin reset are temporary; the self-service change is not.
+    assert password_history_temporary_flags(target) == [True, False, True]
+
+
+def test_bootstrap_admin_records_its_password_as_temporary():
+    # The bootstrap needs a database with no admin. Other tests in the session create admins, so this runs only
+    # when it is the first to do so (for example, run alone on a fresh database).
+    if users.admin_exists():
+        pytest.skip("the bootstrap needs a database with no admin")
+    username = "t-" + uuid.uuid4().hex[:12]
+    user_id = users.bootstrap_admin(username, "bootstrap passphrase", f"{username}@example.com")
+    assert password_history_temporary_flags(user_id) == [True]
 
 
 def test_profile_account_creation_records_the_temporary_password():
     username = "t-" + uuid.uuid4().hex[:12]
     user_id = users.create_user_with_profile(username, "temporary passphrase", "reporter", f"{username}@example.com")
     assert len(password_history_hashes(user_id)) == 1
+    assert password_history_temporary_flags(user_id) == [True]
 
 
 def test_temporary_password_cannot_be_chosen_as_the_next_password():
@@ -321,15 +343,29 @@ def test_temporary_password_cannot_be_chosen_as_the_next_password():
     assert len(password_history_hashes(target)) == 1
 
 
-def test_last_three_passwords_are_refused_and_the_fourth_oldest_is_allowed():
+def test_temporary_password_stays_refused_after_later_changes():
     target = new_user("reporter")
-    passwords = ["first passphrase here", "second passphrase here", "third passphrase here"]
+    for new in ["first passphrase here", "second passphrase here", "third passphrase here", "fourth passphrase here"]:
+        assert users.change_own_password(target, new) is True
+    # Four later changes: the temporary password is outside the last three, and it is still refused.
+    before = len(password_history_hashes(target))
+    with pytest.raises(users.PasswordReused):
+        users.change_own_password(target, "temporary passphrase")
+    with pytest.raises(users.PasswordReused):
+        users.reset_password(target, "temporary passphrase")
+    assert len(password_history_hashes(target)) == before
+
+
+def test_last_three_passwords_are_refused_and_the_fourth_most_recent_is_allowed():
+    target = new_user("reporter")
+    passwords = ["first passphrase here", "second passphrase here", "third passphrase here", "fourth passphrase here"]
     for new in passwords:
         assert users.change_own_password(target, new) is True
     before = len(password_history_hashes(target))
-    assert before == 4
+    assert before == 5
 
-    for recent in passwords:
+    # The last three are second, third and fourth.
+    for recent in passwords[1:]:
         with pytest.raises(users.PasswordReused):
             users.change_own_password(target, recent)
     with pytest.raises(users.PasswordReused):
@@ -337,8 +373,8 @@ def test_last_three_passwords_are_refused_and_the_fourth_oldest_is_allowed():
     # A refused change writes nothing: no history row, no new timestamp.
     assert len(password_history_hashes(target)) == before
 
-    # History, oldest first: temporary, first, second, third. The temporary password is now the fourth-oldest.
-    assert users.reset_password(target, "temporary passphrase") is True
+    # The first password is now the fourth most recent non-temporary entry, outside the window.
+    assert users.change_own_password(target, "first passphrase here") is True
 
 
 def test_expired_password_forces_a_change_until_the_user_changes_it():

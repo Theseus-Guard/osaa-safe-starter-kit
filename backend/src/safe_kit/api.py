@@ -259,7 +259,8 @@ def _issue_tokens(user: User, refresh_token: str) -> TokenResponse:
 
 
 PROTECTED_DETAIL = "the protected admin account cannot be disabled, deleted, or demoted"
-# Detail code of the 422 when a new password matches one of the account's last PASSWORD_HISTORY_DEPTH passwords.
+# Detail code of the 422 when a new password matches one of the account's last PASSWORD_HISTORY_DEPTH passwords
+# or a temporary password issued to the account.
 PASSWORD_REUSED_DETAIL = "password_reused"
 
 

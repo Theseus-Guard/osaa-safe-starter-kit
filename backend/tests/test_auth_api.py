@@ -30,7 +30,7 @@ class FakeStore:
 
     def __init__(self):
         self.users = {}
-        self.history = {}  # user id -> hash of every password set, oldest first
+        self.history = {}  # user id -> (hash, is_temporary) of every password set, oldest first
         self.sessions = {}  # raw refresh token -> {"user_id", "family", "revoked"}
         self.revoked_jtis = set()
         self.buckets = {}
@@ -50,7 +50,8 @@ class FakeStore:
             must_change_password=must_change,
             created_at=EPOCH,
         )
-        self.history.setdefault(user_id, []).append(password_hash)
+        # The seeded password is temporary exactly when the account must change it, as in users.create_user.
+        self.history.setdefault(user_id, []).append((password_hash, must_change))
 
     def _replace(self, user_id, **changes):
         self.users[user_id] = User(**{**self.users[user_id].__dict__, **changes})
@@ -78,7 +79,14 @@ class FakeStore:
     def _set_password(self, user_id, new_password, must_change):
         if user_id not in self.users:
             return False
-        if is_recent_password(new_password, self.history[user_id][-PASSWORD_HISTORY_DEPTH:]):
+        # The last PASSWORD_HISTORY_DEPTH entries, plus every temporary entry, however old.
+        newest_first = list(reversed(self.history[user_id]))
+        candidates = [
+            stored
+            for position, (stored, temporary) in enumerate(newest_first)
+            if position < PASSWORD_HISTORY_DEPTH or temporary
+        ]
+        if is_recent_password(new_password, candidates):
             raise PasswordReused
         new_hash = hash_password(new_password)
         now = datetime.now(UTC)
@@ -89,7 +97,7 @@ class FakeStore:
             password_changed_at=now,
             sessions_valid_after=now,
         )
-        self.history[user_id].append(new_hash)
+        self.history[user_id].append((new_hash, must_change))
         for session in self.sessions.values():
             if session["user_id"] == user_id:
                 session["revoked"] = True
@@ -501,9 +509,24 @@ def test_temporary_password_cannot_be_set_as_the_new_password(client):
     assert response.json() == {"detail": "password_reused"}
 
 
-def test_last_three_passwords_cannot_be_reused_but_the_fourth_oldest_can(client):
+def test_temporary_password_stays_refused_after_later_changes(client):
     create_dave(client)
-    passwords = ["first passphrase here", "second passphrase here", "third passphrase here"]
+    current = "temporary passphrase"
+    for new in ["first passphrase here", "second passphrase here", "third passphrase here", "fourth passphrase here"]:
+        assert change_password(client, "dave", current, new).status_code == 204
+        # Tokens are whole-second; wait so the next login is not rejected as issued before the change.
+        time.sleep(1.1)
+        current = new
+
+    # Four later changes: the temporary password is outside the last three, and it is still refused.
+    response = change_password(client, "dave", current, "temporary passphrase")
+    assert response.status_code == 422
+    assert response.json() == {"detail": "password_reused"}
+
+
+def test_last_three_passwords_cannot_be_reused_but_the_fourth_most_recent_can(client):
+    create_dave(client)
+    passwords = ["first passphrase here", "second passphrase here", "third passphrase here", "fourth passphrase here"]
     current = "temporary passphrase"
     for new in passwords:
         assert change_password(client, "dave", current, new).status_code == 204
@@ -511,14 +534,14 @@ def test_last_three_passwords_cannot_be_reused_but_the_fourth_oldest_can(client)
         time.sleep(1.1)
         current = new
 
-    # History, oldest first: temporary, first, second, third. The last three are first, second and third.
-    for recent in passwords:
+    # History, oldest first: temporary, first, second, third, fourth. The last three are second, third and fourth.
+    for recent in passwords[1:]:
         response = change_password(client, "dave", current, recent)
         assert response.status_code == 422
         assert response.json() == {"detail": "password_reused"}
 
-    # The temporary password is now the fourth-oldest entry, outside the window.
-    assert change_password(client, "dave", current, "temporary passphrase").status_code == 204
+    # The first password is now the fourth most recent non-temporary entry, outside the window.
+    assert change_password(client, "dave", current, "first passphrase here").status_code == 204
 
 
 def test_admin_reset_cannot_reuse_the_current_password(client):

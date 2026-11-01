@@ -71,7 +71,8 @@ class EmailAlreadyInUse(Exception):
 
 
 class PasswordReused(Exception):
-    """The new password equals one of the account's last PASSWORD_HISTORY_DEPTH passwords."""
+    """The new password equals one of the account's last PASSWORD_HISTORY_DEPTH passwords,
+    or a temporary password that was ever issued to the account."""
 
 
 def normalize_email(value: str | None) -> str:
@@ -164,9 +165,15 @@ def _to_user(row: tuple) -> User:
     )
 
 
-def _record_password(conn, user_id: str, password_hash: str) -> None:
-    """Keep the hash of a password that was just set. Called in the same transaction as the write that sets it."""
-    conn.execute("INSERT INTO password_history (user_id, password_hash) VALUES (%s, %s)", (user_id, password_hash))
+def _record_password(conn, user_id: str, password_hash: str, temporary: bool) -> None:
+    """Keep the hash of a password that was just set. Called in the same transaction as the write that sets it.
+
+    temporary is True for a password issued by an admin or the operator. Such a password can never be chosen again.
+    """
+    conn.execute(
+        "INSERT INTO password_history (user_id, password_hash, is_temporary) VALUES (%s, %s, %s)",
+        (user_id, password_hash, temporary),
+    )
 
 
 def create_user(username: str, password: str, role: str, actor_id: str | None = None) -> str:
@@ -181,7 +188,7 @@ def create_user(username: str, password: str, role: str, actor_id: str | None = 
             "VALUES (%s, %s, %s, now()) RETURNING id::text",
             (username, password_hash, role),
         ).fetchone()
-        _record_password(conn, row[0], password_hash)
+        _record_password(conn, row[0], password_hash, temporary=True)
         audit.record(conn, audit.USER_CREATE, "user", row[0], actor_id=actor_id, details={"role": role})
     return row[0]
 
@@ -228,7 +235,7 @@ def create_user_with_profile(
             if error.diag.constraint_name == EMAIL_INDEX:
                 raise EmailAlreadyInUse from error
             raise
-        _record_password(conn, row[0], password_hash)
+        _record_password(conn, row[0], password_hash, temporary=True)
         audit.record(conn, audit.USER_CREATE, "user", row[0], actor_id=actor_id, details={"role": role})
     return row[0]
 
@@ -268,7 +275,7 @@ def bootstrap_admin(username: str, password: str, email: str | None) -> str:
             if error.diag.constraint_name == EMAIL_INDEX:
                 raise EmailAlreadyInUse from error
             raise
-        _record_password(conn, row[0], password_hash)
+        _record_password(conn, row[0], password_hash, temporary=True)
         # No actor: the first admin is created by the operator at the command line.
         audit.record(
             conn, audit.USER_CREATE, "user", row[0], details={"role": "admin", "bootstrap": True}
@@ -294,7 +301,7 @@ def _set_password(
     """Replace the password and end every session of the user. Returns False if the user does not exist.
 
     Raises PasswordReused, before anything is written, if the new password is one of the account's last
-    PASSWORD_HISTORY_DEPTH passwords. Temporary passwords are in the history too.
+    PASSWORD_HISTORY_DEPTH passwords or a temporary password issued to the account, however long ago.
     Access tokens issued before this moment are rejected by the sessions_valid_after check.
     """
     with connect() as conn:
@@ -305,12 +312,15 @@ def _set_password(
         ).fetchone()
         if account is None:
             return False
-        recent = conn.execute(
-            "SELECT password_hash FROM password_history WHERE user_id = %s AND NOT is_deleted "
-            "ORDER BY created_at DESC LIMIT %s",
+        # The last PASSWORD_HISTORY_DEPTH entries, plus every temporary entry, however old.
+        candidates = conn.execute(
+            "SELECT password_hash FROM ("
+            "SELECT password_hash, is_temporary, row_number() OVER (ORDER BY created_at DESC) AS position "
+            "FROM password_history WHERE user_id = %s AND NOT is_deleted"
+            ") AS history WHERE position <= %s OR is_temporary",
             (user_id, PASSWORD_HISTORY_DEPTH),
         ).fetchall()
-        if is_recent_password(new_password, [row[0] for row in recent]):
+        if is_recent_password(new_password, [row[0] for row in candidates]):
             raise PasswordReused
         password_hash = hash_password(new_password)
         conn.execute(
@@ -322,7 +332,8 @@ def _set_password(
             """,
             (password_hash, must_change, user_id),
         )
-        _record_password(conn, user_id, password_hash)
+        # A password the account must replace at its next login is a temporary one.
+        _record_password(conn, user_id, password_hash, temporary=must_change)
         _end_sessions(conn, user_id)
         audit.record(conn, action, "user", user_id, actor_id=actor_id, details=details)
     return True

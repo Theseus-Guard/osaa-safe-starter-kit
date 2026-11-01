@@ -131,7 +131,8 @@ def main(argv: list[str] | None = None) -> int:
         reset_password(user.id, password, source="cli")
     except PasswordReused:
         print(
-            f"password was used recently: it matches one of this account's last {PASSWORD_HISTORY_DEPTH} passwords",
+            "password cannot be reused: it matches one of this account's last "
+            f"{PASSWORD_HISTORY_DEPTH} passwords or a temporary password issued to it",
             file=sys.stderr,
         )
         return 1
