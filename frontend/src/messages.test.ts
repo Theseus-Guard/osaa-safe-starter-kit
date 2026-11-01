@@ -19,6 +19,12 @@ describe("describeCode", () => {
     expect(describeCode("legal duty not found")).toBe("That legal duty does not exist on this case.");
   });
 
+  it("explains a refused change to the fixed reporting_owner role", () => {
+    expect(describeCode("reporting_owner_fixed")).toBe(
+      "The reporting_owner role is fixed. Its permissions cannot be changed.",
+    );
+  });
+
   it("explains a reporter contact read refused after the 72-hour window", () => {
     expect(describeCode("reporter_contact_window_closed")).toMatch(/72 hours after it was closed/);
   });
