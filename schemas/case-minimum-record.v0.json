@@ -1,0 +1,569 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:safe-starter-kit:schema:case-minimum-record:0.1.0",
+  "$comment": "Project-defined draft (record_schema_version 0.1.0) of the SAFE-Starter-Kit minimum case/report record. This is NOT an official SAFE schema. SAFE v1.0 (baseline upstream commit 08c0d6a11163d10ac878a15dc9f53b5b322fd7cb) adopts no minimum-record JSON schema and no submission API. Fields and enums are provisional until the F0 decision log is signed off. Evidence and impact fields use explicit status values instead of required content so that an incomplete preliminary record can still be produced.",
+  "title": "SAFE-Starter-Kit minimum case/report record (draft 0.1.0)",
+  "description": "Minimum record for a case that may need a preliminary report. Unknown facts are stated with an explicit status and a reason; values are never invented. Timestamps are UTC (RFC 3339 with Z). Restricted sections hold references only and must be removed from any shareable export.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "record_schema_version",
+    "case_id",
+    "linked_report_ids",
+    "reporter_contact",
+    "responsible_organization",
+    "other_parties",
+    "affected_systems",
+    "incident_class",
+    "near_miss_status",
+    "scope",
+    "timeline",
+    "containment",
+    "evidence",
+    "impact",
+    "next_update_due"
+  ],
+  "properties": {
+    "record_schema_version": {
+      "const": "0.1.0",
+      "description": "Version of this record schema. Required on every record; a record without this value must be rejected, not interpreted as the current version."
+    },
+    "case_id": {
+      "$ref": "#/$defs/uuid",
+      "description": "Stable UUID of the case."
+    },
+    "linked_report_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/uuid" },
+      "description": "UUIDs of related reports linked to this case. An empty array means no linked report is recorded yet; it does not mean there are none."
+    },
+    "reporter_contact": {
+      "x-restricted": true,
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contact_mode", "return_channel"],
+      "description": "Restricted section. Contains only a reference into the restricted identity store, never a contact value. Must be removed from every shareable export.",
+      "properties": {
+        "contact_mode": {
+          "enum": ["named", "pseudonymous", "anonymous", "unknown"],
+          "description": "How the reporter chose to be identified. Anonymity is not guaranteed by the system."
+        },
+        "return_channel": {
+          "enum": ["none", "secure_pseudonymous_channel", "named_contact", "unknown"],
+          "description": "Channel through which the reporter can receive follow-up. The channel itself is stored in the restricted identity store."
+        },
+        "restricted_identity_ref": {
+          "$ref": "#/$defs/uuid",
+          "description": "Reference to the restricted identity store entry. Absent when no identity was provided."
+        }
+      }
+    },
+    "responsible_organization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "relationship"],
+      "description": "Organization responsible for the affected AI system.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Organization name."
+        },
+        "organization_id": {
+          "$ref": "#/$defs/uuid",
+          "description": "Local organization identifier, when one exists."
+        },
+        "relationship": {
+          "enum": ["operator", "developer", "deployer", "vendor", "other"],
+          "description": "Relationship of this organization to the affected system."
+        }
+      }
+    },
+    "other_parties": {
+      "type": "array",
+      "description": "Other parties involved or affected. An empty array means no party is recorded yet; it does not mean there are none.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["party_type", "name"],
+        "properties": {
+          "party_type": {
+            "enum": ["affected_organization", "customer", "vendor", "funder", "model_provider", "regulator_or_authority", "other"],
+            "description": "Category of the party."
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Organization or group name. Do not use personal names."
+          },
+          "role_description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "Short description of the party's role in the incident."
+          }
+        }
+      }
+    },
+    "affected_systems": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Systems affected by the incident, with model, runtime and configuration versions. Each version uses an explicit status.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["system_name", "model_version", "runtime_version", "configuration_version"],
+        "properties": {
+          "system_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Project or system name. Do not use hostnames, IP addresses or credentials."
+          },
+          "model_version": { "$ref": "#/$defs/versionField", "description": "Model version. Explicit status when unknown." },
+          "runtime_version": { "$ref": "#/$defs/versionField", "description": "Runtime version. Explicit status when unknown." },
+          "configuration_version": { "$ref": "#/$defs/versionField", "description": "Configuration version or digest reference. Explicit status when unknown." }
+        }
+      }
+    },
+    "incident_class": {
+      "enum": [
+        "unauthorized_access_or_modification",
+        "sandbox_or_boundary_escape",
+        "confidential_data_exposure",
+        "out_of_scope_continuation",
+        "harm_or_failure_to_act",
+        "other",
+        "unclassified"
+      ],
+      "description": "Incident classification. Use 'unclassified' while the classification is pending."
+    },
+    "near_miss_status": {
+      "enum": ["harm_occurred", "near_miss", "blocked_attempt", "under_assessment"],
+      "description": "Whether harm occurred, or whether the event was a near miss or a blocked attempt. Use 'under_assessment' while pending."
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope_status", "description", "authorization_source"],
+      "description": "Approved scope and the source of the authorization. A requester or agent claim alone does not extend scope.",
+      "properties": {
+        "scope_status": {
+          "enum": ["within_approved_scope", "exceeded_approved_scope", "unknown"],
+          "description": "Whether the activity stayed within the approved scope."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "description": "Approved scope in plain text."
+        },
+        "authorization_source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source_type"],
+          "properties": {
+            "source_type": {
+              "enum": [
+                "resource_owner_approval",
+                "written_policy",
+                "contract",
+                "legal_mandate",
+                "requester_or_agent_claim_only",
+                "none",
+                "unknown"
+              ],
+              "description": "Type of the authorization source."
+            },
+            "approved_by_role": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "description": "Role of the approver. Not a personal name."
+            },
+            "reference": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300,
+              "description": "Reference to the approval or policy record. Not the document content."
+            }
+          }
+        }
+      }
+    },
+    "timeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["awareness_time"],
+      "description": "Incident timeline. Every timestamp carries its basis and source.",
+      "properties": {
+        "awareness_time": {
+          "$ref": "#/$defs/timestamp",
+          "description": "t0: the time the operator learned facts giving reasonable suspicion of a reportable incident. This is not the case creation time and not the time of confirmation. If the time is uncertain, value holds the earliest plausible instant and uncertainty explains the gap. The clock is never silently reset."
+        },
+        "occurrence_time": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When the triggering event is believed to have occurred."
+        },
+        "affected_party_awareness_time": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When an affected party first became aware, if known. Kept separate from awareness_time."
+        },
+        "external_report_received_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When an external report was received, if any."
+        },
+        "containment_started_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When containment was first started, if any."
+        },
+        "additional_events": {
+          "type": "array",
+          "description": "Other timeline events.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["label", "at"],
+            "properties": {
+              "label": { "type": "string", "minLength": 1, "maxLength": 200, "description": "Short event label." },
+              "at": { "$ref": "#/$defs/timestamp" }
+            }
+          }
+        }
+      }
+    },
+    "containment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "actions"],
+      "description": "Current containment. Actions outside the product are recorded as human actions; the product does not perform containment.",
+      "properties": {
+        "status": {
+          "enum": ["none_in_place", "planned", "in_progress", "completed", "unknown"],
+          "description": "Overall containment status."
+        },
+        "status_reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "description": "Reason the status is unknown. Required when status is 'unknown'."
+        },
+        "actions": {
+          "type": "array",
+          "description": "Recorded containment actions. An empty array with status 'none_in_place' means none recorded.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["description", "performed_by_role", "performed_at"],
+            "properties": {
+              "description": { "type": "string", "minLength": 1, "maxLength": 1000, "description": "What was done." },
+              "performed_by_role": { "type": "string", "minLength": 1, "maxLength": 200, "description": "Role of the human who performed or ordered the action. Not a personal name." },
+              "performed_at": { "$ref": "#/$defs/timestamp" },
+              "outcome": {
+                "enum": ["effective", "partially_effective", "ineffective", "not_yet_verified"],
+                "description": "Verified outcome of the action."
+              }
+            }
+          }
+        }
+      },
+      "if": {
+        "properties": { "status": { "const": "unknown" } },
+        "required": ["status"]
+      },
+      "then": {
+        "required": ["status_reason"]
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "description": "Evidence items and their availability. An empty array means no evidence item is recorded yet; it is never treated as success.",
+      "items": { "$ref": "#/$defs/evidenceItem" }
+    },
+    "impact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "affected_people_or_groups",
+        "severity",
+        "scale",
+        "duration",
+        "reversibility",
+        "known_disproportionate_effects"
+      ],
+      "description": "Impact assessment. Each field is either known with a value, or unknown with a reason and a research owner.",
+      "properties": {
+        "affected_people_or_groups": { "$ref": "#/$defs/impactAffectedPeopleOrGroups" },
+        "severity": { "$ref": "#/$defs/impactSeverity" },
+        "scale": { "$ref": "#/$defs/impactScale" },
+        "duration": { "$ref": "#/$defs/impactDuration" },
+        "reversibility": { "$ref": "#/$defs/impactReversibility" },
+        "known_disproportionate_effects": { "$ref": "#/$defs/impactKnownDisproportionateEffects" }
+      }
+    },
+    "next_update_due": {
+      "$ref": "#/$defs/timestamp",
+      "description": "Next machine-readable status update due. Weekly while material risks are unresolved (7 calendar days). This is not a legal deadline; legal duties are separate records."
+    },
+    "narrative_summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 10000,
+      "description": "Optional structured narrative in plain text. Must not contain credentials or raw personal data."
+    }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "utcTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$",
+      "description": "RFC 3339 timestamp in UTC."
+    },
+    "timestamp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "basis", "source"],
+      "description": "A timestamp together with the basis and source it rests on.",
+      "properties": {
+        "value": { "$ref": "#/$defs/utcTimestamp" },
+        "basis": {
+          "enum": ["system_record", "external_report", "human_statement", "derived_from_records", "estimate"],
+          "description": "What the timestamp rests on."
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "Reference to the supporting record, or a short description of the source. Must not contain secrets."
+        },
+        "uncertainty": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "Explanation of the uncertainty when the time is not confirmed."
+        }
+      }
+    },
+    "explicitStatus": {
+      "type": "object",
+      "description": "Wrapper for a value that may be unknown. An unknown value requires a reason and a research owner, and must not carry a value.",
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "enum": ["known", "unknown"],
+          "description": "Whether the value is known."
+        },
+        "value": {
+          "description": "The known value. Must be absent when status is 'unknown'."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "description": "Why the value is unknown. Required when status is 'unknown'."
+        },
+        "research_owner": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Role or team that will resolve the unknown. Required when status is 'unknown'. Not a personal name."
+        }
+      },
+      "if": {
+        "properties": { "status": { "const": "unknown" } },
+        "required": ["status"]
+      },
+      "then": {
+        "required": ["reason", "research_owner"],
+        "not": { "required": ["value"] }
+      },
+      "else": {
+        "required": ["value"]
+      }
+    },
+    "versionField": {
+      "description": "Version string with explicit status.",
+      "allOf": [
+        { "$ref": "#/$defs/explicitStatus" },
+        {
+          "properties": {
+            "value": { "type": "string", "minLength": 1, "maxLength": 200 }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "impactAffectedPeopleOrGroups": {
+      "description": "Groups or categories of affected people, with explicit status. Do not list personal names.",
+      "allOf": [
+        { "$ref": "#/$defs/explicitStatus" },
+        {
+          "properties": {
+            "value": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 50,
+              "items": { "type": "string", "minLength": 1, "maxLength": 300 }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "impactSeverity": {
+      "description": "Severity on the project-defined scale, with explicit status. Map to the organization's own scale in the narrative.",
+      "allOf": [
+        { "$ref": "#/$defs/explicitStatus" },
+        {
+          "properties": {
+            "value": { "enum": ["none", "low", "moderate", "high", "critical"] }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "impactScale": {
+      "description": "Extent of the impact (for example number of records, systems or people, as text or an approximate count), with explicit status.",
+      "allOf": [
+        { "$ref": "#/$defs/explicitStatus" },
+        {
+          "properties": {
+            "value": { "type": "string", "minLength": 1, "maxLength": 500 }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "impactDuration": {
+      "description": "Duration of the impact, as an ISO 8601 duration (for example PT6H) or descriptive text, with explicit status.",
+      "allOf": [
+        { "$ref": "#/$defs/explicitStatus" },
+        {
+          "properties": {
+            "value": { "type": "string", "minLength": 1, "maxLength": 200 }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "impactReversibility": {
+      "description": "Whether the impact can be reversed, with explicit status.",
+      "allOf": [
+        { "$ref": "#/$defs/explicitStatus" },
+        {
+          "properties": {
+            "value": { "enum": ["reversible", "partially_reversible", "irreversible"] }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "impactKnownDisproportionateEffects": {
+      "description": "Known disproportionate effects on specific groups, with explicit status. Known with an empty array means none identified so far.",
+      "allOf": [
+        { "$ref": "#/$defs/explicitStatus" },
+        {
+          "properties": {
+            "value": {
+              "type": "array",
+              "maxItems": 50,
+              "items": { "type": "string", "minLength": 1, "maxLength": 300 }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "evidenceItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "category", "availability", "owner"],
+      "description": "One evidence item. The availability status explains what is held, missing or withheld; a non-available status requires a reason and, where a closure step exists, a gap closure plan. No status permits deleting or replacing existing material.",
+      "properties": {
+        "evidence_id": {
+          "$ref": "#/$defs/uuid",
+          "description": "Stable evidence identifier."
+        },
+        "category": {
+          "enum": [
+            "agent_execution_record",
+            "reasoning_record",
+            "model_runtime_configuration",
+            "working_directory_state",
+            "environment_difference",
+            "network_and_isolation",
+            "prompt_or_tool_definition",
+            "tool_call_and_response",
+            "authorization_or_credential_scope",
+            "principal_or_human_approval",
+            "file_state_before_after",
+            "detection_or_containment",
+            "recovery",
+            "physical_sensor_or_actuator",
+            "language_or_script_context",
+            "other"
+          ],
+          "description": "Applicability-aware evidence category."
+        },
+        "availability": {
+          "enum": ["available", "not_collected", "unavailable", "lawfully_withheld", "not_applicable"],
+          "description": "Availability status of the evidence item."
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Role or team that holds custody. Use 'unassigned' when no owner is set yet. Not a personal name."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "description": "Reason for the availability status. Required unless availability is 'available'."
+        },
+        "gap_closure_plan": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "description": "Plan to close the gap. Required when availability is 'not_collected', 'unavailable' or 'lawfully_withheld'."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "description": "Non-sensitive summary of the item."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "availability": { "const": "available" } },
+            "required": ["availability"]
+          },
+          "else": {
+            "required": ["reason"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "availability": { "enum": ["not_collected", "unavailable", "lawfully_withheld"] }
+            },
+            "required": ["availability"]
+          },
+          "then": {
+            "required": ["gap_closure_plan"]
+          }
+        }
+      ]
+    }
+  }
+}

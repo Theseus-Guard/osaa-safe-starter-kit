@@ -1,0 +1,113 @@
+{
+  "record_schema_version": "0.1.0",
+  "case_id": "3f2b8c1e-6a4d-4e9b-8f1a-2c7d9e0b5a11",
+  "linked_report_ids": [],
+  "reporter_contact": {
+    "contact_mode": "anonymous",
+    "return_channel": "none"
+  },
+  "responsible_organization": {
+    "name": "Example Operator Org (synthetic)",
+    "relationship": "operator"
+  },
+  "other_parties": [],
+  "affected_systems": [
+    {
+      "system_name": "example-assistant (synthetic)",
+      "model_version": {
+        "status": "known",
+        "value": "synthetic-model-0.0.0"
+      },
+      "runtime_version": {
+        "status": "unknown",
+        "reason": "The runtime build has not yet been read from the deployment record.",
+        "research_owner": "platform-operations"
+      },
+      "configuration_version": {
+        "status": "known",
+        "value": "synthetic-config-2026.10"
+      }
+    }
+  ],
+  "incident_class": "out_of_scope_continuation",
+  "near_miss_status": "under_assessment",
+  "scope": {
+    "scope_status": "exceeded_approved_scope",
+    "description": "Synthetic example: an agent continued a task after its approved scope had ended.",
+    "authorization_source": {
+      "source_type": "written_policy",
+      "reference": "SYNTHETIC-POLICY-0001"
+    }
+  },
+  "timeline": {
+    "awareness_time": {
+      "value": "2026-11-01T09:00:00Z",
+      "basis": "system_record",
+      "source": "synthetic-alert-0001"
+    },
+    "occurrence_time": {
+      "value": "2026-11-01T08:45:00Z",
+      "basis": "estimate",
+      "source": "synthetic-log-range-0001",
+      "uncertainty": "Log timestamps are not yet confirmed."
+    }
+  },
+  "containment": {
+    "status": "in_progress",
+    "actions": [
+      {
+        "description": "Synthetic example: tool access was paused by an operator.",
+        "performed_by_role": "incident-owner",
+        "performed_at": {
+          "value": "2026-11-01T09:20:00Z",
+          "basis": "human_statement",
+          "source": "synthetic-ticket-0001"
+        },
+        "outcome": "not_yet_verified"
+      }
+    ]
+  },
+  "evidence": [
+    {
+      "evidence_id": "7d1e2f3a-4b5c-4d6e-8f70-1a2b3c4d5e6f",
+      "category": "tool_call_and_response",
+      "availability": "not_collected",
+      "owner": "evidence-custodian",
+      "reason": "The collection adapter is not enabled for this synthetic example.",
+      "gap_closure_plan": "Request a lawful export of tool call logs from the existing log store."
+    }
+  ],
+  "impact": {
+    "affected_people_or_groups": {
+      "status": "unknown",
+      "reason": "No affected group has been identified yet (synthetic example).",
+      "research_owner": "incident-owner"
+    },
+    "severity": {
+      "status": "known",
+      "value": "low"
+    },
+    "scale": {
+      "status": "unknown",
+      "reason": "The number of affected records is still being counted (synthetic example).",
+      "research_owner": "incident-owner"
+    },
+    "duration": {
+      "status": "known",
+      "value": "PT45M"
+    },
+    "reversibility": {
+      "status": "known",
+      "value": "reversible"
+    },
+    "known_disproportionate_effects": {
+      "status": "known",
+      "value": []
+    }
+  },
+  "next_update_due": {
+    "value": "2026-11-08T09:00:00Z",
+    "basis": "derived_from_records",
+    "source": "weekly cadence, 7 calendar days after awareness_time"
+  }
+}

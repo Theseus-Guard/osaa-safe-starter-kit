@@ -1,0 +1,25 @@
+[project]
+name = "safe-starter-kit"
+version = "0.1.0"
+description = "SAFE-Starter-Kit backend skeleton"
+requires-python = ">=3.13"
+dependencies = [
+    "argon2-cffi>=25.1.0",
+    "fastapi>=0.115",
+    "psycopg[binary]>=3.2",
+    "pyjwt>=2.15.1",
+    "uvicorn>=0.32",
+]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.2.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

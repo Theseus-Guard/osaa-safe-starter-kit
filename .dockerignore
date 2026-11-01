@@ -1,0 +1,10 @@
+# The build context is the repository root. Keep secrets, private plans and local artifacts out of it.
+.git
+.agent_cache
+plans
+secrets
+schemas
+**/.venv
+**/__pycache__
+**/node_modules
+**/dist

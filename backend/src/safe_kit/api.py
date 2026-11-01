@@ -1,0 +1,361 @@
+import uuid
+from datetime import UTC, datetime
+
+import psycopg
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.security import HTTPAuthorizationCredentials
+from pydantic import BaseModel, Field, field_validator
+
+from safe_kit.auth import (
+    INVALID_CREDENTIALS,
+    bearer,
+    current_user,
+    current_user_pending_change,
+    require_permission,
+)
+from safe_kit.db import connect
+from safe_kit.rate_limit import (
+    LOGIN_LIMIT_PER_CLIENT,
+    LOGIN_LIMIT_PER_USERNAME,
+    LOGIN_WINDOW,
+)
+from safe_kit.rate_limit import clear as clear_rate_limit
+from safe_kit.rate_limit import hit as hit_rate_limit
+from safe_kit.rbac import PERMISSIONS
+from safe_kit.security import (
+    MIN_PASSWORD_LENGTH,
+    access_token_ttl,
+    decode_access_token,
+    issue_access_token,
+    verify_password,
+)
+from safe_kit.sessions import (
+    InvalidRefreshToken,
+    open_session,
+    revoke_access_token,
+    revoke_refresh_token,
+    rotate_session,
+)
+from safe_kit.users import (
+    ROLES,
+    InvalidUsername,
+    UpdateOutcome,
+    User,
+    admin_exists,
+    change_own_password,
+    count_users,
+    create_user,
+    find_user,
+    find_user_by_id,
+    list_users,
+    reset_password,
+    soft_delete_user,
+    update_user,
+)
+
+app = FastAPI(title="SAFE-Starter-Kit API", version="0.1.0")
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=150)
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str = Field(min_length=1, max_length=256)
+
+
+class LogoutRequest(BaseModel):
+    refresh_token: str | None = Field(default=None, max_length=256)
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=1024)
+    new_password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=1024)
+
+
+class TemporaryPasswordRequest(BaseModel):
+    temporary_password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=1024)
+
+
+class UserCreateRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=150)
+    role: str
+    temporary_password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=1024)
+
+    @field_validator("role")
+    @classmethod
+    def known_role(cls, value: str) -> str:
+        if value not in ROLES:
+            raise ValueError("unknown role")
+        return value
+
+
+class UserUpdateRequest(BaseModel):
+    role: str | None = None
+    is_active: bool | None = None
+
+    @field_validator("role")
+    @classmethod
+    def known_role(cls, value: str | None) -> str | None:
+        if value is not None and value not in ROLES:
+            raise ValueError("unknown role")
+        return value
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    password_change_required: bool
+
+
+class MeResponse(BaseModel):
+    id: str
+    username: str
+    role: str
+    password_change_required: bool
+
+
+class UserCreatedResponse(BaseModel):
+    id: str
+    username: str
+    role: str
+    password_change_required: bool
+
+
+class UserSummary(BaseModel):
+    id: str
+    username: str
+    role: str
+    is_active: bool
+    password_change_required: bool
+    created_at: datetime
+
+
+class UserPage(BaseModel):
+    items: list[UserSummary]
+    total: int
+    limit: int
+    offset: int
+
+
+class RoleSummary(BaseModel):
+    role: str
+    permissions: list[str]
+
+
+def _client_ip(request: Request) -> str:
+    # The gateway overwrites X-Real-IP with the address it received the connection from.
+    # This is safe only because the API is reachable solely through the gateway.
+    if real_ip := request.headers.get("x-real-ip"):
+        return real_ip
+    return request.client.host if request.client else "unknown"
+
+
+def _issue_tokens(user: User, refresh_token: str) -> TokenResponse:
+    access_token, _ = issue_access_token(user.id, user.username, user.role)
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        expires_in=int(access_token_ttl().total_seconds()),
+        password_change_required=user.must_change_password,
+    )
+
+
+def _summary(user: User) -> UserSummary:
+    return UserSummary(
+        id=user.id,
+        username=user.username,
+        role=user.role,
+        is_active=user.is_active,
+        password_change_required=user.must_change_password,
+        created_at=user.created_at,
+    )
+
+
+@app.get("/api/v1/health/live")
+def live() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+SETUP_REQUIRED = HTTPException(status_code=503, detail={"status": "setup_required"})
+
+
+@app.get("/api/v1/health/ready")
+def ready() -> dict[str, str]:
+    try:
+        with connect() as conn:
+            conn.execute("SELECT 1 FROM schema_migrations LIMIT 1")
+        if not admin_exists():
+            raise SETUP_REQUIRED
+    except psycopg.Error:
+        raise HTTPException(status_code=503, detail={"status": "unavailable"})
+    return {"status": "ok"}
+
+
+@app.post("/api/v1/auth/token", response_model=TokenResponse)
+def login(body: LoginRequest, request: Request) -> TokenResponse:
+    # Until the first admin exists, nobody can log in. The operator creates that admin with the CLI.
+    if not admin_exists():
+        raise SETUP_REQUIRED
+    # Count the attempt before checking the password, so that parallel guesses cannot exceed the limit.
+    user_hits = hit_rate_limit(f"login:user:{body.username}", LOGIN_WINDOW)
+    client_hits = hit_rate_limit(f"login:client:{_client_ip(request)}", LOGIN_WINDOW)
+    if user_hits > LOGIN_LIMIT_PER_USERNAME or client_hits > LOGIN_LIMIT_PER_CLIENT:
+        raise HTTPException(
+            status_code=429,
+            detail="too many login attempts",
+            headers={"Retry-After": str(int(LOGIN_WINDOW.total_seconds()))},
+        )
+    user = find_user(body.username)
+    password_ok = verify_password(user.password_hash if user else None, body.password)
+    if user is None or not user.is_active or not password_ok:
+        raise INVALID_CREDENTIALS
+    clear_rate_limit(f"login:user:{body.username}")
+    return _issue_tokens(user, open_session(user.id))
+
+
+@app.post("/api/v1/auth/refresh", response_model=TokenResponse)
+def refresh(body: RefreshRequest) -> TokenResponse:
+    try:
+        user_id, new_refresh_token = rotate_session(body.refresh_token)
+    except InvalidRefreshToken:
+        raise INVALID_CREDENTIALS
+    user = find_user_by_id(user_id)
+    if user is None or not user.is_active:
+        raise INVALID_CREDENTIALS
+    return _issue_tokens(user, new_refresh_token)
+
+
+@app.post("/api/v1/auth/logout", status_code=204)
+def logout(
+    body: LogoutRequest | None = None,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    user: User = Depends(current_user_pending_change),
+) -> Response:
+    # The access token stays in the revocation list until it would have expired anyway.
+    claims = decode_access_token(credentials.credentials)
+    revoke_access_token(claims["jti"], datetime.fromtimestamp(claims["exp"], UTC))
+    if body is not None and body.refresh_token:
+        revoke_refresh_token(body.refresh_token, user.id)
+    return Response(status_code=204)
+
+
+@app.post("/api/v1/auth/password", status_code=204)
+def change_password(
+    body: PasswordChangeRequest,
+    user: User = Depends(current_user_pending_change),
+) -> Response:
+    # Used both for the forced change at first login and for voluntary changes.
+    # The current password is required, so a stolen access token alone cannot change it.
+    if not verify_password(user.password_hash, body.current_password):
+        raise HTTPException(status_code=401, detail="current password is incorrect")
+    change_own_password(user.id, body.new_password)
+    # All sessions end, including this one. The client must log in again with the new password.
+    return Response(status_code=204)
+
+
+@app.get("/api/v1/auth/me", response_model=MeResponse)
+def me(user: User = Depends(current_user_pending_change)) -> MeResponse:
+    return MeResponse(
+        id=user.id,
+        username=user.username,
+        role=user.role,
+        password_change_required=user.must_change_password,
+    )
+
+
+@app.get("/api/v1/users", response_model=UserPage)
+def admin_list_users(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    actor: User = Depends(require_permission("users:manage")),
+) -> UserPage:
+    return UserPage(
+        items=[_summary(user) for user in list_users(limit, offset)],
+        total=count_users(),
+        limit=limit,
+        offset=offset,
+    )
+
+
+@app.post("/api/v1/users", status_code=201, response_model=UserCreatedResponse)
+def admin_create_user(
+    body: UserCreateRequest,
+    actor: User = Depends(require_permission("users:manage")),
+) -> UserCreatedResponse:
+    try:
+        user_id = create_user(body.username, body.temporary_password, body.role)
+    except InvalidUsername as error:
+        raise HTTPException(status_code=422, detail=str(error))
+    except psycopg.errors.UniqueViolation:
+        raise HTTPException(status_code=409, detail="username already exists")
+    return UserCreatedResponse(
+        id=user_id,
+        username=body.username,
+        role=body.role,
+        password_change_required=True,
+    )
+
+
+@app.patch("/api/v1/users/{user_id}", response_model=UserSummary)
+def admin_update_user(
+    user_id: uuid.UUID,
+    body: UserUpdateRequest,
+    actor: User = Depends(require_permission("users:manage")),
+) -> UserSummary:
+    if body.role is None and body.is_active is None:
+        raise HTTPException(status_code=422, detail="nothing to change")
+    # Admins cannot change their own role or status. This keeps a single admin mistake from locking
+    # everyone out, and another active admin can always make the change.
+    if str(user_id) == actor.id:
+        raise HTTPException(status_code=409, detail="cannot change your own role or status")
+    outcome = update_user(str(user_id), role=body.role, is_active=body.is_active)
+    if outcome is UpdateOutcome.NOT_FOUND:
+        raise HTTPException(status_code=404, detail="user not found")
+    if outcome is UpdateOutcome.LAST_ADMIN:
+        raise HTTPException(status_code=409, detail="the last active admin cannot be removed")
+    updated = find_user_by_id(str(user_id))
+    assert updated is not None
+    return _summary(updated)
+
+
+@app.delete("/api/v1/users/{user_id}", status_code=204)
+def admin_delete_user(
+    user_id: uuid.UUID,
+    actor: User = Depends(require_permission("users:manage")),
+) -> Response:
+    # Soft delete only: the row is kept, the user is disabled and loses its sessions.
+    # Physical removal is done by a database administrator, never through the API.
+    if str(user_id) == actor.id:
+        raise HTTPException(status_code=409, detail="cannot change your own role or status")
+    outcome = soft_delete_user(str(user_id))
+    if outcome is UpdateOutcome.NOT_FOUND:
+        raise HTTPException(status_code=404, detail="user not found")
+    if outcome is UpdateOutcome.LAST_ADMIN:
+        raise HTTPException(status_code=409, detail="the last active admin cannot be removed")
+    return Response(status_code=204)
+
+
+@app.post("/api/v1/users/{user_id}/password", status_code=204)
+def admin_reset_password(
+    user_id: uuid.UUID,
+    body: TemporaryPasswordRequest,
+    actor: User = Depends(require_permission("users:reset_password")),
+) -> Response:
+    # Self-service reset is intentionally not offered. The admin sets a temporary password
+    # and the user must replace it at next login.
+    if not reset_password(str(user_id), body.temporary_password):
+        raise HTTPException(status_code=404, detail="user not found")
+    return Response(status_code=204)
+
+
+@app.get("/api/v1/rbac/roles", response_model=list[RoleSummary])
+def admin_list_roles(actor: User = Depends(require_permission("users:manage"))) -> list[RoleSummary]:
+    # Read-only: permissions are defined in code (rbac.py) and changed through review, not at runtime.
+    return [
+        RoleSummary(role=role, permissions=sorted(permissions))
+        for role, permissions in sorted(PERMISSIONS.items())
+    ]

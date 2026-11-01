@@ -1,0 +1,20 @@
+# Internal planning and agent working data must not enter the public repository.
+/plans/
+/.agent_cache/
+!/docs/
+
+# Local secrets and Python build artifacts must never be committed.
+/secrets/
+.venv/
+__pycache__/
+node_modules/
+frontend/dist/
+
+# Browser automation artifacts from local testing.
+.playwright-mcp/
+
+*.md
+!README.md
+!CHANGELOG.md
+!SECURITY.md
+!ROADMAP.md
