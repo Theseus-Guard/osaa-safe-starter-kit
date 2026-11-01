@@ -97,7 +97,14 @@ export class ApiError extends Error {
 interface Session {
   access: string;
   refresh: string;
+  // When the current token pair was issued. Both tokens start their lifetime at the same moment.
+  issuedAt: number;
 }
+
+// The pair is renewed by the first request made this long after it was issued. The refresh token has the same
+// lifetime as the access token, so renewing only after the access token expires would find the refresh token expired
+// too. A session that is not used for the full refresh lifetime ends on its next request.
+const RENEW_AFTER_MS = 5 * 60 * 1000;
 
 interface RequestOptions {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -128,7 +135,7 @@ function endSession(): void {
 }
 
 function storeTokens(body: TokenResponse): void {
-  session = { access: body.access_token, refresh: body.refresh_token };
+  session = { access: body.access_token, refresh: body.refresh_token, issuedAt: Date.now() };
 }
 
 async function send(path: string, options: RequestOptions): Promise<Response> {
@@ -182,6 +189,12 @@ async function toApiError(response: Response): Promise<ApiError> {
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  if (session && options.auth !== false && Date.now() - session.issuedAt > RENEW_AFTER_MS) {
+    if (!(await refreshOnce())) {
+      endSession();
+      throw new ApiError(401, "session_expired");
+    }
+  }
   let response = await send(path, options);
   if (response.status === 401 && session && options.auth !== false) {
     if (await refreshOnce()) {
