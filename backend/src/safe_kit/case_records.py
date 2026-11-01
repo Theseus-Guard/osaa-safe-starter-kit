@@ -612,6 +612,10 @@ def update_classification(
                 scope.user_id,
             ),
         ).fetchone()[0]
+        # The external notice tasks follow the option in the same transaction. Each change writes its own audit row.
+        cases.sync_internal_incident_option(
+            conn, case_id, values["internal_incident_option"], values["classification_rationale"], scope.user_id
+        )
         audit.record(
             conn,
             audit.CASE_CLASSIFICATION_CHANGE,

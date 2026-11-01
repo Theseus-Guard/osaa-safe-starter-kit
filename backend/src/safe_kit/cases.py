@@ -383,6 +383,112 @@ def insert_case(conn, title: str, awareness_time: datetime, created_by: str) -> 
     return replace(case, deadlines=stored_tasks)
 
 
+# The SAFE deadline tasks that are external notices: to the affected customers, to SAFE, to customers in general, and
+# to the public. Remediation status is tracked inside the organization and is not one of them.
+EXTERNAL_NOTICE_KINDS = (
+    "affected_customers",
+    "preliminary_safe_report",
+    "broader_advisory",
+    "preliminary_public_report",
+)
+# The source written in the audit details of a deadline change that the internal incident option made.
+INTERNAL_OPTION_SOURCE = "internal_incident_option"
+INTERNAL_OPTION_RESTORED_SOURCE = "internal_incident_option_restored"
+
+
+def _last_task_change(conn, case_id: str, task_id: str) -> dict[str, Any] | None:
+    """The details of the latest deadline audit row of one task. Audit rows are never removed, so this is the record."""
+    row = conn.execute(
+        """
+        SELECT details FROM audit_events
+        WHERE target_type = 'case' AND target_id = %s AND action = %s AND details->>'task_id' = %s AND NOT is_deleted
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        (case_id, audit.CASE_DEADLINE_UPDATE, task_id),
+    ).fetchone()
+    return None if row is None else row[0]
+
+
+def sync_internal_incident_option(
+    conn, case_id: str, enabled: bool, rationale: str | None, actor_id: str
+) -> dict[str, list[str]]:
+    """Make the external notice tasks follow the internal incident option. Runs on the caller's transaction.
+
+    Option on: each external notice task that is not already not applicable becomes not applicable, with the
+    rationale as its reason. A task the option changed keeps that reason in step with the rationale.
+    Option off: each task the option changed goes back to the status it had before. The previous status is read from the
+    audit row that made the change, so nothing is deleted and no extra table is needed. A task that someone changed by
+    hand after the option was set is left as it is.
+    Tasks are never deleted. Every change writes one deadline audit row. Returns the changed task kinds by action.
+    """
+    rows = conn.execute(
+        """
+        SELECT id::text, kind, status, not_applicable_reason FROM deadline_tasks
+        WHERE case_id = %s AND NOT is_deleted AND kind = ANY(%s)
+        ORDER BY due_at, kind
+        FOR UPDATE
+        """,
+        (case_id, list(EXTERNAL_NOTICE_KINDS)),
+    ).fetchall()
+    changed: dict[str, list[str]] = {"applied": [], "reason_updated": [], "restored": []}
+    for task_id, kind, status, reason in rows:
+        last = _last_task_change(conn, case_id, task_id)
+        set_by_option = last is not None and last.get("source") == INTERNAL_OPTION_SOURCE
+        if enabled:
+            if set_by_option:
+                if status == "not_applicable" and reason != rationale:
+                    _write_task_change(
+                        conn, case_id, task_id, kind, status, "not_applicable", reason, rationale,
+                        INTERNAL_OPTION_SOURCE, actor_id,
+                    )
+                    changed["reason_updated"].append(kind)
+            elif status != "not_applicable":
+                _write_task_change(
+                    conn, case_id, task_id, kind, status, "not_applicable", None, rationale,
+                    INTERNAL_OPTION_SOURCE, actor_id,
+                )
+                changed["applied"].append(kind)
+        elif set_by_option and status == "not_applicable":
+            _write_task_change(
+                conn, case_id, task_id, kind, status, last["status"]["old"], reason, None,
+                INTERNAL_OPTION_RESTORED_SOURCE, actor_id,
+            )
+            changed["restored"].append(kind)
+    return changed
+
+
+def _write_task_change(
+    conn,
+    case_id: str,
+    task_id: str,
+    kind: str,
+    old_status: str,
+    new_status: str,
+    old_reason: str | None,
+    new_reason: str | None,
+    source: str,
+    actor_id: str,
+) -> None:
+    conn.execute(
+        "UPDATE deadline_tasks SET status = %s, not_applicable_reason = %s WHERE id = %s",
+        (new_status, new_reason, task_id),
+    )
+    changes: dict[str, Any] = {}
+    if old_status != new_status:
+        changes["status"] = _change(old_status, new_status)
+    if old_reason != new_reason:
+        changes["not_applicable_reason"] = _change(_text_marker(old_reason), _text_marker(new_reason))
+    audit.record(
+        conn,
+        audit.CASE_DEADLINE_UPDATE,
+        "case",
+        case_id,
+        actor_id=actor_id,
+        details={"task_id": task_id, "kind": kind, "source": source, **changes},
+    )
+
+
+
 def find_visible_case(case_id: str, scope: CaseScope) -> Case | None:
     """Return the case with its deadline tasks if the scope may see it. Otherwise None, the same as a missing case."""
     visibility, params = scope.visibility_sql()

@@ -383,13 +383,17 @@ def test_classification_is_stored_as_versions_with_a_conflict_check(people):
     assert triager.get(f"/api/v1/cases/{case_id}/classification").json()["event_kind"] == "incident"
 
 
-def test_internal_incident_option_keeps_every_safe_deadline(people):
+def test_internal_incident_option_keeps_every_safe_due_date(people):
     case_id = new_case(people["reporter"])
     triager = people["triager"]
     deadlines_before = triager.get(f"/api/v1/cases/{case_id}").json()["deadlines"]
     body = classification_body(0, internal_incident_option=True, classification_rationale="handled internally")
     assert triager.put(f"/api/v1/cases/{case_id}/classification", json=body).status_code == 200
-    assert triager.get(f"/api/v1/cases/{case_id}").json()["deadlines"] == deadlines_before
+    deadlines_after = triager.get(f"/api/v1/cases/{case_id}").json()["deadlines"]
+    # The option changes statuses of the external notice tasks only. No due date moves and no task is removed.
+    assert [(task["kind"], task["due_at"]) for task in deadlines_after] == [
+        (task["kind"], task["due_at"]) for task in deadlines_before
+    ]
 
 
 def test_internal_incident_option_without_rationale_is_refused(people):
