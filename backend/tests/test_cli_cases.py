@@ -1103,3 +1103,440 @@ def test_link_remove_has_no_json_flag(api, capsys):
     code, out, err = run(capsys, "case", "link", "remove", CASE_ID, LINKED_ID, "--username", "alice", "--json")
     assert code == 2
     assert api.calls == []
+
+
+# --- case record reads: classification, impacts, legal duties, awareness events, preliminary report ---
+
+CLASSIFICATION_PATH = f"{CASE_PATH}/classification"
+IMPACTS_PATH = f"{CASE_PATH}/impacts"
+LEGAL_DUTIES_PATH = f"{CASE_PATH}/legal-duties"
+AWARENESS_PATH = f"{CASE_PATH}/awareness-events"
+REPORT_PATH = f"{CASE_PATH}/preliminary-report"
+ME_PATH = "/api/v1/auth/me"
+AWARENESS_ID = "cccccccc-dddd-4eee-8fff-000000000000"
+NOT_VISIBLE = "(not visible to your account)"
+FULL_VIEW = ["cases:read_all", "cases:triage"]
+LIMITED_VIEW = ["cases:read_own"]
+CLASSIFICATION_FREE_FIELDS = (
+    "classification_rationale",
+    "responsible_operator",
+    "affected_versions",
+    "approved_scope",
+    "scope_permission_source",
+    "containment",
+    "evidence_gap_plan",
+)
+CLASSIFICATION_BODY = {
+    "case_id": CASE_ID,
+    "version": 2,
+    "triggers": ["boundary_escape", "confidential_data_exposure"],
+    "event_kind": "incident",
+    "internal_incident_option": False,
+    "classification_rationale": "Customer data left the boundary",
+    "responsible_operator": "Ops lead",
+    "affected_versions": None,
+    "approved_scope": "Tenant A",
+    "scope_permission_source": None,
+    "containment": "Keys rotated",
+    "evidence_gap_plan": None,
+    "next_update_due_at": "2026-11-02T09:00:00Z",
+    "created_by": "alice",
+    "created_at": "2026-11-01T08:00:00Z",
+}
+IMPACTS_BODY = [
+    {
+        "area": "affected_people_groups",
+        "assessed": True,
+        "severity": "high",
+        "scope": "Tenant A users",
+        "updated_at": "2026-11-01T08:30:00Z",
+    },
+    {"area": "severity", "assessed": False, "severity": None, "scope": None, "updated_at": None},
+]
+LEGAL_DUTIES_BODY = [
+    {
+        "id": DUTY_ID,
+        "case_id": CASE_ID,
+        "kind": "statutory",
+        "description": "Notify the regulator",
+        "source_reference": "Art. 33",
+        "jurisdiction": "EU",
+        "due_at": "2026-11-03T09:00:00Z",
+        "status": "open",
+        "created_by": "alice",
+        "created_at": "2026-11-01T08:00:00Z",
+    }
+]
+AWARENESS_LIST_BODY = [
+    {
+        "id": AWARENESS_ID,
+        "case_id": CASE_ID,
+        "awareness_kind": "operator",
+        "event_kind": "incident",
+        "occurred_at": "2026-10-30T08:00:00Z",
+        "basis": "Log review",
+        "recorded_by": "alice",
+        "created_at": "2026-10-31T10:00:00Z",
+    }
+]
+REPORT_BODY = {
+    "case_id": CASE_ID,
+    "reference": "SAFE-2026-000001",
+    "case_status": "open",
+    "generated_at": "2026-11-01T10:00:00+00:00",
+    "awareness_time": "2026-10-30T09:00:00+00:00",
+    "complete": False,
+    "missing_fields": [{"field": "contact", "state": "missing"}, {"field": "impacts.severity", "state": "unknown"}],
+    "contact": {"status": "missing"},
+    "classification": {
+        "version": 2,
+        "triggers": ["boundary_escape"],
+        "event_kind": "incident",
+        "internal_incident_option": False,
+        "next_update_due_at": "2026-11-02T09:00:00+00:00",
+    },
+    "awareness_events": [
+        {
+            "id": AWARENESS_ID,
+            "awareness_kind": "operator",
+            "event_kind": "incident",
+            "occurred_at": "2026-10-30T08:00:00+00:00",
+            "basis": "Log review",
+        }
+    ],
+    "impacts": [
+        {"area": "affected_people_groups", "assessed": True, "severity": "high", "scope": "Tenant A users"},
+        {"area": "severity", "assessed": False, "severity": None, "scope": None},
+    ],
+    "legal_duties": [
+        {
+            "id": DUTY_ID,
+            "kind": "statutory",
+            "description": "Notify the regulator",
+            "source_reference": "Art. 33",
+            "jurisdiction": "EU",
+            "due_at": "2026-11-03T09:00:00+00:00",
+            "status": "open",
+        }
+    ],
+    "safe_deadlines": [{"kind": "initial_notice", "due_at": "2026-11-01T09:00:00+00:00", "status": "pending"}],
+}
+
+
+def route_me(api: FakeAPI, permissions: list[str]) -> None:
+    """The caller's permissions, read by the human output of the free-text commands."""
+    api.route(
+        "GET",
+        ME_PATH,
+        body={
+            "id": USER_ID,
+            "username": "alice",
+            "role": "investigator",
+            "password_change_required": False,
+            "timezone_setup_required": False,
+            "permissions": permissions,
+        },
+    )
+
+
+def hidden(body: dict, fields: tuple[str, ...]) -> dict:
+    """The body as the API returns it to a caller without cases:read_all: the named free-text fields are null."""
+    return {**body, **{name: None for name in fields}}
+
+
+def field_line(out: str, label: str) -> str:
+    """The output line of one label. Labels are unique within one command's output."""
+    return next(line for line in out.splitlines() if line.strip().startswith(f"{label}:"))
+
+
+def row_of(out: str, first_cell: str) -> str:
+    """The table row whose first cell is first_cell."""
+    return next(line for line in out.splitlines() if line.split()[:1] == [first_cell])
+
+
+CASE_RECORD_READS = [
+    pytest.param(("case", "classification", "show", CASE_ID), CLASSIFICATION_PATH, id="classification"),
+    pytest.param(("case", "impact", "list", CASE_ID), IMPACTS_PATH, id="impacts"),
+    pytest.param(("case", "legal-duty", "list", CASE_ID), LEGAL_DUTIES_PATH, id="legal-duties"),
+    pytest.param(("case", "awareness", "list", CASE_ID), AWARENESS_PATH, id="awareness"),
+    pytest.param(("case", "report", "show", CASE_ID), REPORT_PATH, id="report"),
+]
+
+
+# classification show
+
+
+def test_classification_show_prints_the_fields_for_a_full_view_caller(api, capsys):
+    api.route("GET", CLASSIFICATION_PATH, body=CLASSIFICATION_BODY)
+    route_me(api, FULL_VIEW)
+    code, out, err = run(capsys, "case", "classification", "show", CASE_ID, "--username", "alice")
+    assert code == 0
+    assert "Classification version 2:" in out
+    assert field_line(out, "Triggers").endswith("boundary_escape, confidential_data_exposure")
+    assert field_line(out, "Rationale").endswith("Customer data left the boundary")
+    assert field_line(out, "Next update (UTC)").endswith("2026-11-02T09:00:00Z")
+    # Unset free text is a dash for this caller: nothing is hidden from it.
+    assert field_line(out, "Affected versions").endswith("-")
+    assert NOT_VISIBLE not in out
+
+
+def test_classification_show_sends_a_bearer_get_and_ends_the_session(api, capsys):
+    api.route("GET", CLASSIFICATION_PATH, body=CLASSIFICATION_BODY)
+    route_me(api, FULL_VIEW)
+    code, out, err = run(capsys, "case", "classification", "show", CASE_ID, "--username", "alice")
+    assert code == 0
+    assert api.paths() == [
+        ("POST", "/api/v1/auth/token"),
+        ("GET", CLASSIFICATION_PATH),
+        ("GET", ME_PATH),
+        ("POST", "/api/v1/auth/logout"),
+    ]
+    assert api.calls[1]["headers"]["Authorization"] == f"Bearer {ACCESS}"
+    assert api.calls[1]["json"] is None
+
+
+def test_classification_show_json_prints_the_api_body_exactly(api, capsys):
+    api.route("GET", CLASSIFICATION_PATH, body=CLASSIFICATION_BODY)
+    code, out, err = run(capsys, "case", "classification", "show", CASE_ID, "--username", "alice", "--json")
+    assert code == 0
+    assert out == compact(CLASSIFICATION_BODY).decode("utf-8") + "\n"
+    # The JSON output makes no second request: the permission is read only for the human output.
+    assert ("GET", ME_PATH) not in api.paths()
+
+
+def test_classification_show_marks_hidden_free_text_for_a_caller_without_read_all(api, capsys):
+    api.route("GET", CLASSIFICATION_PATH, body=hidden(CLASSIFICATION_BODY, CLASSIFICATION_FREE_FIELDS))
+    route_me(api, LIMITED_VIEW)
+    code, out, err = run(capsys, "case", "classification", "show", CASE_ID, "--username", "alice")
+    assert code == 0
+    assert field_line(out, "Rationale").endswith(NOT_VISIBLE)
+    assert field_line(out, "Approved scope").endswith(NOT_VISIBLE)
+    assert field_line(out, "Containment").endswith(NOT_VISIBLE)
+    # Fields that are not free text stay visible.
+    assert field_line(out, "Event kind").endswith("incident")
+    assert field_line(out, "Triggers").endswith("boundary_escape, confidential_data_exposure")
+
+
+def test_classification_show_says_when_none_is_recorded(api, capsys):
+    empty = {
+        **CLASSIFICATION_BODY,
+        "version": 0,
+        "triggers": [],
+        "event_kind": None,
+        "created_by": None,
+        "created_at": None,
+    }
+    body = hidden(empty, CLASSIFICATION_FREE_FIELDS)
+    api.route("GET", CLASSIFICATION_PATH, body=body)
+    route_me(api, FULL_VIEW)
+    code, out, err = run(capsys, "case", "classification", "show", CASE_ID, "--username", "alice")
+    assert code == 0
+    assert out == "No classification recorded for this case.\n"
+
+
+def test_classification_show_with_no_triggers_says_not_assessed(api, capsys):
+    api.route("GET", CLASSIFICATION_PATH, body={**CLASSIFICATION_BODY, "triggers": []})
+    route_me(api, FULL_VIEW)
+    code, out, err = run(capsys, "case", "classification", "show", CASE_ID, "--username", "alice")
+    assert code == 0
+    assert field_line(out, "Triggers").endswith("not assessed")
+
+
+# impact list
+
+
+def test_impact_list_prints_one_line_per_area_for_a_full_view_caller(api, capsys):
+    api.route("GET", IMPACTS_PATH, body=IMPACTS_BODY)
+    route_me(api, FULL_VIEW)
+    code, out, err = run(capsys, "case", "impact", "list", CASE_ID, "--username", "alice")
+    assert code == 0
+    assert out.splitlines()[0].split() == ["AREA", "SEVERITY", "SCOPE", "UPDATED", "(UTC)"]
+    assert "Tenant A users" in row_of(out, "affected_people_groups")
+    assert "not assessed" in row_of(out, "severity")
+    assert NOT_VISIBLE not in out
+
+
+def test_impact_list_marks_hidden_scope_and_keeps_unassessed_areas_apart(api, capsys):
+    api.route("GET", IMPACTS_PATH, body=[hidden(IMPACTS_BODY[0], ("scope",)), IMPACTS_BODY[1]])
+    route_me(api, LIMITED_VIEW)
+    code, out, err = run(capsys, "case", "impact", "list", CASE_ID, "--username", "alice")
+    assert code == 0
+    assert NOT_VISIBLE in row_of(out, "affected_people_groups")
+    # An area with no assessment is "not assessed", never the hidden text or a severity.
+    assert NOT_VISIBLE not in row_of(out, "severity")
+    assert "not assessed" in row_of(out, "severity")
+
+
+def test_impact_list_json_prints_the_api_body_exactly(api, capsys):
+    api.route("GET", IMPACTS_PATH, body=IMPACTS_BODY)
+    code, out, err = run(capsys, "case", "impact", "list", CASE_ID, "--username", "alice", "--json")
+    assert code == 0
+    assert out == compact(IMPACTS_BODY).decode("utf-8") + "\n"
+    assert ("GET", ME_PATH) not in api.paths()
+
+
+# legal-duty list
+
+
+def test_legal_duty_list_prints_one_line_per_duty(api, capsys):
+    api.route("GET", LEGAL_DUTIES_PATH, body=LEGAL_DUTIES_BODY)
+    route_me(api, FULL_VIEW)
+    code, out, err = run(capsys, "case", "legal-duty", "list", CASE_ID, "--username", "alice")
+    assert code == 0
+    row = row_of(out, DUTY_ID)
+    assert "statutory" in row and "open" in row and "2026-11-03T09:00:00Z" in row
+    assert "Notify the regulator" in row and "Art. 33" in row and "EU" in row
+    assert NOT_VISIBLE not in out
+
+
+def test_legal_duty_list_marks_hidden_free_text_for_a_caller_without_read_all(api, capsys):
+    hidden_duties = [hidden(LEGAL_DUTIES_BODY[0], ("description", "source_reference", "jurisdiction"))]
+    api.route("GET", LEGAL_DUTIES_PATH, body=hidden_duties)
+    route_me(api, LIMITED_VIEW)
+    code, out, err = run(capsys, "case", "legal-duty", "list", CASE_ID, "--username", "alice")
+    assert code == 0
+    assert row_of(out, DUTY_ID).count(NOT_VISIBLE) == 3
+    assert "statutory" in row_of(out, DUTY_ID)
+
+
+def test_legal_duty_list_empty_says_so(api, capsys):
+    api.route("GET", LEGAL_DUTIES_PATH, body=[])
+    route_me(api, FULL_VIEW)
+    code, out, err = run(capsys, "case", "legal-duty", "list", CASE_ID, "--username", "alice")
+    assert code == 0
+    assert out == "No legal duties recorded for this case.\n"
+
+
+def test_legal_duty_list_json_prints_the_api_body_exactly(api, capsys):
+    api.route("GET", LEGAL_DUTIES_PATH, body=LEGAL_DUTIES_BODY)
+    code, out, err = run(capsys, "case", "legal-duty", "list", CASE_ID, "--username", "alice", "--json")
+    assert code == 0
+    assert out == compact(LEGAL_DUTIES_BODY).decode("utf-8") + "\n"
+    assert ("GET", ME_PATH) not in api.paths()
+
+
+# awareness list
+
+
+def test_awareness_list_prints_one_line_per_event(api, capsys):
+    api.route("GET", AWARENESS_PATH, body=AWARENESS_LIST_BODY)
+    route_me(api, FULL_VIEW)
+    code, out, err = run(capsys, "case", "awareness", "list", CASE_ID, "--username", "alice")
+    assert code == 0
+    row = row_of(out, AWARENESS_ID)
+    assert "operator" in row and "incident" in row and "2026-10-30T08:00:00Z" in row and "Log review" in row
+
+
+def test_awareness_list_marks_hidden_basis_for_a_caller_without_read_all(api, capsys):
+    api.route("GET", AWARENESS_PATH, body=[hidden(AWARENESS_LIST_BODY[0], ("basis",))])
+    route_me(api, LIMITED_VIEW)
+    code, out, err = run(capsys, "case", "awareness", "list", CASE_ID, "--username", "alice")
+    assert code == 0
+    assert row_of(out, AWARENESS_ID).endswith(NOT_VISIBLE)
+
+
+def test_awareness_list_empty_says_so(api, capsys):
+    api.route("GET", AWARENESS_PATH, body=[])
+    route_me(api, FULL_VIEW)
+    code, out, err = run(capsys, "case", "awareness", "list", CASE_ID, "--username", "alice")
+    assert code == 0
+    assert out == "No awareness events recorded for this case.\n"
+
+
+def test_awareness_list_json_prints_the_api_body_exactly(api, capsys):
+    api.route("GET", AWARENESS_PATH, body=AWARENESS_LIST_BODY)
+    code, out, err = run(capsys, "case", "awareness", "list", CASE_ID, "--username", "alice", "--json")
+    assert code == 0
+    assert out == compact(AWARENESS_LIST_BODY).decode("utf-8") + "\n"
+    assert ("GET", ME_PATH) not in api.paths()
+
+
+# preliminary report
+
+
+def test_report_show_prints_the_summary_without_a_permission_read(api, capsys):
+    api.route("GET", REPORT_PATH, body=REPORT_BODY)
+    code, out, err = run(capsys, "case", "report", "show", CASE_ID, "--username", "alice")
+    assert code == 0
+    assert out.splitlines()[0] == "Preliminary report for SAFE-2026-000001 (case open)"
+    assert field_line(out, "Complete").endswith("no")
+    assert "    contact: missing" in out.splitlines()
+    assert "    impacts.severity: unknown" in out.splitlines()
+    assert field_line(out, "Classification").endswith("version 2, triggers: boundary_escape")
+    assert field_line(out, "Impacts assessed").endswith("1 of 2")
+    assert field_line(out, "Legal duties").endswith("1 (1 open)")
+    assert api.paths() == [("POST", "/api/v1/auth/token"), ("GET", REPORT_PATH), ("POST", "/api/v1/auth/logout")]
+    assert api.calls[1]["headers"]["Authorization"] == f"Bearer {ACCESS}"
+
+
+def test_report_show_json_prints_the_api_body_exactly(api, capsys):
+    api.route("GET", REPORT_PATH, body=REPORT_BODY)
+    code, out, err = run(capsys, "case", "report", "show", CASE_ID, "--username", "alice", "--json")
+    assert code == 0
+    assert out == compact(REPORT_BODY).decode("utf-8") + "\n"
+
+
+def test_report_show_forbidden_names_the_read_all_permission(api, capsys):
+    api.route("GET", REPORT_PATH, status=403, body={"detail": "forbidden"})
+    code, out, err = run(capsys, "case", "report", "show", CASE_ID, "--username", "alice")
+    assert code == 1
+    assert out == ""
+    assert "the preliminary report needs cases:read_all, which your account does not hold" in err
+    assert api.paths()[-1] == ("POST", "/api/v1/auth/logout")
+
+
+# refusals, usage errors and secrets, for every case record read
+
+
+@pytest.mark.parametrize("argv, path", CASE_RECORD_READS)
+@pytest.mark.parametrize(
+    ("status", "message"),
+    [
+        pytest.param(403, "cases:read_all", id="forbidden"),
+        pytest.param(404, "case not found", id="not-found"),
+    ],
+)
+def test_case_record_reads_report_refusals_and_end_the_session(api, capsys, argv, path, status, message):
+    api.route("GET", path, status=status, body={"detail": "refused"})
+    code, out, err = run(capsys, *argv, "--username", "alice")
+    assert code == 1
+    assert out == ""
+    assert message in err
+    assert api.paths()[-1] == ("POST", "/api/v1/auth/logout")
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        pytest.param(("case", "classification", "show", "not-a-case"), id="classification"),
+        pytest.param(("case", "impact", "list", "not-a-case"), id="impacts"),
+        pytest.param(("case", "legal-duty", "list", "not-a-case"), id="legal-duties"),
+        pytest.param(("case", "awareness", "list", "not-a-case"), id="awareness"),
+        pytest.param(("case", "report", "show", "not-a-case"), id="report"),
+    ],
+)
+def test_case_record_reads_reject_a_case_id_that_is_not_a_uuid_without_a_request(api, capsys, argv):
+    code, out, err = run(capsys, *argv, "--username", "alice")
+    assert code == 2
+    assert "CASE_ID must be the case ID" in err
+    assert api.calls == []
+
+
+@pytest.mark.parametrize(
+    ("argv", "path", "body"),
+    [
+        pytest.param(("case", "classification", "show", CASE_ID), CLASSIFICATION_PATH, CLASSIFICATION_BODY, id="classification"),
+        pytest.param(("case", "impact", "list", CASE_ID), IMPACTS_PATH, IMPACTS_BODY, id="impacts"),
+        pytest.param(("case", "legal-duty", "list", CASE_ID), LEGAL_DUTIES_PATH, LEGAL_DUTIES_BODY, id="legal-duties"),
+        pytest.param(("case", "awareness", "list", CASE_ID), AWARENESS_PATH, AWARENESS_LIST_BODY, id="awareness"),
+        pytest.param(("case", "report", "show", CASE_ID), REPORT_PATH, REPORT_BODY, id="report"),
+    ],
+)
+def test_case_record_reads_never_print_the_token_or_the_password(api, capsys, argv, path, body):
+    api.route("GET", path, body=body)
+    route_me(api, FULL_VIEW)
+    code, out, err = run(capsys, *argv, "--username", "alice")
+    assert code == 0
+    assert ACCESS not in out + err
+    assert REFRESH not in out + err
+    assert PASSWORD not in out + err

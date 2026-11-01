@@ -695,6 +695,25 @@ LEGAL_DUTY_UPDATE_MESSAGES = {
     409: "the case is closed, so its legal duties cannot change",
 }
 AWARENESS_MESSAGES = {404: "case not found", 409: "the case is closed, so no awareness event can be recorded"}
+READ_MESSAGES = {
+    403: "forbidden: reading case records needs cases:read_own, cases:read_assigned or cases:read_all",
+    404: "case not found",
+}
+REPORT_MESSAGES = {
+    403: "forbidden: the preliminary report needs cases:read_all, which your account does not hold",
+    404: "case not found",
+}
+# Shown for a free-text field that the API hides from this caller (it is null for callers without cases:read_all).
+NOT_VISIBLE_TEXT = "(not visible to your account)"
+CLASSIFICATION_FREE_TEXT = (
+    ("Rationale", "classification_rationale"),
+    ("Responsible operator", "responsible_operator"),
+    ("Affected versions", "affected_versions"),
+    ("Approved scope", "approved_scope"),
+    ("Scope permission source", "scope_permission_source"),
+    ("Containment", "containment"),
+    ("Evidence gap plan", "evidence_gap_plan"),
+)
 
 
 def _case_close(base_url: str, args: argparse.Namespace) -> None:
@@ -958,6 +977,188 @@ def _awareness_add(base_url: str, args: argparse.Namespace) -> None:
     )
 
 
+def _json_list(raw: bytes) -> list:
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        raise RequestFailed("unexpected response from the server") from None
+    if not isinstance(body, list):
+        raise RequestFailed("unexpected response from the server")
+    return body
+
+
+def _sees_full_view(base: str, token: str) -> bool:
+    """Whether the caller holds cases:read_all. The API returns free text only to that permission, so a null free text
+    means "not visible" for other callers and "not set" for these. Only the human output asks."""
+    me = _json_object(_call(base, "GET", "/api/v1/auth/me", token=token))
+    return "cases:read_all" in me.get("permissions", [])
+
+
+def _free_text(value: str | None, full_view: bool) -> str:
+    if value:
+        return value
+    return "-" if full_view else NOT_VISIBLE_TEXT
+
+
+def _print_table(rows: list[tuple[str, ...]]) -> None:
+    """rows[0] is the header. Every column but the last is padded to its widest cell."""
+    widths = [max(len(row[column]) for row in rows) for column in range(len(rows[0]) - 1)]
+    for row in rows:
+        cells = [row[column].ljust(widths[column]) for column in range(len(widths))] + [row[-1]]
+        print("  ".join(cells).rstrip())
+
+
+def _print_field(label: str, value: str) -> None:
+    print(f"  {label + ':':<26}{value}")
+
+
+def _case_read(base_url: str, args: argparse.Namespace, path: str, messages: dict[int, str], render) -> None:
+    """One GET in its own login session. --json prints the API body as received. Otherwise render gets the raw body
+    and whether the caller holds cases:read_all, which decides how a null free text is shown."""
+
+    def action(base: str, token: str) -> None:
+        raw = _call(base, "GET", path, token=token, messages=messages)
+        if args.json:
+            _print_json(raw)
+        else:
+            render(raw, _sees_full_view(base, token))
+
+    _with_session(base_url, args, action)
+
+
+def _classification_show(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+
+    def render(raw: bytes, full_view: bool) -> None:
+        classification = _json_object(raw)
+        if classification["version"] == 0:
+            print("No classification recorded for this case.")
+            return
+        print(f"Classification version {classification['version']}:")
+        _print_field("Triggers", ", ".join(classification["triggers"]) or "not assessed")
+        _print_field("Event kind", classification["event_kind"] or "-")
+        _print_field("Internal option", "yes" if classification["internal_incident_option"] else "no")
+        for label, field in CLASSIFICATION_FREE_TEXT:
+            _print_field(label, _free_text(classification[field], full_view))
+        _print_field("Next update (UTC)", classification["next_update_due_at"] or "-")
+        _print_field("Saved (UTC)", classification["created_at"] or "-")
+
+    _case_read(base_url, args, f"/api/v1/cases/{case_id}/classification", READ_MESSAGES, render)
+
+
+def _impact_list(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+
+    def render(raw: bytes, full_view: bool) -> None:
+        rows = [("AREA", "SEVERITY", "SCOPE", "UPDATED (UTC)")]
+        for impact in _json_list(raw):
+            # An area with no assessment is listed as not assessed. That is not the same as severity none.
+            if impact["assessed"]:
+                rows.append(
+                    (
+                        impact["area"],
+                        impact["severity"] or "-",
+                        _free_text(impact["scope"], full_view),
+                        impact["updated_at"] or "-",
+                    )
+                )
+            else:
+                rows.append((impact["area"], "not assessed", "-", "-"))
+        _print_table(rows)
+
+    _case_read(base_url, args, f"/api/v1/cases/{case_id}/impacts", READ_MESSAGES, render)
+
+
+def _legal_duty_list(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+
+    def render(raw: bytes, full_view: bool) -> None:
+        duties = _json_list(raw)
+        if not duties:
+            print("No legal duties recorded for this case.")
+            return
+        rows = [("ID", "KIND", "STATUS", "DUE (UTC)", "JURISDICTION", "SOURCE REFERENCE", "DESCRIPTION")]
+        rows += [
+            (
+                duty["id"],
+                duty["kind"],
+                duty["status"],
+                duty["due_at"],
+                _free_text(duty["jurisdiction"], full_view),
+                _free_text(duty["source_reference"], full_view),
+                _free_text(duty["description"], full_view),
+            )
+            for duty in duties
+        ]
+        _print_table(rows)
+
+    _case_read(base_url, args, f"/api/v1/cases/{case_id}/legal-duties", READ_MESSAGES, render)
+
+
+def _awareness_list(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+
+    def render(raw: bytes, full_view: bool) -> None:
+        events = _json_list(raw)
+        if not events:
+            print("No awareness events recorded for this case.")
+            return
+        rows = [("ID", "AWARENESS KIND", "EVENT KIND", "OCCURRED (UTC)", "BASIS")]
+        rows += [
+            (
+                event["id"],
+                event["awareness_kind"],
+                event["event_kind"],
+                event["occurred_at"],
+                _free_text(event["basis"], full_view),
+            )
+            for event in events
+        ]
+        _print_table(rows)
+
+    _case_read(base_url, args, f"/api/v1/cases/{case_id}/awareness-events", READ_MESSAGES, render)
+
+
+def _render_report(report: dict) -> None:
+    classification = report["classification"]
+    impacts = report["impacts"]
+    duties = report["legal_duties"]
+    print(f"Preliminary report for {report['reference']} (case {report['case_status']})")
+    _print_field("Generated (UTC)", report["generated_at"])
+    _print_field("Awareness (UTC)", report["awareness_time"])
+    _print_field("Complete", "yes" if report["complete"] else "no")
+    if report["missing_fields"]:
+        print("  Missing fields:")
+        for item in report["missing_fields"]:
+            print(f"    {item['field']}: {item['state']}")
+    else:
+        _print_field("Missing fields", "none")
+    _print_field("Contact", report["contact"]["status"])
+    if classification["version"] == 0:
+        _print_field("Classification", "none recorded")
+    else:
+        triggers = ", ".join(classification["triggers"]) or "not assessed"
+        _print_field("Classification", f"version {classification['version']}, triggers: {triggers}")
+    _print_field("Awareness events", str(len(report["awareness_events"])))
+    assessed = sum(1 for impact in impacts if impact["assessed"])
+    _print_field("Impacts assessed", f"{assessed} of {len(impacts)}")
+    open_duties = sum(1 for duty in duties if duty["status"] == "open")
+    _print_field("Legal duties", f"{len(duties)} ({open_duties} open)")
+
+
+def _report_show(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+
+    def action(base: str, token: str) -> None:
+        raw = _call(base, "GET", f"/api/v1/cases/{case_id}/preliminary-report", token=token, messages=REPORT_MESSAGES)
+        if args.json:
+            _print_json(raw)
+        else:
+            _render_report(_json_object(raw))
+
+    _with_session(base_url, args, action)
+
+
 def _add_auth_options(parser: argparse.ArgumentParser, *, json_output: bool = True) -> None:
     parser.add_argument("--username", help="Account name. Defaults to the SAFE_USERNAME environment variable")
     if json_output:
@@ -1000,6 +1201,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_auth_options(imported)
     imported.set_defaults(handler=_case_import)
     _add_case_update_commands(case_commands)
+    _add_case_report_commands(case_commands)
 
     evidence = subcommands.add_parser("evidence", help="Add and list the evidence of a case")
     evidence_commands = evidence.add_subparsers(dest="evidence_command", required=True)
@@ -1032,7 +1234,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_case_update_commands(case_commands) -> None:
-    """The commands that change a case. Each one is a thin wrapper over one API route."""
+    """The commands that change a case, and the read commands of the record groups that also have a write command.
+    Each one is a thin wrapper over one API route."""
     close = case_commands.add_parser("close", help="Close a case. It needs a review and every deadline task settled")
     close.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     close.add_argument("--reason", required=True, help="Why the case is closed (required)")
@@ -1083,7 +1286,7 @@ def _add_case_update_commands(case_commands) -> None:
     _add_auth_options(review_record)
     review_record.set_defaults(handler=_review_record)
 
-    classification = case_commands.add_parser("classification", help="Save the classification of a case")
+    classification = case_commands.add_parser("classification", help="Show and save the classification of a case")
     classification_commands = classification.add_subparsers(dest="classification_command", required=True)
     classification_set = classification_commands.add_parser(
         "set",
@@ -1126,9 +1329,19 @@ def _add_case_update_commands(case_commands) -> None:
     )
     _add_auth_options(classification_set)
     classification_set.set_defaults(handler=_classification_set)
+    classification_show = classification_commands.add_parser(
+        "show", help="Show the current classification of one of your cases"
+    )
+    classification_show.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    _add_auth_options(classification_show)
+    classification_show.set_defaults(handler=_classification_show)
 
-    impact = case_commands.add_parser("impact", help="Set one impact area of a case")
+    impact = case_commands.add_parser("impact", help="List and set the impact areas of a case")
     impact_commands = impact.add_subparsers(dest="impact_command", required=True)
+    impact_list = impact_commands.add_parser("list", help="List the impact areas of one of your cases")
+    impact_list.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    _add_auth_options(impact_list)
+    impact_list.set_defaults(handler=_impact_list)
     impact_set = impact_commands.add_parser("set", help="Set the severity and scope of one impact area")
     impact_set.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     impact_set.add_argument("area", metavar="AREA", choices=IMPACT_AREAS, help="Impact area")
@@ -1138,9 +1351,14 @@ def _add_case_update_commands(case_commands) -> None:
     impact_set.set_defaults(handler=_impact_set)
 
     legal = case_commands.add_parser(
-        "legal-duty", help="Add and update the legal or contractual duties of a case. They are kept apart from deadlines"
+        "legal-duty",
+        help="List, add and update the legal or contractual duties of a case. They are kept apart from deadlines",
     )
     legal_commands = legal.add_subparsers(dest="legal_duty_command", required=True)
+    legal_list = legal_commands.add_parser("list", help="List the legal duties of one of your cases")
+    legal_list.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    _add_auth_options(legal_list)
+    legal_list.set_defaults(handler=_legal_duty_list)
     legal_add = legal_commands.add_parser("add", help="Add a legal or contractual duty to a case")
     legal_add.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     legal_add.add_argument("--kind", required=True, choices=LEGAL_DUTY_KINDS, help="Statutory or contractual")
@@ -1166,8 +1384,14 @@ def _add_case_update_commands(case_commands) -> None:
     _add_auth_options(legal_update)
     legal_update.set_defaults(handler=_legal_duty_update)
 
-    awareness = case_commands.add_parser("awareness", help="Record an awareness event of a case. Append only")
+    awareness = case_commands.add_parser(
+        "awareness", help="List and record the awareness events of a case. Recorded events are never changed"
+    )
     awareness_commands = awareness.add_subparsers(dest="awareness_command", required=True)
+    awareness_list = awareness_commands.add_parser("list", help="List the awareness events of one of your cases")
+    awareness_list.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    _add_auth_options(awareness_list)
+    awareness_list.set_defaults(handler=_awareness_list)
     awareness_add = awareness_commands.add_parser("add", help="Record an awareness event of a case")
     awareness_add.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     awareness_add.add_argument(
@@ -1182,6 +1406,15 @@ def _add_case_update_commands(case_commands) -> None:
     awareness_add.add_argument("--basis", required=True, help="Basis for the event (required, up to 1000 characters)")
     _add_auth_options(awareness_add)
     awareness_add.set_defaults(handler=_awareness_add)
+
+
+def _add_case_report_commands(case_commands) -> None:
+    report = case_commands.add_parser("report", help="Show the preliminary report of a case. Needs cases:read_all")
+    report_commands = report.add_subparsers(dest="report_command", required=True)
+    report_show = report_commands.add_parser("show", help="Show the preliminary report of one case")
+    report_show.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    _add_auth_options(report_show)
+    report_show.set_defaults(handler=_report_show)
 
 
 def main(argv: list[str] | None = None) -> int:
