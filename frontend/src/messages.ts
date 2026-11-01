@@ -34,7 +34,7 @@ const MESSAGES: Record<string, string> = {
 };
 
 export function describeCode(code: string): string {
-  return MESSAGES[code] ?? `Request failed (${code}).`;
+  return Object.hasOwn(MESSAGES, code) ? MESSAGES[code] : `Request failed (${code}).`;
 }
 
 export function describeError(error: unknown): string {

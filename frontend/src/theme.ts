@@ -32,11 +32,10 @@ export function setPreference(preference: ThemePreference): void {
   } catch {
     // Without storage the choice still applies for this page view only.
   }
-  applyTheme();
+  applyTheme(preference);
 }
 
-function applyTheme(): void {
-  const preference = getPreference();
+function applyTheme(preference: ThemePreference = getPreference()): void {
   const systemDark = window.matchMedia(DARK_QUERY).matches;
   resolved = preference === "system" ? (systemDark ? "dark" : "light") : preference;
   // The dark tokens and Tailwind's dark: variant both key off this class. color-scheme is set in index.css.

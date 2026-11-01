@@ -129,17 +129,23 @@ const APPEARANCE_OPTIONS: { value: ThemePreference; label: string }[] = [
   { value: "system", label: "System" },
 ];
 
+// "First Last (username)" when a name is set, otherwise just the username.
+function displayName(profile: { username: string; first_name?: string | null; last_name?: string | null }): string {
+  const fullName = [profile.first_name, profile.last_name].filter(Boolean).join(" ");
+  return fullName ? `${fullName} (${profile.username})` : profile.username;
+}
+
 function UserMenu({ profile, onLogout }: UserMenuProps) {
   const preference = useThemePreference();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button variant="ghost" className="max-w-full gap-2" />}>
-        <span className="max-w-40 truncate text-sm">{profile.username}</span>
+        <span className="max-w-64 truncate text-sm">{displayName(profile)}</span>
         <Badge variant="secondary">{profile.role}</Badge>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
         <DropdownMenuGroup>
-          <DropdownMenuLabel>Signed in as {profile.username}</DropdownMenuLabel>
+          <DropdownMenuLabel>Signed in as {displayName(profile)}</DropdownMenuLabel>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuGroup>
