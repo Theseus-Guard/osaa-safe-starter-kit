@@ -282,6 +282,22 @@ CATALOG: tuple[TableEntry, ...] = (
         deletion_mode="Soft delete once (is_deleted, deleted_at). Content is never changed.",
         created_column="created_at",
     ),
+    TableEntry(
+        table="case_import_records",
+        description="Imported case records: the source case ID, a fingerprint of the record as received, and the whole record.",
+        category="case",
+        contains_personal_data=True,
+        personal_fields=(
+            "payload (the record as received; may name people, organizations, or contact references)",
+            "imported_by (links to a person)",
+        ),
+        purpose="Telling a repeated import (duplicate) from a different record with the same ID (conflict), and keeping every received field.",
+        retention="Kept with its case. Follows the case retention once it is defined.",
+        retention_defined=False,
+        security="Written only by the import. No read endpoint exists yet; any future read must follow the case visibility rules. The payload never holds a contact value: the schema allows only a reference.",
+        deletion_mode="Soft delete (is_deleted, deleted_at).",
+        created_column="created_at",
+    ),
 )
 
 

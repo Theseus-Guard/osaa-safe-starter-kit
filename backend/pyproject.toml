@@ -8,6 +8,7 @@ dependencies = [
     "cryptography>=50.0.2",
     "email-validator>=2.3.0",
     "fastapi>=0.115",
+    "jsonschema>=4.23",
     "psycopg[binary]>=3.2",
     "pyjwt>=2.15.1",
     "python-multipart>=0.0.33",

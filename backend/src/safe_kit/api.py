@@ -9,6 +9,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
+from starlette.concurrency import run_in_threadpool
 
 from safe_kit.auth import (
     INVALID_CREDENTIALS,
@@ -20,6 +21,13 @@ from safe_kit.auth import (
     require_permission,
 )
 from safe_kit.audit import record_login_failure
+from safe_kit.case_import import (
+    MAX_IMPORT_BYTES,
+    ImportFileError,
+    RecordResult,
+    import_records,
+    parse_import_file,
+)
 from safe_kit.cases import (
     Assignment,
     Case,
@@ -666,6 +674,25 @@ class HistoryPage(BaseModel):
     offset: int
 
 
+class CaseImportRecordResult(BaseModel):
+    # index is the position of the record in the file's records array.
+    index: int
+    status: Literal["imported", "duplicate", "conflict", "rejected", "failed"]
+    source_case_id: str | None
+    case_id: str | None
+    reference: str | None
+    errors: list[str]
+
+
+class CaseImportResponse(BaseModel):
+    imported: int
+    duplicate: int
+    conflict: int
+    rejected: int
+    failed: int
+    results: list[CaseImportRecordResult]
+
+
 # Any role that may open a case: the reporter (own), the triager (all), or an assignee.
 CASE_READ_PERMISSIONS = ("cases:read_own", "cases:read_all", "cases:read_assigned")
 CASE_NOT_FOUND = HTTPException(status_code=404, detail="case not found")
@@ -754,6 +781,58 @@ def submit_case(
     except TimezoneNotConfigured:
         raise HTTPException(status_code=409, detail="system timezone is not configured")
     return _case_response(case)
+
+
+async def _read_import_body(request: Request) -> bytes:
+    """Read the import file with a size limit. A request with no Content-Length cannot exceed it either."""
+    message = f"the import file exceeds the limit of {MAX_IMPORT_BYTES} bytes"
+    declared = request.headers.get("content-length")
+    if declared is not None and declared.isdigit() and int(declared) > MAX_IMPORT_BYTES:
+        raise HTTPException(status_code=413, detail=message)
+    received = bytearray()
+    async for chunk in request.stream():
+        received.extend(chunk)
+        if len(received) > MAX_IMPORT_BYTES:
+            raise HTTPException(status_code=413, detail=message)
+    return bytes(received)
+
+
+def _import_response(results: list[RecordResult]) -> CaseImportResponse:
+    counts = {status: 0 for status in ("imported", "duplicate", "conflict", "rejected", "failed")}
+    for result in results:
+        counts[result.status] += 1
+    return CaseImportResponse(
+        **counts,
+        results=[
+            CaseImportRecordResult(
+                index=result.index,
+                status=result.status,
+                source_case_id=result.source_case_id,
+                case_id=result.case_id,
+                reference=result.reference,
+                errors=list(result.errors),
+            )
+            for result in results
+        ],
+    )
+
+
+@app.post("/api/v1/cases/import", response_model=CaseImportResponse)
+async def import_cases(
+    request: Request,
+    actor: User = Depends(require_permission("cases:submit")),
+) -> CaseImportResponse:
+    """Import case records in the project format. Each record is stored or refused on its own; see safe_kit.case_import."""
+    body = await _read_import_body(request)
+    try:
+        records = parse_import_file(body)
+    except ImportFileError as error:
+        raise HTTPException(status_code=422, detail=str(error))
+    try:
+        results = await run_in_threadpool(import_records, records, actor.id)
+    except TimezoneNotConfigured:
+        raise HTTPException(status_code=409, detail="system timezone is not configured")
+    return _import_response(results)
 
 
 @app.get("/api/v1/cases", response_model=CasePage)

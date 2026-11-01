@@ -21,6 +21,8 @@ REQUEST_TIMEOUT_SECONDS = 10
 MAX_TITLE_LENGTH = 200
 DEFAULT_PAGE_SIZE = 20
 MAX_PAGE_SIZE = 200
+# Same limit as the API (safe_kit.case_import.MAX_IMPORT_BYTES). The CLI does not import the backend package.
+MAX_IMPORT_FILE_BYTES = 1024 * 1024
 
 
 class UsageError(Exception):
@@ -275,6 +277,63 @@ def _case_show(base_url: str, args: argparse.Namespace) -> None:
     _with_session(base_url, args, action)
 
 
+def _read_import_file(path: str) -> bytes:
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read(MAX_IMPORT_FILE_BYTES + 1)
+    except OSError as error:
+        raise UsageError(f"cannot read {path}: {error.strerror or 'unknown error'}") from None
+    if len(raw) > MAX_IMPORT_FILE_BYTES:
+        raise UsageError(f"the import file is larger than {MAX_IMPORT_FILE_BYTES} bytes")
+    return raw
+
+
+def _print_import_summary(summary: dict) -> None:
+    print(
+        f"Import finished: {summary['imported']} imported, {summary['duplicate']} duplicate, "
+        f"{summary['conflict']} conflict, {summary['rejected']} rejected, {summary['failed']} failed."
+    )
+    for result in summary["results"]:
+        position = f"records[{result['index']}]"
+        status = result["status"]
+        if status == "imported":
+            print(f"  {position}: imported as {result['reference']}")
+        elif status == "duplicate":
+            print(f"  {position}: duplicate of {result['reference']}, nothing written")
+        elif status == "conflict":
+            print(f"  {position}: same case ID as {result['reference']} with different content, nothing written")
+        elif status == "rejected":
+            print(f"  {position}: rejected, nothing written")
+        else:
+            print(f"  {position}: failed, nothing written")
+        for error in result["errors"]:
+            print(f"    {error}")
+
+
+def _case_import(base_url: str, args: argparse.Namespace) -> None:
+    raw = _read_import_file(args.file)
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        raise UsageError(f"{args.file} is not valid JSON") from None
+    if not isinstance(payload, dict):
+        raise UsageError(f"{args.file} must hold a JSON object with import_format_version and records")
+
+    def action(base: str, token: str) -> None:
+        raw = _call(base, "POST", "/api/v1/cases/import", token=token, payload=payload)
+        summary = _json_object(raw)
+        if args.json:
+            _print_json(raw)
+        else:
+            _print_import_summary(summary)
+        # Duplicates are expected on a repeated import. Anything that was not stored is a failed command.
+        not_stored = summary["rejected"] + summary["conflict"] + summary["failed"]
+        if not_stored:
+            raise RequestFailed(f"{not_stored} record(s) were not stored; see the results above")
+
+    _with_session(base_url, args, action)
+
+
 def _add_auth_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--username", help="Account name. Defaults to the SAFE_USERNAME environment variable")
     parser.add_argument("--json", action="store_true", help="Print the API response body as JSON")
@@ -286,7 +345,7 @@ def build_parser() -> argparse.ArgumentParser:
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("health", help="Check whether the API is ready")
 
-    case = subcommands.add_parser("case", help="Create, list and show your cases")
+    case = subcommands.add_parser("case", help="Create, import, list and show your cases")
     case_commands = case.add_subparsers(dest="case_command", required=True)
 
     create = case_commands.add_parser("create", help="Submit a new case")
@@ -310,6 +369,11 @@ def build_parser() -> argparse.ArgumentParser:
     show.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     _add_auth_options(show)
     show.set_defaults(handler=_case_show)
+
+    imported = case_commands.add_parser("import", help="Import case records from a JSON file in the project format")
+    imported.add_argument("file", metavar="FILE", help='JSON file: {"import_format_version": 1, "records": [...]}')
+    _add_auth_options(imported)
+    imported.set_defaults(handler=_case_import)
     return parser
 
 

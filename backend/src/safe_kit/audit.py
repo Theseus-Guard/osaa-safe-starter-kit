@@ -34,6 +34,8 @@ CASE_ASSIGNMENT_ADD = "case.assignment_added"
 CASE_ASSIGNMENT_REMOVE = "case.assignment_removed"
 CASE_REVIEW = "case.review_recorded"
 CASE_DEADLINE_UPDATE = "case.deadline_updated"
+# Written against the import record (target_type "case_import"), not the case, so it stays out of the case history.
+CASE_IMPORT = "case.import"
 SYSTEM_TIMEZONE_SET = "system.timezone_set"
 SYSTEM_TIMEZONE_CHANGED = "system.timezone_changed"
 

@@ -249,43 +249,49 @@ def _is_assigned(conn, case_id: str, user_id: str) -> bool:
 
 
 def create_case(title: str, awareness_time: datetime, created_by: str) -> Case:
-    """Create the case, its deadline tasks, and the audit row in one transaction.
+    """Create the case, its deadline tasks, and the audit row in one transaction."""
+    with connect() as conn:
+        return insert_case(conn, title, awareness_time, created_by)
 
+
+def insert_case(conn, title: str, awareness_time: datetime, created_by: str) -> Case:
+    """Write the case, its deadline tasks, and its audit row on the caller's connection.
+
+    The caller owns the transaction, so it can add its own rows (for example an import record) to the same commit.
     The calendar timezone is the system timezone in effect inside this transaction. It is stored on the case,
     so a later change of the system timezone does not move deadlines that were already computed.
     """
-    with connect() as conn:
-        setting = system_timezone.read_current(conn)
-        if setting is None:
-            raise TimezoneNotConfigured()
-        calendar_timezone = setting.timezone
-        tasks = deadline_tasks_for(awareness_time, calendar_for(calendar_timezone))
-        sequence = conn.execute("SELECT nextval('case_reference_seq')").fetchone()[0]
-        reference = f"SAFE-{datetime.now(UTC).year}-{sequence:06d}"
-        row = conn.execute(
-            f"""
-            INSERT INTO cases (reference, title, awareness_time, created_by, status, calendar_version, calendar_timezone)
-            VALUES (%s, %s, %s, %s, 'open', %s, %s)
-            RETURNING {_CASE_COLUMNS}
-            """,
-            (reference, title, awareness_time, created_by, CALENDAR_VERSION, calendar_timezone),
-        ).fetchone()
-        case = _to_case(row)
-        stored_tasks = []
-        for task in tasks:
-            task_id = conn.execute(
-                "INSERT INTO deadline_tasks (case_id, kind, due_at, status) VALUES (%s, %s, %s, %s) RETURNING id::text",
-                (case.id, task.kind, task.due_at, task.status),
-            ).fetchone()[0]
-            stored_tasks.append(replace(task, id=task_id))
-        audit.record(
-            conn,
-            audit.CASE_CREATE,
-            "case",
-            case.id,
-            actor_id=created_by,
-            details={"calendar_version": CALENDAR_VERSION, "calendar_timezone": calendar_timezone},
-        )
+    setting = system_timezone.read_current(conn)
+    if setting is None:
+        raise TimezoneNotConfigured()
+    calendar_timezone = setting.timezone
+    tasks = deadline_tasks_for(awareness_time, calendar_for(calendar_timezone))
+    sequence = conn.execute("SELECT nextval('case_reference_seq')").fetchone()[0]
+    reference = f"SAFE-{datetime.now(UTC).year}-{sequence:06d}"
+    row = conn.execute(
+        f"""
+        INSERT INTO cases (reference, title, awareness_time, created_by, status, calendar_version, calendar_timezone)
+        VALUES (%s, %s, %s, %s, 'open', %s, %s)
+        RETURNING {_CASE_COLUMNS}
+        """,
+        (reference, title, awareness_time, created_by, CALENDAR_VERSION, calendar_timezone),
+    ).fetchone()
+    case = _to_case(row)
+    stored_tasks = []
+    for task in tasks:
+        task_id = conn.execute(
+            "INSERT INTO deadline_tasks (case_id, kind, due_at, status) VALUES (%s, %s, %s, %s) RETURNING id::text",
+            (case.id, task.kind, task.due_at, task.status),
+        ).fetchone()[0]
+        stored_tasks.append(replace(task, id=task_id))
+    audit.record(
+        conn,
+        audit.CASE_CREATE,
+        "case",
+        case.id,
+        actor_id=created_by,
+        details={"calendar_version": CALENDAR_VERSION, "calendar_timezone": calendar_timezone},
+    )
     return replace(case, deadlines=stored_tasks)
 
 

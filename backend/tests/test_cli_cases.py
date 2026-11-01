@@ -396,3 +396,131 @@ def test_stdout_and_stderr_never_contain_the_token_or_the_password(api, capsys, 
     for secret in (ACCESS, REFRESH, PASSWORD):
         assert secret not in out
         assert secret not in err
+
+
+# --- import ---
+
+IMPORT_PATH = "/api/v1/cases/import"
+IMPORT_RECORD = {"case_id": "3f2b8c1e-6a4d-4e9b-8f1a-2c7d9e0b5a11", "record_schema_version": "0.1.0"}
+IMPORT_FILE = {"import_format_version": 1, "records": [IMPORT_RECORD]}
+
+
+def import_summary(**counts) -> dict:
+    base = {"imported": 0, "duplicate": 0, "conflict": 0, "rejected": 0, "failed": 0, "results": []}
+    base.update(counts)
+    return base
+
+
+def write_file(tmp_path, content: bytes, name: str = "import.json") -> str:
+    path = tmp_path / name
+    path.write_bytes(content)
+    return str(path)
+
+
+def test_import_sends_the_file_and_prints_the_summary(api, capsys, tmp_path):
+    summary = import_summary(
+        imported=1,
+        duplicate=1,
+        results=[
+            {"index": 0, "status": "imported", "source_case_id": None, "case_id": CASE_ID,
+             "reference": "SAFE-2026-000001", "errors": []},
+            {"index": 1, "status": "duplicate", "source_case_id": None, "case_id": CASE_ID,
+             "reference": "SAFE-2026-000002", "errors": []},
+        ],
+    )
+    api.route("POST", IMPORT_PATH, body=summary)
+    path = write_file(tmp_path, json.dumps(IMPORT_FILE).encode("utf-8"))
+
+    code, out, err = run(capsys, "case", "import", path, "--username", "alice")
+
+    assert code == 0
+    assert "Import finished: 1 imported, 1 duplicate, 0 conflict, 0 rejected, 0 failed." in out
+    assert "records[0]: imported as SAFE-2026-000001" in out
+    assert "records[1]: duplicate of SAFE-2026-000002, nothing written" in out
+    assert api.paths() == [("POST", "/api/v1/auth/token"), ("POST", IMPORT_PATH), ("POST", "/api/v1/auth/logout")]
+    assert api.calls[1]["headers"]["Authorization"] == f"Bearer {ACCESS}"
+    assert api.calls[1]["json"] == IMPORT_FILE
+    assert err == ""
+
+
+def test_import_json_prints_the_api_body_exactly(api, capsys, tmp_path):
+    summary = import_summary(imported=1, results=[{"index": 0, "status": "imported", "source_case_id": None,
+                                                    "case_id": CASE_ID, "reference": "SAFE-2026-000001", "errors": []}])
+    api.route("POST", IMPORT_PATH, body=summary)
+    path = write_file(tmp_path, json.dumps(IMPORT_FILE).encode("utf-8"))
+
+    code, out, err = run(capsys, "case", "import", path, "--username", "alice", "--json")
+
+    assert code == 0
+    assert out == compact(summary).decode("utf-8") + "\n"
+
+
+def test_import_exits_1_and_names_the_rejected_record(api, capsys, tmp_path):
+    summary = import_summary(
+        imported=1,
+        rejected=1,
+        results=[
+            {"index": 0, "status": "imported", "source_case_id": None, "case_id": CASE_ID,
+             "reference": "SAFE-2026-000001", "errors": []},
+            {"index": 1, "status": "rejected", "source_case_id": None, "case_id": None, "reference": None,
+             "errors": ["/record_schema_version: '0.2.0' was expected"]},
+        ],
+    )
+    api.route("POST", IMPORT_PATH, body=summary)
+    path = write_file(tmp_path, json.dumps(IMPORT_FILE).encode("utf-8"))
+
+    code, out, err = run(capsys, "case", "import", path, "--username", "alice")
+
+    assert code == 1
+    assert "records[1]: rejected, nothing written" in out
+    assert "/record_schema_version: '0.2.0' was expected" in out
+    assert "1 record(s) were not stored" in err
+    # The session still ends when the command fails.
+    assert api.paths()[-1] == ("POST", "/api/v1/auth/logout")
+
+
+def test_import_with_only_duplicates_exits_0(api, capsys, tmp_path):
+    api.route("POST", IMPORT_PATH, body=import_summary(duplicate=1))
+    path = write_file(tmp_path, json.dumps(IMPORT_FILE).encode("utf-8"))
+
+    code, out, err = run(capsys, "case", "import", path, "--username", "alice")
+
+    assert code == 0
+    assert "1 duplicate" in out
+
+
+def test_import_with_invalid_json_is_a_usage_error_without_a_request(api, capsys, tmp_path):
+    path = write_file(tmp_path, b"{not json")
+
+    code, out, err = run(capsys, "case", "import", path, "--username", "alice")
+
+    assert code == 2
+    assert api.calls == []
+    assert "not valid JSON" in err
+
+
+def test_import_file_must_be_a_json_object(api, capsys, tmp_path):
+    path = write_file(tmp_path, b"[]")
+
+    code, out, err = run(capsys, "case", "import", path, "--username", "alice")
+
+    assert code == 2
+    assert api.calls == []
+
+
+def test_import_missing_file_is_a_usage_error(api, capsys, tmp_path):
+    code, out, err = run(capsys, "case", "import", str(tmp_path / "missing.json"), "--username", "alice")
+
+    assert code == 2
+    assert api.calls == []
+    assert "cannot read" in err
+
+
+def test_import_file_over_the_limit_is_refused_before_any_request(api, capsys, tmp_path):
+    path = write_file(tmp_path, b" " * (cli.MAX_IMPORT_FILE_BYTES + 1))
+
+    code, out, err = run(capsys, "case", "import", path, "--username", "alice")
+
+    assert code == 2
+    assert api.calls == []
+    assert "larger than" in err
