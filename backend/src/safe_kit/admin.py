@@ -10,7 +10,7 @@ import sys
 
 import psycopg
 
-from safe_kit.security import MIN_PASSWORD_LENGTH
+from safe_kit.security import MIN_PASSWORD_LENGTH, PASSWORD_HISTORY_DEPTH
 from safe_kit.users import (
     ROLES,
     AdminAlreadyExists,
@@ -19,6 +19,7 @@ from safe_kit.users import (
     InvalidUsername,
     admin_exists,
     bootstrap_admin,
+    PasswordReused,
     find_user,
     normalize_email,
     reset_password,
@@ -126,7 +127,14 @@ def main(argv: list[str] | None = None) -> int:
     if user is None:
         print(f"user not found: {args.username}", file=sys.stderr)
         return 1
-    reset_password(user.id, password, source="cli")
+    try:
+        reset_password(user.id, password, source="cli")
+    except PasswordReused:
+        print(
+            f"password was used recently: it matches one of this account's last {PASSWORD_HISTORY_DEPTH} passwords",
+            file=sys.stderr,
+        )
+        return 1
     print(f"password reset for {args.username}; all sessions ended; password change required at next login")
     return 0
 

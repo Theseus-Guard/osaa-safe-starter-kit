@@ -340,6 +340,7 @@ def full_row(email: str) -> tuple:
     return (
         ALICE_ID, "alice", "triager", True, "unused", datetime(1970, 1, 1, tzinfo=UTC), False,
         datetime(2026, 11, 1, tzinfo=UTC), False, "Alice", None, "Analyst", email,
+        datetime.now(UTC),
     )
 
 

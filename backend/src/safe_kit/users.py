@@ -1,9 +1,10 @@
 """User records, lookups, and administrative changes."""
 
+import dataclasses
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 
 import psycopg
@@ -12,7 +13,12 @@ from psycopg import sql
 
 from safe_kit import audit
 from safe_kit.db import connect
-from safe_kit.security import hash_password
+from safe_kit.security import (
+    PASSWORD_HISTORY_DEPTH,
+    hash_password,
+    is_recent_password,
+    password_expired,
+)
 
 ROLES = frozenset(
     {
@@ -62,6 +68,10 @@ class InvalidProfile(Exception):
 
 class EmailAlreadyInUse(Exception):
     pass
+
+
+class PasswordReused(Exception):
+    """The new password equals one of the account's last PASSWORD_HISTORY_DEPTH passwords."""
 
 
 def normalize_email(value: str | None) -> str:
@@ -115,8 +125,10 @@ class User:
     is_active: bool
     password_hash: str
     sessions_valid_after: datetime
+    # True when the account must change its password: a forced change, or a password older than PASSWORD_MAX_AGE.
     must_change_password: bool
     created_at: datetime
+    password_changed_at: datetime = dataclasses.field(default_factory=lambda: datetime.now(UTC))
     # The first admin created by the bootstrap. It can never be disabled, deleted, or demoted.
     is_protected: bool = False
     first_name: str | None = None
@@ -128,7 +140,7 @@ class User:
 
 _COLUMNS = (
     "id::text, username, role, is_active, password_hash, sessions_valid_after, must_change_password, created_at, "
-    "is_protected, first_name, last_name, title, email"
+    "is_protected, first_name, last_name, title, email, password_changed_at"
 )
 
 
@@ -140,8 +152,10 @@ def _to_user(row: tuple) -> User:
         is_active=row[3],
         password_hash=row[4],
         sessions_valid_after=row[5],
-        must_change_password=row[6],
+        # An expired password uses the same forced-change state as a temporary one.
+        must_change_password=row[6] or password_expired(row[13]),
         created_at=row[7],
+        password_changed_at=row[13],
         is_protected=row[8],
         first_name=row[9],
         last_name=row[10],
@@ -150,16 +164,24 @@ def _to_user(row: tuple) -> User:
     )
 
 
+def _record_password(conn, user_id: str, password_hash: str) -> None:
+    """Keep the hash of a password that was just set. Called in the same transaction as the write that sets it."""
+    conn.execute("INSERT INTO password_history (user_id, password_hash) VALUES (%s, %s)", (user_id, password_hash))
+
+
 def create_user(username: str, password: str, role: str, actor_id: str | None = None) -> str:
     """Create an account with a temporary password. The user must change it at first login."""
     validate_username(username)
     if role not in ROLES:
         raise ValueError(f"unknown role: {role}")
+    password_hash = hash_password(password)
     with connect() as conn:
         row = conn.execute(
-            "INSERT INTO users (username, password_hash, role) VALUES (%s, %s, %s) RETURNING id::text",
-            (username, hash_password(password), role),
+            "INSERT INTO users (username, password_hash, role, password_changed_at) "
+            "VALUES (%s, %s, %s, now()) RETURNING id::text",
+            (username, password_hash, role),
         ).fetchone()
+        _record_password(conn, row[0], password_hash)
         audit.record(conn, audit.USER_CREATE, "user", row[0], actor_id=actor_id, details={"role": role})
     return row[0]
 
@@ -186,14 +208,15 @@ def create_user_with_profile(
     texts = normalize_profile(
         {"first_name": first_name, "last_name": last_name, "title": title}
     )
+    password_hash = hash_password(password)
     with connect() as conn:
         try:
             row = conn.execute(
-                "INSERT INTO users (username, password_hash, role, email, first_name, last_name, title) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id::text",
+                "INSERT INTO users (username, password_hash, role, email, first_name, last_name, title, "
+                "password_changed_at) VALUES (%s, %s, %s, %s, %s, %s, %s, now()) RETURNING id::text",
                 (
                     username,
-                    hash_password(password),
+                    password_hash,
                     role,
                     email_value,
                     texts["first_name"],
@@ -205,6 +228,7 @@ def create_user_with_profile(
             if error.diag.constraint_name == EMAIL_INDEX:
                 raise EmailAlreadyInUse from error
             raise
+        _record_password(conn, row[0], password_hash)
         audit.record(conn, audit.USER_CREATE, "user", row[0], actor_id=actor_id, details={"role": role})
     return row[0]
 
@@ -229,20 +253,22 @@ def bootstrap_admin(username: str, password: str, email: str | None) -> str:
     bootstraps cannot both succeed. Raises InvalidEmail before anything is written if the email is not valid."""
     validate_username(username)
     email_value = normalize_email(email)
+    password_hash = hash_password(password)
     with connect() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (BOOTSTRAP_LOCK_KEY,))
         if conn.execute("SELECT EXISTS (SELECT 1 FROM users WHERE role = 'admin' AND NOT is_deleted)").fetchone()[0]:
             raise AdminAlreadyExists
         try:
             row = conn.execute(
-                "INSERT INTO users (username, password_hash, role, is_protected, email) "
-                "VALUES (%s, %s, 'admin', true, %s) RETURNING id::text",
-                (username, hash_password(password), email_value),
+                "INSERT INTO users (username, password_hash, role, is_protected, email, password_changed_at) "
+                "VALUES (%s, %s, 'admin', true, %s, now()) RETURNING id::text",
+                (username, password_hash, email_value),
             ).fetchone()
         except psycopg.errors.UniqueViolation as error:
             if error.diag.constraint_name == EMAIL_INDEX:
                 raise EmailAlreadyInUse from error
             raise
+        _record_password(conn, row[0], password_hash)
         # No actor: the first admin is created by the operator at the command line.
         audit.record(
             conn, audit.USER_CREATE, "user", row[0], details={"role": "admin", "bootstrap": True}
@@ -267,19 +293,36 @@ def _set_password(
 ) -> bool:
     """Replace the password and end every session of the user. Returns False if the user does not exist.
 
+    Raises PasswordReused, before anything is written, if the new password is one of the account's last
+    PASSWORD_HISTORY_DEPTH passwords. Temporary passwords are in the history too.
     Access tokens issued before this moment are rejected by the sessions_valid_after check.
     """
     with connect() as conn:
-        result = conn.execute(
+        # Locks the account row, so two password changes for the same user run one after the other.
+        account = conn.execute(
+            "SELECT 1 FROM users WHERE id = %s AND NOT is_deleted FOR UPDATE",
+            (user_id,),
+        ).fetchone()
+        if account is None:
+            return False
+        recent = conn.execute(
+            "SELECT password_hash FROM password_history WHERE user_id = %s AND NOT is_deleted "
+            "ORDER BY created_at DESC LIMIT %s",
+            (user_id, PASSWORD_HISTORY_DEPTH),
+        ).fetchall()
+        if is_recent_password(new_password, [row[0] for row in recent]):
+            raise PasswordReused
+        password_hash = hash_password(new_password)
+        conn.execute(
             """
             UPDATE users
-            SET password_hash = %s, must_change_password = %s, sessions_valid_after = now()
-            WHERE id = %s AND NOT is_deleted
+            SET password_hash = %s, must_change_password = %s, password_changed_at = now(),
+                sessions_valid_after = now()
+            WHERE id = %s
             """,
-            (hash_password(new_password), must_change, user_id),
+            (password_hash, must_change, user_id),
         )
-        if result.rowcount == 0:
-            return False
+        _record_password(conn, user_id, password_hash)
         _end_sessions(conn, user_id)
         audit.record(conn, action, "user", user_id, actor_id=actor_id, details=details)
     return True

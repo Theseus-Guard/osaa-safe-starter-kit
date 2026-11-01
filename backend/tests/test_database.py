@@ -14,7 +14,7 @@ from pathlib import Path
 import psycopg
 import pytest
 
-from safe_kit import audit, cases, migrate, outbox, users
+from safe_kit import audit, cases, migrate, outbox, security, users
 from safe_kit.cases import CaseScope
 from safe_kit.db import connect
 
@@ -138,7 +138,7 @@ def test_failed_change_leaves_no_audit_row():
 
 def test_password_reset_is_audited_with_the_operator_source():
     target = new_user("reporter")
-    assert users.reset_password(target, "temporary passphrase", source="cli") is True
+    assert users.reset_password(target, "another temporary passphrase", source="cli") is True
     rows = audit_rows(target, audit.USER_PASSWORD_RESET)
     assert rows == [(None, {"source": "cli"})]
 
@@ -275,3 +275,86 @@ def test_soft_deleted_case_is_not_found():
     with connect() as conn:
         conn.execute("UPDATE cases SET is_deleted = true, deleted_at = now() WHERE id = %s", (case.id,))
     assert cases.find_visible_case(case.id, CaseScope(owner, read_own=True)) is None
+
+
+def password_history_hashes(user_id: str) -> list[str]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT password_hash FROM password_history WHERE user_id = %s AND NOT is_deleted ORDER BY created_at",
+            (user_id,),
+        ).fetchall()
+    return [row[0] for row in rows]
+
+
+def password_changed_at(user_id: str) -> datetime:
+    with connect() as conn:
+        return conn.execute("SELECT password_changed_at FROM users WHERE id = %s", (user_id,)).fetchone()[0]
+
+
+def test_every_password_write_is_recorded_as_an_argon2_hash():
+    target = new_user("reporter")
+    first = password_history_hashes(target)
+    assert len(first) == 1
+    assert security.verify_password(first[0], "temporary passphrase")
+
+    changed_before = password_changed_at(target)
+    assert users.change_own_password(target, "a new passphrase here") is True
+    assert password_changed_at(target) > changed_before
+    assert users.reset_password(target, "another temporary passphrase") is True
+
+    hashes = password_history_hashes(target)
+    assert len(hashes) == 3
+    assert all(stored.startswith("$argon2id$") for stored in hashes)
+    assert "a new passphrase here" not in hashes
+
+
+def test_profile_account_creation_records_the_temporary_password():
+    username = "t-" + uuid.uuid4().hex[:12]
+    user_id = users.create_user_with_profile(username, "temporary passphrase", "reporter", f"{username}@example.com")
+    assert len(password_history_hashes(user_id)) == 1
+
+
+def test_temporary_password_cannot_be_chosen_as_the_next_password():
+    target = new_user("reporter")
+    with pytest.raises(users.PasswordReused):
+        users.change_own_password(target, "temporary passphrase")
+    assert len(password_history_hashes(target)) == 1
+
+
+def test_last_three_passwords_are_refused_and_the_fourth_oldest_is_allowed():
+    target = new_user("reporter")
+    passwords = ["first passphrase here", "second passphrase here", "third passphrase here"]
+    for new in passwords:
+        assert users.change_own_password(target, new) is True
+    before = len(password_history_hashes(target))
+    assert before == 4
+
+    for recent in passwords:
+        with pytest.raises(users.PasswordReused):
+            users.change_own_password(target, recent)
+    with pytest.raises(users.PasswordReused):
+        users.reset_password(target, "third passphrase here")
+    # A refused change writes nothing: no history row, no new timestamp.
+    assert len(password_history_hashes(target)) == before
+
+    # History, oldest first: temporary, first, second, third. The temporary password is now the fourth-oldest.
+    assert users.reset_password(target, "temporary passphrase") is True
+
+
+def test_expired_password_forces_a_change_until_the_user_changes_it():
+    target = new_user("reporter")
+    # A new account starts in the forced-change state. A self-service change clears it.
+    assert users.find_user_by_id(target).must_change_password is True
+    assert users.change_own_password(target, "a new passphrase here") is True
+    with connect() as conn:
+        conn.execute("UPDATE users SET password_changed_at = now() - interval '179 days' WHERE id = %s", (target,))
+    assert users.find_user_by_id(target).must_change_password is False
+
+    with connect() as conn:
+        conn.execute("UPDATE users SET password_changed_at = now() - interval '181 days' WHERE id = %s", (target,))
+    assert users.find_user_by_id(target).must_change_password is True
+
+    assert users.change_own_password(target, "yet another passphrase") is True
+    user = users.find_user_by_id(target)
+    assert user.must_change_password is False
+    assert user.password_changed_at > datetime.now(UTC) - timedelta(days=1)

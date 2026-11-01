@@ -24,6 +24,19 @@ def test_missing_hash_never_verifies():
     assert not security.verify_password(None, "anything")
 
 
+def test_password_expires_only_after_180_days():
+    changed = datetime(2026, 1, 1, tzinfo=UTC)
+    assert security.password_expired(changed, now=changed + timedelta(days=180)) is False
+    assert security.password_expired(changed, now=changed + timedelta(days=180, seconds=1)) is True
+
+
+def test_recent_password_is_matched_through_salted_hashes():
+    recent = [security.hash_password("first passphrase here"), security.hash_password("second passphrase here")]
+    assert security.is_recent_password("second passphrase here", recent)
+    assert not security.is_recent_password("third passphrase here", recent)
+    assert not security.is_recent_password("anything at all", [])
+
+
 def test_access_token_round_trip_has_unique_jti(signing_key):
     first, _ = security.issue_access_token("user-1", "alice", "triager")
     second, _ = security.issue_access_token("user-1", "alice", "triager")

@@ -89,6 +89,7 @@ from safe_kit.users import (
     InvalidEmail,
     InvalidProfile,
     InvalidUsername,
+    PasswordReused,
     UpdateOutcome,
     User,
     admin_exists,
@@ -258,6 +259,8 @@ def _issue_tokens(user: User, refresh_token: str) -> TokenResponse:
 
 
 PROTECTED_DETAIL = "the protected admin account cannot be disabled, deleted, or demoted"
+# Detail code of the 422 when a new password matches one of the account's last PASSWORD_HISTORY_DEPTH passwords.
+PASSWORD_REUSED_DETAIL = "password_reused"
 
 
 def _summary(user: User) -> UserSummary:
@@ -360,7 +363,10 @@ def change_password(
     # The current password is required, so a stolen access token alone cannot change it.
     if not verify_password(user.password_hash, body.current_password):
         raise HTTPException(status_code=401, detail="current password is incorrect")
-    change_own_password(user.id, body.new_password)
+    try:
+        change_own_password(user.id, body.new_password)
+    except PasswordReused:
+        raise HTTPException(status_code=422, detail=PASSWORD_REUSED_DETAIL)
     # All sessions end, including this one. The client must log in again with the new password.
     return Response(status_code=204)
 
@@ -504,7 +510,11 @@ def admin_reset_password(
 ) -> Response:
     # Self-service reset is intentionally not offered. The admin sets a temporary password
     # and the user must replace it at next login.
-    if not reset_password(str(user_id), body.temporary_password, actor_id=actor.id):
+    try:
+        found = reset_password(str(user_id), body.temporary_password, actor_id=actor.id)
+    except PasswordReused:
+        raise HTTPException(status_code=422, detail=PASSWORD_REUSED_DETAIL)
+    if not found:
         raise HTTPException(status_code=404, detail="user not found")
     return Response(status_code=204)
 

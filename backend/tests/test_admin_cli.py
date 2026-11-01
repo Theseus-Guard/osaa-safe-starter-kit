@@ -1,11 +1,12 @@
 import io
 import sys
+from types import SimpleNamespace
 
 import psycopg
 import pytest
 
 from safe_kit import admin
-from safe_kit.users import AdminAlreadyExists
+from safe_kit.users import AdminAlreadyExists, PasswordReused
 
 PASSWORD = "bootstrap passphrase"
 EMAIL = "first.admin@example.com"
@@ -15,7 +16,7 @@ EMAIL = "first.admin@example.com"
 def calls(monkeypatch):
     """Replace database calls with recorders. Tests set the outcome they need."""
     recorded = {"bootstrap": [], "reset": []}
-    state = {"admin_exists": False, "bootstrap_error": None}
+    state = {"admin_exists": False, "bootstrap_error": None, "reset_error": None}
 
     monkeypatch.setattr(admin, "admin_exists", lambda: state["admin_exists"])
 
@@ -27,7 +28,14 @@ def calls(monkeypatch):
 
     monkeypatch.setattr(admin, "bootstrap_admin", fake_bootstrap)
     monkeypatch.setattr(admin, "find_user", lambda username: None)
-    monkeypatch.setattr(admin, "reset_password", lambda *args, **kwargs: recorded["reset"].append(args))
+
+    def fake_reset(*args, **kwargs):
+        recorded["reset"].append(args)
+        if state["reset_error"]:
+            raise state["reset_error"]
+        return True
+
+    monkeypatch.setattr(admin, "reset_password", fake_reset)
     return recorded, state
 
 
@@ -81,3 +89,21 @@ def test_duplicate_username_during_bootstrap_is_reported(calls, monkeypatch, cap
     feed_password(monkeypatch, PASSWORD)
     assert admin.main(["create-user", "--username", "root-op", "--role", "admin"]) == 1
     assert "username already exists" in capsys.readouterr().err
+
+
+def test_reset_password_resets_the_account(calls, monkeypatch, capsys):
+    recorded, _ = calls
+    monkeypatch.setattr(admin, "find_user", lambda username: SimpleNamespace(id="00000000-0000-0000-0000-000000000002"))
+    feed_password(monkeypatch, PASSWORD)
+    assert admin.main(["reset-password", "--username", "alice"]) == 0
+    assert recorded["reset"] == [("00000000-0000-0000-0000-000000000002", PASSWORD)]
+    assert "password change required" in capsys.readouterr().out
+
+
+def test_reset_password_refuses_a_recent_password(calls, monkeypatch, capsys):
+    recorded, state = calls
+    state["reset_error"] = PasswordReused()
+    monkeypatch.setattr(admin, "find_user", lambda username: SimpleNamespace(id="00000000-0000-0000-0000-000000000002"))
+    feed_password(monkeypatch, PASSWORD)
+    assert admin.main(["reset-password", "--username", "alice"]) == 1
+    assert "password was used recently" in capsys.readouterr().err

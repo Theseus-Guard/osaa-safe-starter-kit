@@ -1,5 +1,6 @@
 import time
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
@@ -7,10 +8,15 @@ from fastapi.testclient import TestClient
 
 from safe_kit import api, auth
 from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS
-from safe_kit.security import hash_password
+from safe_kit.security import (
+    PASSWORD_HISTORY_DEPTH,
+    hash_password,
+    is_recent_password,
+    password_expired,
+)
 from safe_kit.sessions import InvalidRefreshToken
 from safe_kit.system_timezone import TimezoneSetting
-from safe_kit.users import User
+from safe_kit.users import PasswordReused, User
 
 PASSWORD = "correct horse battery"
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -24,6 +30,7 @@ class FakeStore:
 
     def __init__(self):
         self.users = {}
+        self.history = {}  # user id -> hash of every password set, oldest first
         self.sessions = {}  # raw refresh token -> {"user_id", "family", "revoked"}
         self.revoked_jtis = set()
         self.buckets = {}
@@ -32,26 +39,34 @@ class FakeStore:
         self._counter = 0
 
     def add_user(self, user_id, username, role, *, password=PASSWORD, active=True, must_change=False):
+        password_hash = hash_password(password)
         self.users[user_id] = User(
             id=user_id,
             username=username,
             role=role,
             is_active=active,
-            password_hash=hash_password(password),
+            password_hash=password_hash,
             sessions_valid_after=EPOCH,
             must_change_password=must_change,
             created_at=EPOCH,
         )
+        self.history.setdefault(user_id, []).append(password_hash)
 
     def _replace(self, user_id, **changes):
         self.users[user_id] = User(**{**self.users[user_id].__dict__, **changes})
 
     # --- users ---
+    def _effective(self, user):
+        # Mirrors users._to_user: an expired password counts as a forced change.
+        if user is None or user.must_change_password or not password_expired(user.password_changed_at):
+            return user
+        return replace(user, must_change_password=True)
+
     def find_user(self, username):
-        return next((u for u in self.users.values() if u.username == username), None)
+        return self._effective(next((u for u in self.users.values() if u.username == username), None))
 
     def find_user_by_id(self, user_id):
-        return self.users.get(user_id)
+        return self._effective(self.users.get(user_id))
 
     def create_user_with_profile(self, username, password, role, email=None, first_name=None, last_name=None, title=None, actor_id=None):
         if self.find_user(username):
@@ -63,12 +78,18 @@ class FakeStore:
     def _set_password(self, user_id, new_password, must_change):
         if user_id not in self.users:
             return False
+        if is_recent_password(new_password, self.history[user_id][-PASSWORD_HISTORY_DEPTH:]):
+            raise PasswordReused
+        new_hash = hash_password(new_password)
+        now = datetime.now(UTC)
         self._replace(
             user_id,
-            password_hash=hash_password(new_password),
+            password_hash=new_hash,
             must_change_password=must_change,
-            sessions_valid_after=datetime.now(UTC),
+            password_changed_at=now,
+            sessions_valid_after=now,
         )
+        self.history[user_id].append(new_hash)
         for session in self.sessions.values():
             if session["user_id"] == user_id:
                 session["revoked"] = True
@@ -445,6 +466,103 @@ def test_reset_for_unknown_user_returns_404(client):
         json={"temporary_password": "temporary passphrase"},
     )
     assert response.status_code == 404
+
+
+def admin_headers(client):
+    return bearer_header(login_tokens(client, "carol")["access_token"])
+
+
+def create_dave(client, temporary="temporary passphrase"):
+    created = client.post(
+        "/api/v1/users",
+        headers=admin_headers(client),
+        json={"username": "dave", "role": "reviewer", "temporary_password": temporary},
+    )
+    assert created.status_code == 201
+
+
+def change_password(client, username, current, new):
+    token = login_tokens(client, username, current)["access_token"]
+    return client.post(
+        "/api/v1/auth/password",
+        headers=bearer_header(token),
+        json={"current_password": current, "new_password": new},
+    )
+
+
+def expire_password(store, user_id):
+    store._replace(user_id, password_changed_at=datetime.now(UTC) - timedelta(days=181))
+
+
+def test_temporary_password_cannot_be_set_as_the_new_password(client):
+    create_dave(client)
+    response = change_password(client, "dave", "temporary passphrase", "temporary passphrase")
+    assert response.status_code == 422
+    assert response.json() == {"detail": "password_reused"}
+
+
+def test_last_three_passwords_cannot_be_reused_but_the_fourth_oldest_can(client):
+    create_dave(client)
+    passwords = ["first passphrase here", "second passphrase here", "third passphrase here"]
+    current = "temporary passphrase"
+    for new in passwords:
+        assert change_password(client, "dave", current, new).status_code == 204
+        # Tokens are whole-second; wait so the next login is not rejected as issued before the change.
+        time.sleep(1.1)
+        current = new
+
+    # History, oldest first: temporary, first, second, third. The last three are first, second and third.
+    for recent in passwords:
+        response = change_password(client, "dave", current, recent)
+        assert response.status_code == 422
+        assert response.json() == {"detail": "password_reused"}
+
+    # The temporary password is now the fourth-oldest entry, outside the window.
+    assert change_password(client, "dave", current, "temporary passphrase").status_code == 204
+
+
+def test_admin_reset_cannot_reuse_the_current_password(client):
+    response = client.post(
+        f"/api/v1/users/{ALICE}/password",
+        headers=admin_headers(client),
+        json={"temporary_password": PASSWORD},
+    )
+    assert response.status_code == 422
+    assert response.json() == {"detail": "password_reused"}
+
+
+def test_expired_password_forces_a_change_at_login(client, store):
+    expire_password(store, ALICE)
+    body = login(client, "alice").json()
+    assert body["password_change_required"] is True
+    headers = bearer_header(body["access_token"])
+
+    # Restricted like a must-change account: a regular endpoint is refused, while /me and the change answer.
+    assert client.get("/api/v1/system/timezone", headers=headers).status_code == 403
+    assert client.get("/api/v1/auth/me", headers=headers).json()["password_change_required"] is True
+    changed = client.post(
+        "/api/v1/auth/password",
+        headers=headers,
+        json={"current_password": PASSWORD, "new_password": "my own passphrase"},
+    )
+    assert changed.status_code == 204
+
+    # The change clears the expiry: the new password was set now.
+    time.sleep(1.1)
+    relogin = login_tokens(client, "alice", "my own passphrase")
+    assert relogin["password_change_required"] is False
+    assert client.get("/api/v1/system/timezone", headers=bearer_header(relogin["access_token"])).status_code == 200
+
+
+def test_expired_account_can_still_log_out(client, store):
+    expire_password(store, ALICE)
+    tokens = login_tokens(client, "alice")
+    response = client.post(
+        "/api/v1/auth/logout",
+        headers=bearer_header(tokens["access_token"]),
+        json={"refresh_token": tokens["refresh_token"]},
+    )
+    assert response.status_code == 204
 
 
 def test_short_passwords_are_rejected(client):
