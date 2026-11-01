@@ -45,6 +45,14 @@ Every release entry states the **SAFE compatibility baseline**: the SAFE version
 - CLI case updates: `case close`, `case reopen`, `case assign`, `case unassign`, `case review record`, `case classification set`, `case impact set`, `case legal-duty add` and `update`, `case awareness add`. Each command logs in with a password prompt (or stdin), keeps the tokens in memory for that command, and ends the session afterwards. Nothing is written to disk.
 - The inactivity watch signs out after 60 minutes without an API request and warns five minutes before. Mouse and keyboard use do not count as activity.
 - The admin role cannot hold case or reporter contact permissions. `PUT /api/v1/rbac/roles/admin/permissions` answers `409` for such a set.
+- No role can be granted `reporter_contact:read` through the role matrix. The matrix answers `409` with `reporter_contact_not_grantable`.
+- Reporter contact can be read while the case is open, or within 72 hours after it was closed. Later reads are refused with `409` `reporter_contact_window_closed`, and the refused read is not audited.
+- Assignees are chosen by the `cases:assignable` permission, granted to investigator and reviewer by migration 0026. `GET /api/v1/cases/{case_id}/assignable-users` lists them for users with `cases:assign`.
+- Classification version conflicts answer `409` with `classification_version_conflict` and the current version, so clients do not parse text.
+- SAFE deadlines start from the earliest operator awareness event, or from the case awareness time when there is none.
+- Classification has an explicit `none_applies` trigger (migration 0027). It cannot be combined with other triggers.
+- Choosing the internal incident option marks the external notice tasks as not applicable, with the rationale recorded. Due dates do not change, and turning the option off restores the previous statuses.
+- Linked cases: two cases can be linked as a record only (migration 0028). Links change no task, deadline or status. Links are added, listed and removed from the case detail page and the CLI.
 
 ### Not yet implemented
 - A production certificate, OIDC/SSO, encryption at rest for the database volume, and backup and restore procedures.
