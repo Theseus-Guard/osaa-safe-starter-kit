@@ -1,6 +1,6 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { ReviewOutcome, ReviewResponse, createReview } from "../../api";
+import { ReviewOutcome, ReviewResponse, createReview, listReviews } from "../../api";
 import { describeError } from "../../messages";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,8 @@ interface Props {
   caseId: string;
   // The case is closed. No review can be recorded, so the form is not offered.
   closed: boolean;
+  // The caller has reviews:write. Without it the reviews are listed read-only.
+  canReview: boolean;
   // Called after a review is stored. The caller reloads the history, because the review is audited.
   onRecorded: () => void;
 }
@@ -31,49 +33,76 @@ function outcomeLabel(value: ReviewOutcome): string {
   return OUTCOMES.find((outcome) => outcome.value === value)?.label ?? value;
 }
 
-export function CaseReview({ caseId, closed, onRecorded }: Props) {
+export function CaseReview({ caseId, closed, canReview, onRecorded }: Props) {
   const [open, setOpen] = useState(false);
-  // Only the reviews recorded during this visit. The backend has no endpoint that lists earlier reviews.
-  const [recorded, setRecorded] = useState<ReviewResponse[]>([]);
+  const [items, setItems] = useState<ReviewResponse[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // Bumped after a review is recorded so the list reloads from the server.
+  const [version, setVersion] = useState(0);
+  const canRecord = canReview && !closed;
+
+  useEffect(() => {
+    let stale = false;
+    setError(null);
+    listReviews(caseId)
+      .then((result) => {
+        if (!stale) setItems(result);
+      })
+      .catch((caught: unknown) => {
+        if (!stale) setError(describeError(caught));
+      });
+    return () => {
+      stale = true;
+    };
+  }, [caseId, version]);
+
+  let description = "Reviews recorded on this case.";
+  if (canReview) {
+    description = closed
+      ? "This case is closed, so no review can be recorded."
+      : "Record your review of this case. Only an assigned reviewer can record one.";
+  }
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>Review</CardTitle>
-        <CardDescription>
-          {closed
-            ? "This case is closed, so no review can be recorded."
-            : "Record your review of this case. Only an assigned reviewer can record one."}
-        </CardDescription>
+        <CardDescription>{description}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        {recorded.length > 0 && (
-          <div className="grid gap-2 text-sm">
-            <p className="font-medium">Recorded in this session</p>
-            <ul className="grid gap-3">
-              {recorded.map((review) => (
-                <li key={review.id} className="grid gap-1">
-                  <span>{outcomeLabel(review.outcome)}</span>
-                  {review.note && <span className="whitespace-pre-wrap text-muted-foreground">{review.note}</span>}
-                </li>
-              ))}
-            </ul>
-          </div>
+        {error && (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         )}
-        {!closed && (
+        {items === null && error === null && <p className="text-sm text-muted-foreground">Loading reviews…</p>}
+        {items !== null && items.length === 0 && (
+          <p className="text-sm text-muted-foreground">No review has been recorded for this case yet.</p>
+        )}
+        {items !== null && items.length > 0 && (
+          <ul className="grid gap-3 text-sm">
+            {items.map((review) => (
+              <li key={review.id} className="grid gap-1">
+                <span>{outcomeLabel(review.outcome)}</span>
+                {review.note && <span className="whitespace-pre-wrap text-muted-foreground">{review.note}</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+        {canRecord && (
           <div>
             <Button variant="outline" onClick={() => setOpen(true)}>
               Record review
             </Button>
           </div>
         )}
-        {!closed && (
+        {canRecord && (
           <ReviewCaseDialog
             caseId={caseId}
             open={open}
             onOpenChange={setOpen}
-            onRecorded={(review) => {
-              setRecorded((items) => [...items, review]);
+            onRecorded={() => {
+              setVersion((value) => value + 1);
               onRecorded();
             }}
           />
@@ -87,7 +116,7 @@ interface DialogProps {
   caseId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onRecorded: (review: ReviewResponse) => void;
+  onRecorded: () => void;
 }
 
 function ReviewCaseDialog({ caseId, open, onOpenChange, onRecorded }: DialogProps) {
@@ -97,9 +126,9 @@ function ReviewCaseDialog({ caseId, open, onOpenChange, onRecorded }: DialogProp
         {/* The form is mounted only while the dialog is open, so every opening starts empty. */}
         <ReviewCaseForm
           caseId={caseId}
-          onRecorded={(review) => {
+          onRecorded={() => {
             onOpenChange(false);
-            onRecorded(review);
+            onRecorded();
           }}
         />
       </DialogContent>
@@ -107,7 +136,7 @@ function ReviewCaseDialog({ caseId, open, onOpenChange, onRecorded }: DialogProp
   );
 }
 
-function ReviewCaseForm({ caseId, onRecorded }: { caseId: string; onRecorded: (review: ReviewResponse) => void }) {
+function ReviewCaseForm({ caseId, onRecorded }: { caseId: string; onRecorded: () => void }) {
   const [outcome, setOutcome] = useState<ReviewOutcome | null>(null);
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -123,9 +152,9 @@ function ReviewCaseForm({ caseId, onRecorded }: { caseId: string; onRecorded: (r
     const trimmed = note.trim();
     setBusy(true);
     try {
-      const review = await createReview(caseId, { outcome, note: trimmed.length > 0 ? trimmed : null });
+      await createReview(caseId, { outcome, note: trimmed.length > 0 ? trimmed : null });
       toast.success("Review recorded.");
-      onRecorded(review);
+      onRecorded();
     } catch (caught) {
       setError(describeError(caught));
       setBusy(false);

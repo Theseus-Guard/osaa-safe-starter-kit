@@ -398,6 +398,15 @@ describe("case and evidence endpoints", () => {
     expect(methodOf(1)).toBe("DELETE");
   });
 
+  it("lists every review of a case", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, []));
+
+    await api.listReviews("case-1");
+
+    expect(urlOf(0)).toBe("/api/v1/cases/case-1/reviews");
+    expect(methodOf(0)).toBe("GET");
+  });
+
   it("requests one page of history", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { items: [], total: 0, limit: 20, offset: 40 }));
 

@@ -1,7 +1,16 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CaseDetail, closeCase, createReview, getCase, getCaseHistory, listAssignments, listEvidence } from "../../api";
+import {
+  CaseDetail,
+  closeCase,
+  createReview,
+  getCase,
+  getCaseHistory,
+  listAssignments,
+  listEvidence,
+  listReviews,
+} from "../../api";
 import { CaseDetailPage } from "./CaseDetailPage";
 
 vi.mock("../../api", async (importOriginal) => {
@@ -13,6 +22,7 @@ vi.mock("../../api", async (importOriginal) => {
     createReview: vi.fn(),
     listAssignments: vi.fn(),
     listEvidence: vi.fn(),
+    listReviews: vi.fn(),
     getCaseHistory: vi.fn(),
   };
 });
@@ -28,6 +38,7 @@ const close = vi.mocked(closeCase);
 const review = vi.mocked(createReview);
 const assignments = vi.mocked(listAssignments);
 const evidence = vi.mocked(listEvidence);
+const reviews = vi.mocked(listReviews);
 const history = vi.mocked(getCaseHistory);
 
 // A triager with full case access and evidence access.
@@ -71,6 +82,7 @@ beforeEach(() => {
   review.mockReset();
   assignments.mockReset().mockResolvedValue([]);
   evidence.mockReset().mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
+  reviews.mockReset().mockResolvedValue([]);
   history.mockReset().mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
 });
 
@@ -166,11 +178,20 @@ describe("CaseDetailPage", () => {
     expect(screen.getByRole("button", { name: "Record review" })).toBeInTheDocument();
   });
 
-  it("hides the review section without reviews:write", async () => {
+  it("lists the reviews but hides Record review without reviews:write", async () => {
     render(<CaseDetailPage caseId="case-1" permissions={FULL_ACCESS} />);
 
-    expect(await screen.findByText("Example incident")).toBeInTheDocument();
-    expect(screen.queryByText("Review", { exact: true })).not.toBeInTheDocument();
+    expect(await screen.findByText("Review", { exact: true })).toBeInTheDocument();
+    expect(await screen.findByText("No review has been recorded for this case yet.")).toBeInTheDocument();
+    expect(reviews).toHaveBeenCalledWith("case-1");
+    expect(screen.queryByRole("button", { name: "Record review" })).not.toBeInTheDocument();
+  });
+
+  it("shows the reviews of the case to a reporter who can read it", async () => {
+    render(<CaseDetailPage caseId="case-1" permissions={REPORTER} />);
+
+    expect(await screen.findByText("Review", { exact: true })).toBeInTheDocument();
+    expect(await screen.findByText("No review has been recorded for this case yet.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Record review" })).not.toBeInTheDocument();
   });
 

@@ -386,7 +386,7 @@ export function updateDeadline(
   });
 }
 
-// Review outcomes accepted by the backend. The backend has no endpoint that lists reviews.
+// Review outcomes accepted by the backend.
 export type ReviewOutcome = "pass" | "fail" | "insufficient_evidence" | "not_applicable";
 
 export interface ReviewCreateBody {
@@ -405,6 +405,11 @@ export interface ReviewResponse {
 // Needs reviews:write and an active assignment to the case. The case must be open.
 export function createReview(caseId: string, body: ReviewCreateBody): Promise<ReviewResponse> {
   return request<ReviewResponse>(`/cases/${encodeURIComponent(caseId)}/reviews`, { method: "POST", json: body });
+}
+
+// Every review of the case, newest first and not deleted. Needs case read access. Answers 404 when the caller cannot see the case.
+export function listReviews(caseId: string): Promise<ReviewResponse[]> {
+  return request<ReviewResponse[]>(`/cases/${encodeURIComponent(caseId)}/reviews`);
 }
 
 export interface Assignment {

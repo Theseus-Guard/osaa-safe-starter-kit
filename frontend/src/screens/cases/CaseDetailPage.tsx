@@ -86,15 +86,14 @@ export function CaseDetailPage({ caseId, permissions }: Props) {
             </CardContent>
           </Card>
 
-          {/* Keyed by case, so the reviews listed for this session never carry over to another case. */}
-          {abilities.canReview && (
-            <CaseReview
-              key={detail.id}
-              caseId={detail.id}
-              closed={closed}
-              onRecorded={() => setHistoryRevision((value) => value + 1)}
-            />
-          )}
+          {/* Keyed by case, so the reviews listed never carry over from another case. Every reader sees the list. */}
+          <CaseReview
+            key={detail.id}
+            caseId={detail.id}
+            closed={closed}
+            canReview={abilities.canReview}
+            onRecorded={() => setHistoryRevision((value) => value + 1)}
+          />
 
           <CaseClosure
             caseId={detail.id}
