@@ -220,7 +220,9 @@ CATALOG: tuple[TableEntry, ...] = (
         retention_defined=False,
         security=(
             "Visible to the creator (cases:read_own), to triagers (cases:read_all), and to investigators and reviewers "
-            "with an active assignment (cases:read_assigned). Administrators have no case permissions."
+            "with an active assignment (cases:read_assigned). A case opened through the reporter intake is hidden from "
+            "triagers until it has an active assignment; holders of reporter_contact:read always see it. "
+            "Administrators have no case permissions."
         ),
         deletion_mode="Soft delete (is_deleted, deleted_at).",
         created_column="created_at",
@@ -247,7 +249,7 @@ CATALOG: tuple[TableEntry, ...] = (
         purpose="Deciding who may read and work on a case, and recording who assigned them.",
         retention="Kept with its case. Removed assignments remain as soft-deleted rows.",
         retention_defined=False,
-        security="Visible only to triagers (cases:assign) and through the case itself. Administrators have no case permissions.",
+        security="Listed to every caller who can see the case. Created and removed only by holders of cases:assign. Administrators have no case permissions.",
         deletion_mode="Soft delete (is_deleted, deleted_at).",
         created_column="created_at",
     ),
@@ -260,7 +262,7 @@ CATALOG: tuple[TableEntry, ...] = (
         purpose="Recording the review that is required before a case can be closed.",
         retention="Kept with its case. Follows the case retention once it is defined.",
         retention_defined=False,
-        security="Visible only through the owning case. Reviews are written by assigned reviewers (reviews:write).",
+        security="Listed through the owning case. The note text is returned only to callers with cases:read_all; other callers see the outcome and time. Reviews are written by assigned reviewers (reviews:write).",
         deletion_mode="Soft delete (is_deleted, deleted_at).",
         created_column="created_at",
     ),
@@ -304,7 +306,7 @@ CATALOG: tuple[TableEntry, ...] = (
         purpose="Keeping the reason for each closure and reopening, so that it can be read by triagers.",
         retention="Kept with its case. Follows the case retention once it is defined.",
         retention_defined=False,
-        security="Visible through the owning case. The reason is returned in the case history only to callers with cases:read_all.",
+        security="Visible through the owning case. The reason is returned in the case history and in the case response only to callers with cases:read_all.",
         deletion_mode="Soft delete (is_deleted, deleted_at).",
         created_column="created_at",
     ),
@@ -333,7 +335,7 @@ CATALOG: tuple[TableEntry, ...] = (
         purpose="Keeping the reporter's identity apart from the case content, so the reporter is not exposed to retaliation.",
         retention="Kept with its case. Follows the case retention once it is defined.",
         retention_defined=False,
-        security="Written only when a case is submitted. No endpoint returns it, and the case history hides the reporter's account from every caller. Any future read needs a permission decided with the independent reporting owner.",
+        security="Written only when a case is submitted through the reporter intake. Read only through GET /api/v1/reports/{case_id}/contact with reporter_contact:read, which is granted to no role by default and is audited. The case history hides the reporter's account from every caller.",
         deletion_mode="Soft delete (is_deleted, deleted_at).",
         created_column="created_at",
     ),
