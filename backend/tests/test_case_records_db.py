@@ -156,18 +156,38 @@ def classification_body(expected_version: int, event_kind: str = "near_miss", **
 
 
 @contextmanager
+def reporter_contact_granted_directly(role: str):
+    """Hold reporter_contact:read on a role for the length of the block.
+
+    The role matrix refuses this grant (rbac.set_role_permissions), so the test writes the grant row itself, as a
+    database administrator could, and soft-deletes it afterwards. Only the reporter-channel tests use it.
+    """
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO role_permissions (role, permission) VALUES (%s, 'reporter_contact:read') "
+            "ON CONFLICT (role, permission) DO UPDATE SET is_deleted = false, deleted_at = NULL",
+            (role,),
+        )
+    try:
+        yield
+    finally:
+        with connect() as conn:
+            conn.execute(
+                "UPDATE role_permissions SET is_deleted = true, deleted_at = now() "
+                "WHERE role = %s AND permission = 'reporter_contact:read' AND NOT is_deleted",
+                (role,),
+            )
+
+
+@contextmanager
 def reporter_contact_holder(role: str = "triager"):
-    """Grant reporter_contact:read to a role for the length of the block, then restore the role's permissions.
+    """A holder of reporter_contact:read for the length of the block.
 
     Only a holder of reporter_contact:read can assign a reporter-channel case before it has an assignee
     (cases.CaseScope.visibility_sql), so the assignment in the tests below runs inside this block.
     """
-    before = frozenset(list_role_permissions()[role])
-    set_role_permissions(role, before | {"reporter_contact:read"})
-    try:
+    with reporter_contact_granted_directly(role):
         yield
-    finally:
-        set_role_permissions(role, before)
 
 
 def assign_investigator(triager: ActingClient, case_id: str, investigator_id: str) -> None:

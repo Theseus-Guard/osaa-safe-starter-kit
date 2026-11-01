@@ -36,6 +36,7 @@ const MESSAGES: Record<string, string> = {
   "case is not closed": "This case is not closed, so it cannot be reopened.",
   classification_version_conflict:
     "The classification was changed by someone else. Reload it, check the current version and save again.",
+  reporter_contact_not_grantable: "The reporter contact permission cannot be granted to any role.",
   reporter_contact_window_closed:
     "The reporter contact can no longer be read. It is available while the case is open and for 72 hours after it was closed.",
   "only an assigned reviewer can record a review": "Only an assigned reviewer can record a review on this case.",
