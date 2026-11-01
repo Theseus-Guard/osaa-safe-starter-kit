@@ -8,6 +8,24 @@ import urllib.error
 import urllib.request
 
 
+TITLE = "OSAA | SAFE Starter-Kit"
+
+
+def banner(color: bool) -> str:
+    """Boxed banner. Colors are ANSI escape codes and are used only when color is True."""
+    border = "+" + "-" * (len(TITLE) + 4) + "+"
+    if not color:
+        return "\n".join([border, f"|  {TITLE}  |", border])
+    cyan, bold, reset = "\033[36m", "\033[1m", "\033[0m"
+    return "\n".join(
+        [
+            f"{cyan}{border}{reset}",
+            f"{cyan}|{reset}  {bold}{TITLE}{reset}  {cyan}|{reset}",
+            f"{cyan}{border}{reset}",
+        ]
+    )
+
+
 def health(base_url: str) -> int:
     url = f"{base_url}/api/v1/health/ready"
     try:
@@ -23,9 +41,13 @@ def health(base_url: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="safe-kit")
+    parser.add_argument("--no-banner", action="store_true", help="Do not print the startup banner")
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("health", help="Check whether the API is ready")
     args = parser.parse_args(argv)
+    # The banner goes to stderr, so JSON on stdout stays clean. It is shown only in an interactive terminal.
+    if sys.stderr.isatty() and not args.no_banner:
+        print(banner(color=os.environ.get("NO_COLOR") is None), file=sys.stderr)
     if args.command == "health":
         return health(os.environ.get("SAFE_API_URL", "http://api:8000"))
     return 2

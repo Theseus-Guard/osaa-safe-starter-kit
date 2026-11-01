@@ -9,6 +9,7 @@ from safe_kit import api, auth
 from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS
 from safe_kit.security import hash_password
 from safe_kit.sessions import InvalidRefreshToken
+from safe_kit.system_timezone import TimezoneSetting
 from safe_kit.users import User
 
 PASSWORD = "correct horse battery"
@@ -27,6 +28,7 @@ class FakeStore:
         self.revoked_jtis = set()
         self.buckets = {}
         self.login_failures = []
+        self.timezone = "Europe/Istanbul"  # None means the system timezone is not set yet
         self._counter = 0
 
     def add_user(self, user_id, username, role, *, password=PASSWORD, active=True, must_change=False):
@@ -76,8 +78,14 @@ class FakeStore:
         return self._set_password(user_id, temporary_password, must_change=True)
 
     # --- audit ---
-    def record_login_failure(self, user_id, reason):
-        self.login_failures.append((user_id, reason))
+    def record_login_failure(self, user_id, reason, username, client_ip):
+        self.login_failures.append((user_id, reason, username, client_ip))
+
+    # --- system timezone ---
+    def current_setting(self):
+        if self.timezone is None:
+            return None
+        return TimezoneSetting(timezone=self.timezone, effective_from=EPOCH)
 
     def change_own_password(self, user_id, new_password):
         return self._set_password(user_id, new_password, must_change=False)
@@ -136,6 +144,9 @@ def store(tmp_path, monkeypatch):
 
     monkeypatch.setattr(api, "admin_exists", lambda: True)
     monkeypatch.setattr(auth, "permissions_for_role", lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()))
+    monkeypatch.setattr(api, "current_timezone_name", lambda: fake.timezone)
+    monkeypatch.setattr(auth, "current_timezone_name", lambda: fake.timezone)
+    monkeypatch.setattr(api, "current_setting", fake.current_setting)
     monkeypatch.setattr(auth, "find_user_by_id", fake.find_user_by_id)
     monkeypatch.setattr(auth, "is_access_token_revoked", fake.is_access_token_revoked)
     monkeypatch.setattr(api, "find_user", fake.find_user)
@@ -270,6 +281,7 @@ def test_me_with_valid_token(client):
         "username": "alice",
         "role": "triager",
         "password_change_required": False,
+        "timezone_setup_required": False,
     }
 
 
@@ -432,26 +444,85 @@ def test_short_passwords_are_rejected(client):
     assert response.status_code == 422
 
 
-def test_failed_login_is_audited_by_account_not_by_username_or_address(client, store):
+def test_failed_login_is_audited_with_account_username_and_client_address(client, store):
     response = client.post(
         "/api/v1/auth/token",
         headers={"X-Real-IP": "203.0.113.9"},
         json={"username": "alice", "password": "wrong password here"},
     )
     assert response.status_code == 401
-    assert store.login_failures == [(ALICE, "wrong_password")]
+    assert store.login_failures == [(ALICE, "wrong_password", "alice", "203.0.113.9")]
 
 
-def test_failed_login_for_unknown_name_is_audited_without_the_name(client, store):
-    login(client, "nobody-by-this-name")
-    assert store.login_failures == [(None, "unknown_user")]
+def test_failed_login_for_unknown_name_is_audited_with_the_submitted_name(client, store):
+    client.post(
+        "/api/v1/auth/token",
+        headers={"X-Real-IP": "203.0.113.9"},
+        json={"username": "nobody-by-this-name", "password": "whatever"},
+    )
+    assert store.login_failures == [(None, "unknown_user", "nobody-by-this-name", "203.0.113.9")]
 
 
 def test_login_to_disabled_account_is_audited_as_inactive(client, store):
-    login(client, "bob")
-    assert store.login_failures == [(BOB, "account_inactive")]
+    client.post(
+        "/api/v1/auth/token",
+        headers={"X-Real-IP": "203.0.113.9"},
+        json={"username": "bob", "password": PASSWORD},
+    )
+    assert store.login_failures == [(BOB, "account_inactive", "bob", "203.0.113.9")]
 
 
 def test_successful_login_is_not_audited_as_a_failure(client, store):
     login(client, "alice")
     assert store.login_failures == []
+
+
+# --- system setup gate: the timezone must be set before anyone but an administrator can work --------------------
+
+
+def test_non_admin_cannot_sign_in_until_the_system_timezone_is_set(client, store):
+    store.timezone = None
+    response = login(client, "alice")
+    assert response.status_code == 503
+    assert response.json() == {"detail": {"status": "setup_required"}}
+
+
+def test_admin_can_sign_in_before_the_system_timezone_is_set(client, store):
+    store.timezone = None
+    assert login(client, "carol").status_code == 200
+
+
+def test_authenticated_endpoints_refuse_non_admins_until_the_timezone_is_set(client, store):
+    token = login_tokens(client, "alice")["access_token"]
+    store.timezone = None
+    response = client.get("/api/v1/system/timezone", headers=bearer_header(token))
+    assert response.status_code == 403
+    assert response.json() == {"detail": "system setup required"}
+
+
+def test_admin_is_not_blocked_by_the_setup_gate(client, store):
+    store.timezone = None
+    token = login_tokens(client, "carol")["access_token"]
+    response = client.get("/api/v1/system/timezone", headers=bearer_header(token))
+    assert response.status_code == 200
+    assert response.json()["timezone"] is None
+
+
+def test_me_tells_an_admin_that_setup_is_required_and_nobody_else(client, store):
+    store.timezone = None
+    admin_token = login_tokens(client, "carol")["access_token"]
+    assert client.get("/api/v1/auth/me", headers=bearer_header(admin_token)).json()["timezone_setup_required"] is True
+
+    store.timezone = "Europe/Istanbul"
+    alice_token = login_tokens(client, "alice")["access_token"]
+    store.timezone = None
+    me = client.get("/api/v1/auth/me", headers=bearer_header(alice_token))
+    assert me.status_code == 200
+    assert me.json()["timezone_setup_required"] is False
+
+
+def test_me_reports_no_setup_required_once_the_timezone_is_set(client, store):
+    store.timezone = None
+    token = login_tokens(client, "carol")["access_token"]
+    store.timezone = "Pacific/Auckland"
+    assert client.get("/api/v1/auth/me", headers=bearer_header(token)).json()["timezone_setup_required"] is False

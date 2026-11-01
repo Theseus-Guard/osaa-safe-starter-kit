@@ -5,8 +5,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from safe_kit import api, auth, cases
-from safe_kit.cases import CASE_CALENDAR, Case, DeadlineTask, deadline_tasks_for
+from safe_kit.cases import CALENDAR_VERSION, Case, calendar_for, create_case, deadline_tasks_for
 from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS
+from safe_kit.system_timezone import TimezoneNotConfigured
 from safe_kit.users import User
 
 REPORTER_ID = "11111111-1111-1111-1111-111111111111"
@@ -28,15 +29,16 @@ def make_user(user_id, role):
     )
 
 
-def test_calendar_is_the_single_provisional_configuration():
-    assert CASE_CALENDAR.timezone == ZoneInfo("Europe/Istanbul")
-    assert CASE_CALENDAR.holidays == frozenset()
-    assert CASE_CALENDAR.version == "provisional-1"
+def test_calendar_takes_the_timezone_and_keeps_the_provisional_version():
+    calendar = calendar_for("Pacific/Auckland")
+    assert calendar.timezone == ZoneInfo("Pacific/Auckland")
+    assert calendar.holidays == frozenset()
+    assert calendar.version == CALENDAR_VERSION == "provisional-1"
 
 
 def test_deadline_tasks_come_from_deadlines_for():
     t0 = datetime(2026, 11, 6, 9, 0, tzinfo=ZoneInfo("Europe/Istanbul"))  # Friday
-    tasks = {task.kind: task for task in deadline_tasks_for(t0)}
+    tasks = {task.kind: task for task in deadline_tasks_for(t0, calendar_for("Europe/Istanbul"))}
     assert set(tasks) == {
         "affected_customers",
         "preliminary_safe_report",
@@ -52,7 +54,7 @@ def test_deadline_tasks_come_from_deadlines_for():
 
 def test_weekly_update_is_not_created_with_the_case():
     t0 = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
-    assert "weekly_update" not in {task.kind for task in deadline_tasks_for(t0)}
+    assert "weekly_update" not in {task.kind for task in deadline_tasks_for(t0, calendar_for("Europe/Istanbul"))}
 
 
 @pytest.fixture
@@ -80,10 +82,11 @@ def store(monkeypatch):
             title=title,
             awareness_time=awareness_time,
             status="open",
-            calendar_version=CASE_CALENDAR.version,
+            calendar_version=CALENDAR_VERSION,
+            calendar_timezone="Europe/Istanbul",
             created_at=datetime(2026, 11, 1, tzinfo=UTC),
             created_by=created_by,
-            deadlines=deadline_tasks_for(awareness_time),
+            deadlines=deadline_tasks_for(awareness_time, calendar_for("Europe/Istanbul")),
         )
         state["created"].append((title, awareness_time, created_by))
         state["cases"][(CASE_ID, created_by)] = case
@@ -184,3 +187,41 @@ def test_list_paging_bounds_are_enforced(client, store):
     assert client.get("/api/v1/cases?limit=0").status_code == 422
     assert client.get("/api/v1/cases?limit=201").status_code == 422
     assert client.get("/api/v1/cases?offset=-1").status_code == 422
+
+
+def test_case_records_the_system_timezone_in_effect_and_computes_deadlines_in_it(timezone_db):
+    timezone_db.seed_timezone("Pacific/Auckland", datetime(2026, 10, 1, tzinfo=UTC))
+    t0 = datetime(2026, 11, 5, 20, 0, tzinfo=UTC)  # Friday 09:00 in Auckland (NZDT, UTC+13)
+
+    case = create_case("Auckland case", t0, created_by=REPORTER_ID)
+
+    assert case.calendar_timezone == "Pacific/Auckland"
+    assert timezone_db.case_rows[0][8] == "Pacific/Auckland"
+    tasks = {task.kind: task for task in case.deadlines}
+    # Four business days from Friday 09:00 local is Thursday 09:00 local, which is 20:00 UTC on the Wednesday.
+    assert tasks["preliminary_safe_report"].due_at == datetime(2026, 11, 11, 20, 0, tzinfo=UTC)
+    audit = timezone_db.audit_rows[-1]
+    assert audit["action"] == "case.create"
+    assert audit["details"] == {"calendar_version": "provisional-1", "calendar_timezone": "Pacific/Auckland"}
+
+
+def test_later_timezone_change_does_not_move_an_existing_case(timezone_db):
+    timezone_db.seed_timezone("Europe/Istanbul", datetime(2026, 10, 1, tzinfo=UTC))
+    case = create_case("Before the change", datetime(2026, 11, 1, 6, 0, tzinfo=UTC), created_by=REPORTER_ID)
+    timezone_db.seed_timezone("Pacific/Auckland", datetime(2026, 11, 2, tzinfo=UTC))
+
+    assert timezone_db.case_rows[-1][8] == "Europe/Istanbul"
+    assert case.calendar_timezone == "Europe/Istanbul"
+
+
+def test_case_cannot_be_created_before_the_system_timezone_is_set(timezone_db):
+    with pytest.raises(TimezoneNotConfigured):
+        create_case("No timezone", datetime(2026, 11, 1, 6, 0, tzinfo=UTC), created_by=REPORTER_ID)
+    assert timezone_db.case_rows == []
+
+
+def test_api_refuses_case_creation_without_a_system_timezone(client, timezone_db):
+    response = client.post("/api/v1/cases", json=valid_body())
+    assert response.status_code == 409
+    assert response.json() == {"detail": "system timezone is not configured"}
+    assert timezone_db.case_rows == []

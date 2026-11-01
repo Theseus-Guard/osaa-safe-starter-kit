@@ -19,6 +19,17 @@ from safe_kit.auth import (
 from safe_kit.audit import record_login_failure
 from safe_kit.cases import Case, count_own_cases, create_case, find_own_case, list_own_cases
 from safe_kit.db import connect
+from safe_kit.system_timezone import (
+    SETUP_ROLE,
+    ChangeOutcome,
+    TimezoneNotConfigured,
+    TimezoneSetting,
+    current_setting,
+    current_timezone_name,
+    set_timezone,
+    utc_offset,
+    validate_timezone,
+)
 from safe_kit.rate_limit import (
     LOGIN_LIMIT_PER_CLIENT,
     LOGIN_LIMIT_PER_USERNAME,
@@ -122,6 +133,25 @@ class MeResponse(BaseModel):
     username: str
     role: str
     password_change_required: bool
+    timezone_setup_required: bool
+
+
+class SystemTimezoneResponse(BaseModel):
+    timezone: str | None
+    effective_from: datetime | None
+    utc_offset: str | None
+
+
+class SystemTimezoneUpdate(BaseModel):
+    timezone: str = Field(min_length=1, max_length=64)
+    confirm: bool = False
+    # What the client last read. Required, so a client always states the value it is replacing (null when unset).
+    current: str | None = Field(max_length=64)
+
+    @field_validator("timezone")
+    @classmethod
+    def known_timezone(cls, value: str) -> str:
+        return validate_timezone(value)
 
 
 class UserCreatedResponse(BaseModel):
@@ -232,15 +262,17 @@ def login(body: LoginRequest, request: Request) -> TokenResponse:
     user = find_user(body.username)
     password_ok = verify_password(user.password_hash if user else None, body.password)
     if user is None or not user.is_active or not password_ok:
-        # The audit row names the account, never the submitted username or the client address.
         if user is None:
             reason = "unknown_user"
         elif not user.is_active:
             reason = "account_inactive"
         else:
             reason = "wrong_password"
-        record_login_failure(user.id if user else None, reason)
+        record_login_failure(user.id if user else None, reason, body.username, _client_ip(request))
         raise INVALID_CREDENTIALS
+    # Until the system timezone is set, only administrators may sign in: they are the ones who set it.
+    if user.role != SETUP_ROLE and current_timezone_name() is None:
+        raise SETUP_REQUIRED
     clear_rate_limit(f"login:user:{body.username}")
     return _issue_tokens(user, open_session(user.id))
 
@@ -292,7 +324,37 @@ def me(user: User = Depends(current_user_pending_change)) -> MeResponse:
         username=user.username,
         role=user.role,
         password_change_required=user.must_change_password,
+        timezone_setup_required=user.role == SETUP_ROLE and current_timezone_name() is None,
     )
+
+
+def _timezone_response(setting: TimezoneSetting | None) -> SystemTimezoneResponse:
+    if setting is None:
+        return SystemTimezoneResponse(timezone=None, effective_from=None, utc_offset=None)
+    return SystemTimezoneResponse(
+        timezone=setting.timezone,
+        effective_from=setting.effective_from,
+        utc_offset=utc_offset(setting.timezone, datetime.now(UTC)),
+    )
+
+
+@app.get("/api/v1/system/timezone", response_model=SystemTimezoneResponse)
+def get_system_timezone(user: User = Depends(current_user)) -> SystemTimezoneResponse:
+    return _timezone_response(current_setting())
+
+
+@app.put("/api/v1/system/timezone", response_model=SystemTimezoneResponse)
+def admin_set_system_timezone(
+    body: SystemTimezoneUpdate,
+    actor: User = Depends(require_permission("users:manage")),
+) -> SystemTimezoneResponse:
+    # The effective time is the database transaction time, set inside set_timezone. The client cannot supply it.
+    outcome, setting = set_timezone(body.timezone, body.current, body.confirm, actor.id)
+    if outcome is ChangeOutcome.STALE:
+        raise HTTPException(status_code=409, detail="timezone changed by someone else; reload")
+    if outcome is ChangeOutcome.CONFIRMATION_REQUIRED:
+        raise HTTPException(status_code=422, detail="confirmation required")
+    return _timezone_response(setting)
 
 
 @app.get("/api/v1/users", response_model=UserPage)
@@ -502,7 +564,11 @@ def submit_case(
     body: CaseCreateRequest,
     actor: User = Depends(require_permission("cases:submit")),
 ) -> CaseResponse:
-    return _case_response(create_case(body.title, body.awareness_time, created_by=actor.id))
+    try:
+        case = create_case(body.title, body.awareness_time, created_by=actor.id)
+    except TimezoneNotConfigured:
+        raise HTTPException(status_code=409, detail="system timezone is not configured")
+    return _case_response(case)
 
 
 @app.get("/api/v1/cases", response_model=CasePage)

@@ -9,17 +9,25 @@ from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 from safe_kit import audit
+from safe_kit import system_timezone
 from safe_kit.db import connect
 from safe_kit.deadlines import BusinessCalendar, deadlines_for
+from safe_kit.system_timezone import TimezoneNotConfigured
 
-# The single configuration point for the working calendar. It is provisional until the owning organization
-# confirms its working days and holidays. The version string is stored on every case, so a later change
-# of calendar does not silently move deadlines that were already computed.
-CASE_CALENDAR = BusinessCalendar(
-    timezone=ZoneInfo("Europe/Istanbul"),
-    holidays=frozenset(),
-    version="provisional-1",
-)
+# The working calendar is provisional until the owning organization confirms its working days and holidays.
+# The version string is stored on every case, so a later change of calendar does not silently move deadlines
+# that were already computed. The local timezone is not part of the version: each case stores its own snapshot
+# of the system timezone that was in effect when it was created.
+CALENDAR_VERSION = "provisional-1"
+CALENDAR_HOLIDAYS: frozenset = frozenset()
+
+
+def calendar_for(timezone_name: str) -> BusinessCalendar:
+    return BusinessCalendar(
+        timezone=ZoneInfo(timezone_name),
+        holidays=CALENDAR_HOLIDAYS,
+        version=CALENDAR_VERSION,
+    )
 
 
 @dataclass(frozen=True)
@@ -37,12 +45,13 @@ class Case:
     awareness_time: datetime
     status: str
     calendar_version: str
+    calendar_timezone: str
     created_at: datetime
     created_by: str
     deadlines: list[DeadlineTask] = field(default_factory=list)
 
 
-def deadline_tasks_for(t0: datetime, calendar: BusinessCalendar = CASE_CALENDAR) -> list[DeadlineTask]:
+def deadline_tasks_for(t0: datetime, calendar: BusinessCalendar) -> list[DeadlineTask]:
     """The tasks created with a case. weekly_update is not created here: it depends on risks still being open."""
     due = deadlines_for(t0, calendar)
     return [
@@ -54,7 +63,10 @@ def deadline_tasks_for(t0: datetime, calendar: BusinessCalendar = CASE_CALENDAR)
     ]
 
 
-_CASE_COLUMNS = "id::text, reference, title, awareness_time, status, calendar_version, created_at, created_by::text"
+_CASE_COLUMNS = (
+    "id::text, reference, title, awareness_time, status, calendar_version, created_at, created_by::text, "
+    "calendar_timezone"
+)
 
 
 def _to_case(row: tuple) -> Case:
@@ -67,22 +79,31 @@ def _to_case(row: tuple) -> Case:
         calendar_version=row[5],
         created_at=row[6],
         created_by=row[7],
+        calendar_timezone=row[8],
     )
 
 
 def create_case(title: str, awareness_time: datetime, created_by: str) -> Case:
-    """Create the case, its deadline tasks, and the audit row in one transaction."""
-    tasks = deadline_tasks_for(awareness_time)
+    """Create the case, its deadline tasks, and the audit row in one transaction.
+
+    The calendar timezone is the system timezone in effect inside this transaction. It is stored on the case,
+    so a later change of the system timezone does not move deadlines that were already computed.
+    """
     with connect() as conn:
+        setting = system_timezone.read_current(conn)
+        if setting is None:
+            raise TimezoneNotConfigured()
+        calendar_timezone = setting.timezone
+        tasks = deadline_tasks_for(awareness_time, calendar_for(calendar_timezone))
         sequence = conn.execute("SELECT nextval('case_reference_seq')").fetchone()[0]
         reference = f"SAFE-{datetime.now(UTC).year}-{sequence:06d}"
         row = conn.execute(
             f"""
-            INSERT INTO cases (reference, title, awareness_time, created_by, status, calendar_version)
-            VALUES (%s, %s, %s, %s, 'open', %s)
+            INSERT INTO cases (reference, title, awareness_time, created_by, status, calendar_version, calendar_timezone)
+            VALUES (%s, %s, %s, %s, 'open', %s, %s)
             RETURNING {_CASE_COLUMNS}
             """,
-            (reference, title, awareness_time, created_by, CASE_CALENDAR.version),
+            (reference, title, awareness_time, created_by, CALENDAR_VERSION, calendar_timezone),
         ).fetchone()
         case = _to_case(row)
         for task in tasks:
@@ -96,7 +117,7 @@ def create_case(title: str, awareness_time: datetime, created_by: str) -> Case:
             "case",
             case.id,
             actor_id=created_by,
-            details={"calendar_version": CASE_CALENDAR.version},
+            details={"calendar_version": CALENDAR_VERSION, "calendar_timezone": calendar_timezone},
         )
     return replace(case, deadlines=tasks)
 
