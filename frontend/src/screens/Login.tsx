@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { readiness, Readiness } from "../api";
+import { ApiError, readiness, Readiness } from "../api";
 import { describeCode, describeError } from "../messages";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -32,7 +32,9 @@ export function Login({ notice, onLogin }: Props) {
     try {
       await onLogin(username, password);
     } catch (caught) {
-      setError(describeError(caught));
+      // A 503 at login means the system timezone is not set yet and this non-admin account cannot continue.
+      const gated = caught instanceof ApiError && caught.status === 503;
+      setError(gated ? describeCode("system setup required") : describeError(caught));
     } finally {
       setBusy(false);
     }

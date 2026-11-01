@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { deleteUser, listUsers, Role, ROLES, updateUser, UserPage, UserSummary, UserUpdate } from "../../api";
 import { describeError } from "../../messages";
 import { DisabledHint } from "@/components/disabled-hint";
+import { Timestamp } from "@/components/timestamp";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -184,7 +185,9 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
                         {user.is_active ? <Badge variant="secondary">Active</Badge> : <Badge variant="outline">Disabled</Badge>}
                       </TableCell>
                       <TableCell>{user.password_change_required ? "Yes" : "No"}</TableCell>
-                      <TableCell>{formatDate(user.created_at)}</TableCell>
+                      <TableCell>
+                        <Timestamp value={user.created_at} />
+                      </TableCell>
                       <TableCell>
                         <div className="flex flex-wrap gap-1.5">
                           <DisabledHint reason={isLocked ? lockReason("You cannot change your own status.") : undefined}>
@@ -264,9 +267,4 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
       </CardContent>
     </Card>
   );
-}
-
-function formatDate(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
 }

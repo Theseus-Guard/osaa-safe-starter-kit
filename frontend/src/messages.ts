@@ -17,6 +17,9 @@ const MESSAGES: Record<string, string> = {
     "The admin role must keep users:manage, users:reset_password and roles:manage.",
   "unknown permission": "One of the selected permissions does not exist.",
   "role not found": "That role does not exist.",
+  "system setup required": "System setup required. An administrator must set the system timezone before you can continue.",
+  "timezone changed by someone else; reload": "The timezone was changed by someone else. Reload the page to see the current value.",
+  "confirmation required": "Confirm the change before saving.",
   "nothing to change": "Choose a role or status change first.",
   "username is reserved": "That username is reserved. Choose another.",
   "username must be 3-64 characters: lowercase letters, digits, '.', '_' or '-'":

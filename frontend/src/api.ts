@@ -18,6 +18,8 @@ export interface Me {
   username: string;
   role: Role;
   password_change_required: boolean;
+  // True only for an admin when no system timezone is set yet.
+  timezone_setup_required: boolean;
 }
 
 export interface CreatedUser {
@@ -255,6 +257,29 @@ export function updateRolePermissions(role: Role, permissions: string[]): Promis
     method: "PUT",
     json: { permissions },
   });
+}
+
+// System timezone. Storage is always UTC; this only changes how times are displayed.
+export interface SystemTimezone {
+  timezone: string | null;
+  effective_from: string | null;
+  utc_offset: string | null;
+}
+
+export interface SystemTimezoneUpdate {
+  timezone: string;
+  // Explicit confirmation of the display change.
+  confirm: boolean;
+  // The timezone the admin was looking at. The backend rejects the change if the stored value differs.
+  current: string | null;
+}
+
+export function getSystemTimezone(): Promise<SystemTimezone> {
+  return request<SystemTimezone>("/system/timezone");
+}
+
+export function updateSystemTimezone(body: SystemTimezoneUpdate): Promise<SystemTimezone> {
+  return request<SystemTimezone>("/system/timezone", { method: "PUT", json: body });
 }
 
 // Metadata about personal data stored by this installation. Row contents and secrets are never included.

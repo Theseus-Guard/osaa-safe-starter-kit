@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 // Pages live in the URL hash (for example #/users) so refresh and back work without a router library.
-export const PAGES = ["overview", "users", "privacy", "roles", "account"] as const;
+export const PAGES = ["overview", "users", "privacy", "roles", "settings", "account"] as const;
 
 export type Page = (typeof PAGES)[number];
 
@@ -35,6 +35,12 @@ export const PAGE_INFO: Record<Page, PageInfo> = {
     label: "Roles and permissions",
     title: "Roles and permissions",
     description: "Review and edit the permissions of each role. Changes apply immediately to everyone with that role.",
+    adminOnly: true,
+  },
+  settings: {
+    label: "Settings",
+    title: "Settings",
+    description: "System timezone and how times are displayed.",
     adminOnly: true,
   },
   account: {

@@ -9,6 +9,7 @@ import {
 import { describeError } from "../../messages";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Timestamp } from "@/components/timestamp";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -79,7 +80,9 @@ export function PrivacyPage() {
           <Card>
             <CardHeader>
               <CardTitle>About this inventory</CardTitle>
-              <CardDescription>Generated {formatTimestamp(inventory.generated_at)}.</CardDescription>
+              <CardDescription>
+                Generated <Timestamp value={inventory.generated_at} />.
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <dl className="grid gap-4 sm:grid-cols-3">
@@ -134,9 +137,13 @@ function InventoryCard({ item }: { item: PrivacyInventoryItem }) {
             {item.rows.total} total, {item.rows.active} active, {item.rows.soft_deleted} soft-deleted
           </Detail>
           <Detail label="Oldest and newest record">
-            {item.oldest_created_at === null
-              ? "No rows"
-              : `${formatTimestamp(item.oldest_created_at)} to ${formatTimestamp(item.newest_created_at)}`}
+            {item.oldest_created_at === null || item.newest_created_at === null ? (
+              "No rows"
+            ) : (
+              <>
+                <Timestamp value={item.oldest_created_at} /> to <Timestamp value={item.newest_created_at} />
+              </>
+            )}
           </Detail>
         </dl>
       </CardContent>
@@ -156,12 +163,4 @@ function Detail({ label, children }: DetailProps) {
       <dd className="text-muted-foreground">{children}</dd>
     </div>
   );
-}
-
-function formatTimestamp(value: string | null): string {
-  if (value === null) return "None";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? value
-    : date.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
 }

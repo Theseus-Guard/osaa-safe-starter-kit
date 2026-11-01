@@ -15,6 +15,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { SystemClock } from "@/components/system-clock";
 import { cn } from "@/lib/utils";
 import { hashFor, Page, PAGE_INFO, PAGES } from "../routes";
 import { isThemePreference, setPreference, ThemePreference, useThemePreference } from "../theme";
@@ -56,7 +57,10 @@ export function AppShell({ profile, page, onLogout, children }: Props) {
           </Sheet>
           <span className="font-semibold tracking-tight">SAFE-Starter-Kit</span>
         </div>
-        <UserMenu profile={profile} onLogout={onLogout} />
+        <div className="flex items-center gap-3">
+          <SystemClock />
+          <UserMenu profile={profile} onLogout={onLogout} />
+        </div>
       </header>
       <div className="flex flex-1">
         <aside className="hidden w-56 shrink-0 flex-col border-r p-3 md:flex">

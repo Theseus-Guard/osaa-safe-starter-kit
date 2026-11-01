@@ -3,8 +3,9 @@ import { changePassword, login, logout, me, Me, onSessionEnded } from "./api";
 import { ChangePassword } from "./screens/ChangePassword";
 import { Home } from "./screens/Home";
 import { Login } from "./screens/Login";
+import { SetupTimezone } from "./screens/SetupTimezone";
 
-type Phase = "anonymous" | "password-change" | "signed-in";
+type Phase = "anonymous" | "password-change" | "timezone-setup" | "signed-in";
 
 export function App() {
   const [phase, setPhase] = useState<Phase>("anonymous");
@@ -24,7 +25,9 @@ export function App() {
     await login(username, password);
     const current = await me();
     setProfile(current);
-    setPhase(current.password_change_required ? "password-change" : "signed-in");
+    if (current.password_change_required) setPhase("password-change");
+    else if (current.timezone_setup_required) setPhase("timezone-setup");
+    else setPhase("signed-in");
   }
 
   // Shared by the forced first-login change and the voluntary change: the backend ends all sessions,
@@ -33,6 +36,12 @@ export function App() {
     setProfile(null);
     setPhase("anonymous");
     setNotice("Password changed. Log in with your new password.");
+  }
+
+  // The first admin has chosen the system timezone. The session stays valid, so go straight to the dashboard.
+  function handleTimezoneSet() {
+    setProfile((previous) => (previous ? { ...previous, timezone_setup_required: false } : previous));
+    setPhase("signed-in");
   }
 
   async function handleLogout() {
@@ -49,7 +58,7 @@ export function App() {
     return <Home profile={profile} notice={notice} onLogout={handleLogout} onPasswordChanged={handlePasswordChanged} />;
   }
 
-  // Login and the forced first-login password change stay outside the dashboard shell.
+  // Login and the first-login steps stay outside the dashboard shell (no clock and no user menu here).
   return (
     <div className="flex min-h-svh flex-col">
       <header className="flex h-14 items-center border-b bg-background px-4">
@@ -65,18 +74,8 @@ export function App() {
             onDone={handlePasswordChanged}
           />
         )}
+        {phase === "timezone-setup" && profile && <SetupTimezone onDone={handleTimezoneSet} />}
       </main>
-      <footer className="border-t px-4 py-4 text-center text-xs text-muted-foreground">
-        <nav className="flex flex-wrap justify-center gap-x-4 gap-y-1">
-          <a className="underline underline-offset-4 hover:text-foreground" href="https://github.com/OpenSecureAIAlliance/wg-safe" target="_blank" rel="noopener noreferrer">
-            Open Secure AI Alliance official repo
-          </a>
-          <a className="underline underline-offset-4 hover:text-foreground" href="https://secureaialliance.org/" target="_blank" rel="noopener noreferrer">
-            Open Secure AI Alliance (OSAA)
-          </a>
-        </nav>
-        <p className="mt-2">SAFE-Starter-Kit is an independent open-source project. It is not an official Alliance product.</p>
-      </footer>
     </div>
   );
 }
