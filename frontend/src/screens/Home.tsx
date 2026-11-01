@@ -1,7 +1,17 @@
-import { useState } from "react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { changePassword, Me } from "../api";
-import { AdminPanel } from "./AdminPanel";
+import { useHashRoute } from "../routes";
+import { SystemTimezoneProvider, useSystemTimezone } from "../system-timezone";
+import { AppShell } from "./AppShell";
 import { ChangePassword } from "./ChangePassword";
+import { ProfileCard } from "./ProfileCard";
+import { Overview } from "./Overview";
+import { PrivacyPage } from "./admin/PrivacyPage";
+import { RolesMatrix } from "./admin/RolesMatrix";
+import { SettingsPage } from "./admin/SettingsPage";
+import { UsersPage } from "./admin/UsersPage";
+import { CaseDetailPage } from "./cases/CaseDetailPage";
+import { CasesPage } from "./cases/CasesPage";
 
 interface Props {
   profile: Me;
@@ -10,38 +20,52 @@ interface Props {
   onPasswordChanged: () => void;
 }
 
-export function Home({ profile, notice, onLogout, onPasswordChanged }: Props) {
-  const [changing, setChanging] = useState(false);
+export function Home(props: Props) {
+  return (
+    <SystemTimezoneProvider>
+      <HomeView {...props} />
+    </SystemTimezoneProvider>
+  );
+}
+
+function HomeView({ profile, notice, onLogout, onPasswordChanged }: Props) {
+  const isAdmin = profile.role === "admin";
+  const { page, caseId } = useHashRoute(isAdmin);
+  const { error } = useSystemTimezone();
+  const caseDetailHeading =
+    page === "cases" && caseId !== null
+      ? { title: "Case", description: "Case details. Times are shown in the system timezone." }
+      : undefined;
 
   return (
-    <>
-      <section className="card">
-        <h2>Signed in</h2>
-        {notice && <p className="notice">{notice}</p>}
-        <dl>
-          <dt>Username</dt>
-          <dd>{profile.username}</dd>
-          <dt>Role</dt>
-          <dd>{profile.role}</dd>
-        </dl>
-        <div className="row">
-          <button type="button" onClick={() => setChanging((value) => !value)}>
-            {changing ? "Cancel" : "Change password"}
-          </button>
-          <button type="button" className="secondary" onClick={onLogout}>
-            Log out
-          </button>
-        </div>
-      </section>
-      {changing && (
-        <ChangePassword
-          heading="Change your password"
-          description="This ends all of your sessions. You will need to log in again."
-          onChange={changePassword}
-          onDone={onPasswordChanged}
-        />
+    <AppShell profile={profile} page={page} onLogout={onLogout} heading={caseDetailHeading}>
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>Times are shown in UTC until the system timezone loads. {error}</AlertDescription>
+        </Alert>
       )}
-      {profile.role === "admin" && <AdminPanel currentUserId={profile.id} />}
-    </>
+      {page === "overview" && <Overview profile={profile} notice={notice} />}
+      {page === "cases" &&
+        (caseId === null ? (
+          <CasesPage permissions={profile.permissions} />
+        ) : (
+          <CaseDetailPage caseId={caseId} permissions={profile.permissions} />
+        ))}
+      {page === "users" && isAdmin && <UsersPage currentUserId={profile.id} />}
+      {page === "privacy" && isAdmin && <PrivacyPage />}
+      {page === "roles" && isAdmin && <RolesMatrix editable />}
+      {page === "settings" && isAdmin && <SettingsPage />}
+      {page === "account" && (
+        <>
+          <ProfileCard />
+          <ChangePassword
+            heading="Change your password"
+            description="This ends all of your sessions. You will need to log in again."
+            onChange={changePassword}
+            onDone={onPasswordChanged}
+          />
+        </>
+      )}
+    </AppShell>
   );
 }

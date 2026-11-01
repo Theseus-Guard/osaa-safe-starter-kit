@@ -7,9 +7,10 @@ import jwt
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from safe_kit.rbac import has_permission
+from safe_kit.rbac import permissions_for_role
 from safe_kit.security import decode_access_token
 from safe_kit.sessions import is_access_token_revoked
+from safe_kit.system_timezone import SETUP_ROLE, current_timezone_name
 from safe_kit.users import User, find_user_by_id
 
 bearer = HTTPBearer(auto_error=False)
@@ -21,6 +22,7 @@ INVALID_CREDENTIALS = HTTPException(
 )
 
 PASSWORD_CHANGE_REQUIRED = HTTPException(status_code=403, detail="password change required")
+SYSTEM_SETUP_REQUIRED = HTTPException(status_code=403, detail="system setup required")
 
 
 def _authenticated_user(credentials: HTTPAuthorizationCredentials | None) -> User:
@@ -46,10 +48,15 @@ def _authenticated_user(credentials: HTTPAuthorizationCredentials | None) -> Use
 
 
 def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> User:
-    """Authenticated user who has finished any required password change."""
+    """Authenticated user who has finished any required password change and the system setup.
+
+    Until an administrator has set the system timezone, only administrators get through: they set it.
+    """
     user = _authenticated_user(credentials)
     if user.must_change_password:
         raise PASSWORD_CHANGE_REQUIRED
+    if user.role != SETUP_ROLE and current_timezone_name() is None:
+        raise SYSTEM_SETUP_REQUIRED
     return user
 
 
@@ -58,9 +65,24 @@ def current_user_pending_change(credentials: HTTPAuthorizationCredentials | None
     return _authenticated_user(credentials)
 
 
+def permissions_of(user: User) -> frozenset[str]:
+    return permissions_for_role(user.role)
+
+
 def require_permission(permission: str) -> Callable[[User], User]:
     def dependency(user: User = Depends(current_user)) -> User:
-        if not has_permission(user.role, permission):
+        if permission not in permissions_for_role(user.role):
+            raise HTTPException(status_code=403, detail="forbidden")
+        return user
+
+    return dependency
+
+
+def require_any_permission(*permissions: str) -> Callable[[User], User]:
+    """Passes when the caller holds at least one of the permissions. Used where several roles may enter an endpoint."""
+
+    def dependency(user: User = Depends(current_user)) -> User:
+        if not set(permissions) & permissions_for_role(user.role):
             raise HTTPException(status_code=403, detail="forbidden")
         return user
 

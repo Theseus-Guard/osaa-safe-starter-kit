@@ -3,7 +3,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from safe_kit.deadlines import BusinessCalendar, deadlines_for, next_weekly_update
+from safe_kit.deadlines import BusinessCalendar, deadline_start, deadlines_for, next_weekly_update
 
 ISTANBUL = ZoneInfo("Europe/Istanbul")
 BERLIN = ZoneInfo("Europe/Berlin")
@@ -58,3 +58,28 @@ def test_naive_t0_is_rejected():
 def test_weekly_update_is_seven_elapsed_days():
     last = datetime(2026, 11, 1, 8, 0, tzinfo=UTC)
     assert next_weekly_update(last) == datetime(2026, 11, 8, 8, 0, tzinfo=UTC)
+
+
+def test_t0_is_the_awareness_time_when_no_operator_event_exists():
+    awareness = datetime(2026, 11, 2, 8, 0, tzinfo=UTC)
+    assert deadline_start(awareness, []) == awareness
+
+
+def test_t0_is_the_earliest_operator_event_when_it_is_before_the_awareness_time():
+    awareness = datetime(2026, 11, 2, 8, 0, tzinfo=UTC)
+    earlier = datetime(2026, 10, 30, 12, 0, tzinfo=UTC)
+    later = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
+    assert deadline_start(awareness, [later, earlier]) == earlier
+
+
+def test_t0_never_moves_later_than_the_awareness_time():
+    awareness = datetime(2026, 11, 2, 8, 0, tzinfo=UTC)
+    later_operator_event = datetime(2026, 11, 2, 10, 0, tzinfo=UTC)
+    assert deadline_start(awareness, [later_operator_event]) == awareness
+
+
+def test_t0_is_returned_in_utc_and_naive_times_are_refused():
+    local = datetime(2026, 11, 2, 11, 0, tzinfo=ISTANBUL)
+    assert deadline_start(local, []) == datetime(2026, 11, 2, 8, 0, tzinfo=UTC)
+    with pytest.raises(ValueError):
+        deadline_start(datetime(2026, 11, 2, 8, 0), [])

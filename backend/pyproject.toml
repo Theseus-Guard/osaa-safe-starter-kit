@@ -5,9 +5,13 @@ description = "SAFE-Starter-Kit backend skeleton"
 requires-python = ">=3.13"
 dependencies = [
     "argon2-cffi>=25.1.0",
+    "cryptography>=50.0.2",
+    "email-validator>=2.3.0",
     "fastapi>=0.115",
+    "jsonschema>=4.23",
     "psycopg[binary]>=3.2",
     "pyjwt>=2.15.1",
+    "python-multipart>=0.0.33",
     "uvicorn>=0.32",
 ]
 
@@ -18,6 +22,7 @@ package = false
 dev = [
     "httpx>=0.28.1",
     "pytest>=9.2.0",
+    "pytest-cov>=7.1.0",
 ]
 
 [tool.pytest.ini_options]

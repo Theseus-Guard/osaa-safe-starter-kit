@@ -8,11 +8,28 @@ organization confirms its working calendar.
 Legal notification duties run on their own clocks and are not computed here.
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 WEEKLY_UPDATE_INTERVAL = timedelta(days=7)
+
+
+def deadline_start(awareness_time: datetime, operator_occurrences: Iterable[datetime]) -> datetime:
+    """The t0 that the SAFE deadlines run from. This is the only place where the rule is written.
+
+    t0 is the earliest of the case awareness_time and the recorded operator awareness events. It never moves later:
+    an operator event recorded after the awareness_time does not delay the deadlines. Affected party and external
+    report events are kept as awareness events of their own and never set t0, so the caller passes only the
+    occurred_at values of the operator events.
+    """
+    if awareness_time.tzinfo is None:
+        raise ValueError("t0 must be timezone-aware")
+    start = min([awareness_time, *operator_occurrences])
+    if start.tzinfo is None:
+        raise ValueError("t0 must be timezone-aware")
+    return start.astimezone(UTC)
 
 
 @dataclass(frozen=True)

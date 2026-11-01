@@ -24,6 +24,19 @@ def test_missing_hash_never_verifies():
     assert not security.verify_password(None, "anything")
 
 
+def test_password_expires_only_after_180_days():
+    changed = datetime(2026, 1, 1, tzinfo=UTC)
+    assert security.password_expired(changed, now=changed + timedelta(days=180)) is False
+    assert security.password_expired(changed, now=changed + timedelta(days=180, seconds=1)) is True
+
+
+def test_recent_password_is_matched_through_salted_hashes():
+    recent = [security.hash_password("first passphrase here"), security.hash_password("second passphrase here")]
+    assert security.is_recent_password("second passphrase here", recent)
+    assert not security.is_recent_password("third passphrase here", recent)
+    assert not security.is_recent_password("anything at all", [])
+
+
 def test_access_token_round_trip_has_unique_jti(signing_key):
     first, _ = security.issue_access_token("user-1", "alice", "triager")
     second, _ = security.issue_access_token("user-1", "alice", "triager")
@@ -37,6 +50,13 @@ def test_default_access_token_lifetime_is_60_minutes(signing_key, monkeypatch):
     monkeypatch.delenv("SAFE_ACCESS_TTL_MINUTES", raising=False)
     _, expires_at = security.issue_access_token("user-1", "alice", "triager")
     assert expires_at - datetime.now(UTC) == pytest.approx(timedelta(minutes=60), abs=timedelta(seconds=5))
+
+
+def test_refresh_token_lifetime_matches_the_access_token_by_default(monkeypatch):
+    # Both start at issue time, so the frontend renews the pair before the access token expires.
+    monkeypatch.delenv("SAFE_REFRESH_TTL_MINUTES", raising=False)
+    assert security.refresh_token_ttl() == timedelta(minutes=60)
+    assert security.refresh_token_ttl() == security.access_token_ttl()
 
 
 def test_expired_token_is_rejected(signing_key, monkeypatch):
