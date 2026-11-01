@@ -35,7 +35,8 @@ Every release entry states the **SAFE compatibility baseline**: the SAFE version
 - Reporter contact: readable only with the new permission `reporter_contact:read`, which no role holds by default (migration 0022). Every read is audited. Reporter-channel cases are hidden from `cases:read_all` callers until the case has an active assignment. An administrator cannot reset the password of a reporter account.
 - Case search: `GET /api/v1/cases` takes `q`, which matches the reference (partial, case-insensitive) or the start of the case ID. The header search uses it. Search only narrows the cases the caller can already see.
 - Case visibility is checked in one place for case reads, lists, history, assignments, reviews, and evidence. An import response names an existing case only when the caller can see it.
-- Sessions end after 60 minutes without activity. The browser renews the token pair on the first request made more than five minutes after the last renewal; refresh tokens rotate on every renewal.
+- Sessions end after 60 minutes without activity and at most 12 hours after login. The browser renews the token pair on the first request made more than five minutes after the last renewal; refresh tokens rotate on every renewal.
+- Saving a case classification requires `cases:read_all` as well as `cases:triage`. Without it the save is refused, because it would clear the free-text fields the caller cannot see.
 - Rate limits at the gateway: login is limited to 10 requests per minute per client, with a burst of 5, and the API to 30 requests per second, with a burst of 60. Excess requests get `429`. The API also keeps login counters in PostgreSQL, per username and per client, over a 15-minute window.
 - Validation errors (`422`) no longer repeat the rejected input, so a submitted password is not echoed back.
 
