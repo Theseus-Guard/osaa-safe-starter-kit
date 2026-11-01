@@ -74,7 +74,8 @@ export function AppShell({ profile, page, onLogout, children, heading }: Props) 
         </div>
       </header>
       <div className="flex flex-1">
-        <aside className="hidden w-56 shrink-0 flex-col border-r p-3 md:flex">
+        {/* Pinned under the header (h-14 on md and up), so Log out stays visible on long pages. */}
+        <aside className="hidden w-56 shrink-0 flex-col border-r p-3 md:sticky md:top-14 md:flex md:h-[calc(100svh-3.5rem)] md:self-start">
           <Navigation pages={visiblePages} current={page} />
           <Button variant="outline" className="mt-auto justify-start gap-2" onClick={onLogout}>
             <LogOut />
