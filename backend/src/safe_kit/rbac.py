@@ -34,7 +34,13 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
 class RoleOutcome(Enum):
     OK = "ok"
     ADMIN_GUARD = "admin_guard"
+    ADMIN_CASE_CONTENT = "admin_case_content"
     UNKNOWN_PERMISSION = "unknown_permission"
+
+
+# Permissions that read or change case content, including the reporter contact. The admin role never holds them:
+# platform administration does not reach case content (see DEFAULT_ROLE_PERMISSIONS and plans/01, R08).
+CASE_CONTENT_PERMISSION_PREFIXES = ("cases:", "evidence:", "reviews:", "reporter_contact:", "disclosures:")
 
 
 def permissions_for_role(role: str) -> frozenset[str]:
@@ -81,8 +87,11 @@ def set_role_permissions(role: str, permissions: frozenset[str], actor_id: str |
 
     The audit row lists the granted and revoked permissions and commits with the change.
     """
-    if role == "admin" and not ADMIN_REQUIRED_PERMISSIONS <= permissions:
-        return RoleOutcome.ADMIN_GUARD
+    if role == "admin":
+        if not ADMIN_REQUIRED_PERMISSIONS <= permissions:
+            return RoleOutcome.ADMIN_GUARD
+        if any(name.startswith(CASE_CONTENT_PERMISSION_PREFIXES) for name in permissions):
+            return RoleOutcome.ADMIN_CASE_CONTENT
     with connect() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (ROLE_LOCK_KEY,))
         known = {

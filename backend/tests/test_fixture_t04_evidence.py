@@ -223,3 +223,20 @@ def test_unknown_evidence_custody_and_download_are_404_not_an_empty_success(evid
     assert custody.status_code == 404
     assert download.status_code == 404
     assert custody.json() == {"detail": "evidence not found"}
+
+
+# --- T05 gap: no model, runtime or reasoning record in F1 ---------------------------------------------------------------
+
+MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "T05 model, runtime and reasoning record is not in F1: no migration stores the model, the runtime version, "
+        "the provider alias, or the reasoning text of an assessment"
+    ),
+)
+def test_model_runtime_and_reasoning_have_a_place_in_the_schema():
+    schema = "\n".join(path.read_text(encoding="utf-8") for path in sorted(MIGRATIONS_DIR.glob("*.sql"))).lower()
+    assert all(word in schema for word in ("model", "runtime", "reasoning"))
