@@ -15,13 +15,19 @@ interface Props {
   caseId: string;
   deadlines: DeadlineTask[];
   closed: boolean;
+  // The caller has cases:read_all or cases:read_assigned. Without it the status actions are locked.
+  canUpdate: boolean;
+  // The caller has cases:triage. Without it "Not applicable" is locked.
+  canMarkNotApplicable: boolean;
   onChanged: (detail: CaseDetail) => void;
 }
 
 const CLOSED_REASON = "The case is closed. Deadlines cannot be changed.";
 const NOT_STORED_REASON = "This deadline is not stored yet and cannot be changed.";
+const NO_UPDATE_REASON = "Your account cannot change deadlines.";
+const NOT_TRIAGER_REASON = "Only a triager can mark a deadline not applicable.";
 
-export function CaseDeadlines({ caseId, deadlines, closed, onChanged }: Props) {
+export function CaseDeadlines({ caseId, deadlines, closed, canUpdate, canMarkNotApplicable, onChanged }: Props) {
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
   // Only one row at a time asks for a not-applicable reason.
   const [reasonFor, setReasonFor] = useState<string | null>(null);
@@ -75,7 +81,14 @@ export function CaseDeadlines({ caseId, deadlines, closed, onChanged }: Props) {
               </TableHeader>
               <TableBody>
                 {deadlines.map((task) => {
-                  const lockReason = closed ? CLOSED_REASON : task.id === null ? NOT_STORED_REASON : undefined;
+                  const lockReason = closed
+                    ? CLOSED_REASON
+                    : task.id === null
+                      ? NOT_STORED_REASON
+                      : !canUpdate
+                        ? NO_UPDATE_REASON
+                        : undefined;
+                  const notApplicableLock = lockReason ?? (canMarkNotApplicable ? undefined : NOT_TRIAGER_REASON);
                   const busy = busyTaskId === task.id;
                   return (
                     <TableRow key={task.id ?? `${task.kind}-${task.due_at}`}>
@@ -130,7 +143,7 @@ export function CaseDeadlines({ caseId, deadlines, closed, onChanged }: Props) {
                             )}
                             {task.status !== "not_applicable" && (
                               <RowAction
-                                reason={lockReason}
+                                reason={notApplicableLock}
                                 disabled={busy}
                                 onClick={() => {
                                   setReason("");

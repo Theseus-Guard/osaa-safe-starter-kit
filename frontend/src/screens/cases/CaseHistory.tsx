@@ -80,9 +80,11 @@ export function CaseHistory({ caseId, refreshKey }: Props) {
                         <Timestamp value={entry.created_at} />
                       </TableCell>
                       <TableCell>{historyActionLabel(entry.action)}</TableCell>
-                      <TableCell className="font-mono text-xs">{entry.actor_id ?? "Not shown"}</TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {entry.actor_id ?? <span className="font-sans text-muted-foreground">Restricted</span>}
+                      </TableCell>
                       <TableCell className="whitespace-normal">
-                        {entry.details === null && <span className="text-muted-foreground">Not shown</span>}
+                        {entry.details === null && <span className="text-muted-foreground">Restricted</span>}
                         {entry.details !== null && lines.length === 0 && (
                           <span className="text-muted-foreground">None recorded</span>
                         )}

@@ -39,14 +39,14 @@ beforeEach(() => {
 describe("CaseAssignments", () => {
   it("shows an empty state when nobody is assigned", async () => {
     list.mockResolvedValue([]);
-    render(<CaseAssignments caseId="case-1" closed={false} />);
+    render(<CaseAssignments caseId="case-1" closed={false} canAssign />);
 
     expect(await screen.findByText("No one is assigned to this case yet.")).toBeInTheDocument();
   });
 
   it("lists the assignees with their role", async () => {
     list.mockResolvedValue([ASSIGNMENT]);
-    render(<CaseAssignments caseId="case-1" closed={false} />);
+    render(<CaseAssignments caseId="case-1" closed={false} canAssign />);
 
     const row = (await screen.findByText("example-investigator")).closest("tr") as HTMLElement;
     expect(within(row).getByText("Investigator")).toBeInTheDocument();
@@ -57,7 +57,7 @@ describe("CaseAssignments", () => {
     list.mockResolvedValueOnce([ASSIGNMENT]).mockResolvedValueOnce([]);
     remove.mockResolvedValue(undefined);
     const user = userEvent.setup();
-    render(<CaseAssignments caseId="case-1" closed={false} />);
+    render(<CaseAssignments caseId="case-1" closed={false} canAssign />);
 
     await user.click(await screen.findByRole("button", { name: "Remove" }));
 
@@ -68,15 +68,23 @@ describe("CaseAssignments", () => {
 
   it("locks removal on a closed case", async () => {
     list.mockResolvedValue([ASSIGNMENT]);
-    render(<CaseAssignments caseId="case-1" closed />);
+    render(<CaseAssignments caseId="case-1" closed canAssign />);
 
     expect(await screen.findByRole("button", { name: "Remove" })).toBeDisabled();
+  });
+
+  it("locks removal for a caller without cases:assign", async () => {
+    list.mockResolvedValue([ASSIGNMENT]);
+    render(<CaseAssignments caseId="case-1" closed={false} canAssign={false} />);
+
+    expect(await screen.findByRole("button", { name: "Remove" })).toBeDisabled();
+    expect(list).toHaveBeenCalledWith("case-1");
   });
 
   it("shows the server message when the list cannot be loaded", async () => {
     const { ApiError } = await vi.importActual<typeof import("../../api")>("../../api");
     list.mockRejectedValue(new ApiError(404, "case not found"));
-    render(<CaseAssignments caseId="case-1" closed={false} />);
+    render(<CaseAssignments caseId="case-1" closed={false} canAssign />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("No case with that ID is available to your account.");
   });

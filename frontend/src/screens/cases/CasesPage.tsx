@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { CaseDetail, CasePage, listCases } from "../../api";
 import { describeError } from "../../messages";
+import { caseAbilities } from "../../permissions";
 import { NewCaseDialog } from "./NewCaseDialog";
 import { Timestamp } from "@/components/timestamp";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -14,7 +15,13 @@ const PAGE_SIZE = 20;
 // A bounded height with a scroll container keeps the header sticky.
 const TABLE_SCROLL_CLASS = "max-h-[70vh] overflow-auto rounded-md border [&_[data-slot=table-container]]:overflow-visible";
 
-export function CasesPage() {
+interface Props {
+  // The caller's permission names from /auth/me.
+  permissions: readonly string[];
+}
+
+export function CasesPage({ permissions }: Props) {
+  const canSubmit = caseAbilities(permissions).canSubmit;
   const [offset, setOffset] = useState(0);
   const [page, setPage] = useState<CasePage | null>(null);
   const [loading, setLoading] = useState(false);
@@ -54,11 +61,13 @@ export function CasesPage() {
     <Card>
       <CardHeader>
         <CardTitle>Your cases</CardTitle>
-        <CardAction>
-          <Button size="sm" onClick={() => setDialogOpen(true)}>
-            New case
-          </Button>
-        </CardAction>
+        {canSubmit && (
+          <CardAction>
+            <Button size="sm" onClick={() => setDialogOpen(true)}>
+              New case
+            </Button>
+          </CardAction>
+        )}
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {error && (
@@ -128,7 +137,7 @@ export function CasesPage() {
           </div>
         </div>
       </CardContent>
-      <NewCaseDialog open={dialogOpen} onOpenChange={setDialogOpen} onCreated={handleCreated} />
+      {canSubmit && <NewCaseDialog open={dialogOpen} onOpenChange={setDialogOpen} onCreated={handleCreated} />}
     </Card>
   );
 }

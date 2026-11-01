@@ -1,6 +1,7 @@
 import { ReactNode, useEffect, useState } from "react";
 import { CaseDetail, getCase } from "../../api";
 import { describeError } from "../../messages";
+import { caseAbilities } from "../../permissions";
 import { CaseAssignments } from "./CaseAssignments";
 import { CaseClosure } from "./CaseClosure";
 import { CaseDeadlines } from "./CaseDeadlines";
@@ -14,9 +15,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 
 interface Props {
   caseId: string;
+  // The caller's permission names from /auth/me.
+  permissions: readonly string[];
 }
 
-export function CaseDetailPage({ caseId }: Props) {
+export function CaseDetailPage({ caseId, permissions }: Props) {
+  const abilities = caseAbilities(permissions);
   const [detail, setDetail] = useState<CaseDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Every action on the case changes the history, so the history view reloads after each one.
@@ -86,14 +90,29 @@ export function CaseDetailPage({ caseId }: Props) {
             status={detail.status}
             closedAt={detail.closed_at}
             closeReason={detail.close_reason}
+            reopenReason={detail.reopen_reason ?? null}
+            canClose={abilities.canClose}
             onChanged={applyChange}
           />
 
-          <CaseDeadlines caseId={detail.id} deadlines={detail.deadlines} closed={closed} onChanged={applyChange} />
+          <CaseDeadlines
+            caseId={detail.id}
+            deadlines={detail.deadlines}
+            closed={closed}
+            canUpdate={abilities.canUpdateDeadlines}
+            canMarkNotApplicable={abilities.canMarkNotApplicable}
+            onChanged={applyChange}
+          />
 
-          <CaseAssignments caseId={detail.id} closed={closed} />
+          <CaseAssignments caseId={detail.id} closed={closed} canAssign={abilities.canAssign} />
 
-          <CaseEvidence caseId={detail.id} />
+          {(abilities.canReadEvidence || abilities.canWriteEvidence) && (
+            <CaseEvidence
+              caseId={detail.id}
+              canRead={abilities.canReadEvidence}
+              canWrite={abilities.canWriteEvidence}
+            />
+          )}
 
           <CaseHistory caseId={detail.id} refreshKey={historyRevision} />
         </>

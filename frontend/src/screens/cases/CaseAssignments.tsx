@@ -14,9 +14,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 interface Props {
   caseId: string;
   closed: boolean;
+  // The caller has cases:assign. Without it removal is locked.
+  canAssign: boolean;
 }
 
-export function CaseAssignments({ caseId, closed }: Props) {
+export function CaseAssignments({ caseId, closed, canAssign }: Props) {
   const [items, setItems] = useState<Assignment[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyUserId, setBusyUserId] = useState<string | null>(null);
@@ -89,11 +91,19 @@ export function CaseAssignments({ caseId, closed }: Props) {
                       <Timestamp value={assignment.assigned_at} />
                     </TableCell>
                     <TableCell>
-                      <DisabledHint reason={closed ? "The case is closed. Assignments cannot be changed." : undefined}>
+                      <DisabledHint
+                        reason={
+                          closed
+                            ? "The case is closed. Assignments cannot be changed."
+                            : !canAssign
+                              ? "Your account cannot change assignments."
+                              : undefined
+                        }
+                      >
                         <Button
                           size="sm"
                           variant="outline"
-                          disabled={closed || busyUserId === assignment.user_id}
+                          disabled={closed || !canAssign || busyUserId === assignment.user_id}
                           onClick={() => void remove(assignment)}
                         >
                           Remove

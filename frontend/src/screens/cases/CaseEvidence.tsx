@@ -32,9 +32,13 @@ const PAGE_SIZE = 20;
 
 interface Props {
   caseId: string;
+  // evidence:read. Without it the list, downloads and custody logs are not loaded or shown.
+  canRead: boolean;
+  // evidence:write. Without it the upload form is not shown.
+  canWrite: boolean;
 }
 
-export function CaseEvidence({ caseId }: Props) {
+export function CaseEvidence({ caseId, canRead, canWrite }: Props) {
   const [offset, setOffset] = useState(0);
   const [page, setPage] = useState<EvidencePage | null>(null);
   const [loading, setLoading] = useState(false);
@@ -46,6 +50,8 @@ export function CaseEvidence({ caseId }: Props) {
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
   useEffect(() => {
+    // Without evidence:read the server would answer 403, so the list is not requested at all.
+    if (!canRead) return;
     let stale = false;
     setLoading(true);
     listEvidence(caseId, PAGE_SIZE, offset)
@@ -63,7 +69,7 @@ export function CaseEvidence({ caseId }: Props) {
     return () => {
       stale = true;
     };
-  }, [caseId, offset, version]);
+  }, [caseId, offset, version, canRead]);
 
   function handleUploaded(item: EvidenceItem) {
     toast.success(`${item.original_filename} was uploaded.`);
@@ -97,66 +103,70 @@ export function CaseEvidence({ caseId }: Props) {
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <EvidenceUploadForm caseId={caseId} onUploaded={handleUploaded} />
+        {canWrite && <EvidenceUploadForm caseId={caseId} onUploaded={handleUploaded} />}
 
-        {error && (
-          <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
+        {canRead && (
+          <>
+            {error && (
+              <Alert variant="destructive">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+            {page && page.items.length === 0 && <p className="text-sm text-muted-foreground">No evidence uploaded yet.</p>}
+            {page && page.items.length > 0 && (
+              <div className="max-h-[50vh] overflow-auto rounded-md border [&_[data-slot=table-container]]:overflow-visible">
+                <Table>
+                  <TableHeader className="sticky top-0 z-10 bg-muted">
+                    <TableRow>
+                      <TableHead>File</TableHead>
+                      <TableHead>Size</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>SHA-256</TableHead>
+                      <TableHead>Uploaded</TableHead>
+                      <TableHead>Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {page.items.map((item) => (
+                      <EvidenceRowGroup
+                        key={item.id}
+                        item={item}
+                        custodyOpen={openCustodyId === item.id}
+                        custodyRevision={custodyRevision}
+                        downloading={downloadingId === item.id}
+                        onToggleCustody={() => setOpenCustodyId(openCustodyId === item.id ? null : item.id)}
+                        onDownload={() => void download(item)}
+                      />
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm text-muted-foreground" aria-live="polite">
+                {loading ? "Loading…" : `Showing ${shownFrom}–${shownTo} of ${page?.total ?? 0}`}
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={loading || !page || page.offset === 0}
+                  onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+                >
+                  Previous
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={loading || !page || page.offset + page.limit >= page.total}
+                  onClick={() => setOffset(offset + PAGE_SIZE)}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          </>
         )}
-        {page && page.items.length === 0 && <p className="text-sm text-muted-foreground">No evidence uploaded yet.</p>}
-        {page && page.items.length > 0 && (
-          <div className="max-h-[50vh] overflow-auto rounded-md border [&_[data-slot=table-container]]:overflow-visible">
-            <Table>
-              <TableHeader className="sticky top-0 z-10 bg-muted">
-                <TableRow>
-                  <TableHead>File</TableHead>
-                  <TableHead>Size</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>SHA-256</TableHead>
-                  <TableHead>Uploaded</TableHead>
-                  <TableHead>Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {page.items.map((item) => (
-                  <EvidenceRowGroup
-                    key={item.id}
-                    item={item}
-                    custodyOpen={openCustodyId === item.id}
-                    custodyRevision={custodyRevision}
-                    downloading={downloadingId === item.id}
-                    onToggleCustody={() => setOpenCustodyId(openCustodyId === item.id ? null : item.id)}
-                    onDownload={() => void download(item)}
-                  />
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm text-muted-foreground" aria-live="polite">
-            {loading ? "Loading…" : `Showing ${shownFrom}–${shownTo} of ${page?.total ?? 0}`}
-          </p>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={loading || !page || page.offset === 0}
-              onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
-            >
-              Previous
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={loading || !page || page.offset + page.limit >= page.total}
-              onClick={() => setOffset(offset + PAGE_SIZE)}
-            >
-              Next
-            </Button>
-          </div>
-        </div>
       </CardContent>
     </Card>
   );

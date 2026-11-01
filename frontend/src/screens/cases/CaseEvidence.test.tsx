@@ -66,14 +66,14 @@ beforeEach(() => {
 describe("CaseEvidence", () => {
   it("shows an empty state when no evidence exists", async () => {
     list.mockResolvedValue(evidencePage([]));
-    render(<CaseEvidence caseId="case-1" />);
+    render(<CaseEvidence caseId="case-1" canRead canWrite />);
 
     expect(await screen.findByText("No evidence uploaded yet.")).toBeInTheDocument();
   });
 
   it("lists the file with its size, status and a shortened checksum", async () => {
     list.mockResolvedValue(evidencePage([ITEM]));
-    render(<CaseEvidence caseId="case-1" />);
+    render(<CaseEvidence caseId="case-1" canRead canWrite />);
 
     const row = (await screen.findByText("notes.txt")).closest("tr") as HTMLElement;
     expect(within(row).getByText("2.0 KB")).toBeInTheDocument();
@@ -83,7 +83,7 @@ describe("CaseEvidence", () => {
 
   it("keeps the upload button disabled until a file is chosen", async () => {
     list.mockResolvedValue(evidencePage([]));
-    render(<CaseEvidence caseId="case-1" />);
+    render(<CaseEvidence caseId="case-1" canRead canWrite />);
 
     expect(await screen.findByRole("button", { name: "Upload" })).toBeDisabled();
   });
@@ -92,7 +92,7 @@ describe("CaseEvidence", () => {
     list.mockResolvedValueOnce(evidencePage([])).mockResolvedValueOnce(evidencePage([ITEM]));
     upload.mockResolvedValue(ITEM);
     const user = userEvent.setup();
-    render(<CaseEvidence caseId="case-1" />);
+    render(<CaseEvidence caseId="case-1" canRead canWrite />);
 
     const file = new File(["example text"], "notes.txt", { type: "text/plain" });
     await user.upload(await screen.findByLabelText(/Upload evidence/), file);
@@ -109,7 +109,7 @@ describe("CaseEvidence", () => {
     upload.mockRejectedValue(new ApiError(415, "media type is not allowed"));
     // The file type is refused by the server, so the picker must not filter it out before the upload.
     const user = userEvent.setup({ applyAccept: false });
-    render(<CaseEvidence caseId="case-1" />);
+    render(<CaseEvidence caseId="case-1" canRead canWrite />);
 
     await user.upload(await screen.findByLabelText(/Upload evidence/), new File(["x"], "tool.exe"));
     await user.click(screen.getByRole("button", { name: "Upload" }));
@@ -122,7 +122,7 @@ describe("CaseEvidence", () => {
     list.mockResolvedValue(evidencePage([ITEM]));
     download.mockResolvedValue(bytes);
     const user = userEvent.setup();
-    render(<CaseEvidence caseId="case-1" />);
+    render(<CaseEvidence caseId="case-1" canRead canWrite />);
 
     await user.click(await screen.findByRole("button", { name: "Download" }));
 
@@ -132,7 +132,7 @@ describe("CaseEvidence", () => {
 
   it("does not offer a download for evidence that is not available", async () => {
     list.mockResolvedValue(evidencePage([{ ...ITEM, status: "pending" }]));
-    render(<CaseEvidence caseId="case-1" />);
+    render(<CaseEvidence caseId="case-1" canRead canWrite />);
 
     expect(await screen.findByRole("button", { name: "Download" })).toBeDisabled();
   });
@@ -149,7 +149,7 @@ describe("CaseEvidence", () => {
       },
     ]);
     const user = userEvent.setup();
-    render(<CaseEvidence caseId="case-1" />);
+    render(<CaseEvidence caseId="case-1" canRead canWrite />);
 
     await user.click(await screen.findByRole("button", { name: "Custody" }));
 
@@ -158,5 +158,31 @@ describe("CaseEvidence", () => {
     expect(within(log).getByText("Size bytes: 2048")).toBeInTheDocument();
     expect(custody).toHaveBeenCalledWith("evidence-1");
     expect(screen.getByRole("button", { name: "Hide custody" })).toBeInTheDocument();
+  });
+
+  it("does not request the list or offer downloads and custody without evidence:read", async () => {
+    render(<CaseEvidence caseId="case-1" canRead={false} canWrite />);
+
+    expect(await screen.findByLabelText(/Upload evidence/)).toBeInTheDocument();
+    expect(list).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Download" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Custody" })).not.toBeInTheDocument();
+  });
+
+  it("hides the upload form without evidence:write but keeps the list", async () => {
+    list.mockResolvedValue(evidencePage([ITEM]));
+    render(<CaseEvidence caseId="case-1" canRead canWrite={false} />);
+
+    expect(await screen.findByText("notes.txt")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Upload evidence/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Upload" })).not.toBeInTheDocument();
+  });
+
+  it("shows the server message when the list is refused", async () => {
+    const { ApiError } = await vi.importActual<typeof import("../../api")>("../../api");
+    list.mockRejectedValue(new ApiError(403, "forbidden"));
+    render(<CaseEvidence caseId="case-1" canRead canWrite={false} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("You do not have permission for this action.");
   });
 });

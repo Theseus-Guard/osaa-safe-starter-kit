@@ -31,6 +31,8 @@ export interface Me extends UserProfile {
   password_change_required: boolean;
   // True only for an admin when no system timezone is set yet.
   timezone_setup_required: boolean;
+  // The caller's permission names. The UI uses them only to hide or lock controls. The backend checks every request.
+  permissions: string[];
 }
 
 export interface CreatedUser {
@@ -328,6 +330,8 @@ export interface CaseDetail {
   created_at: string;
   closed_at: string | null;
   close_reason: string | null;
+  // Reason of the latest reopen. Null or absent when the case has never been reopened.
+  reopen_reason?: string | null;
   deadlines: DeadlineTask[];
 }
 
@@ -359,6 +363,11 @@ export function createCase(body: CaseCreateBody): Promise<CaseDetail> {
 // The reason is stored on the case and shown after closure.
 export function closeCase(caseId: string, reason: string): Promise<CaseDetail> {
   return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}/close`, { method: "POST", json: { reason } });
+}
+
+// Needs cases:close, the same permission as closing. The reason is required and stored with the case.
+export function reopenCase(caseId: string, reason: string): Promise<CaseDetail> {
+  return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}/reopen`, { method: "POST", json: { reason } });
 }
 
 // The reason is required for not_applicable and rejected for every other status.
@@ -414,7 +423,7 @@ export function getCaseHistory(caseId: string, limit: number, offset: number): P
   return request<HistoryPage>(`/cases/${encodeURIComponent(caseId)}/history?limit=${limit}&offset=${offset}`);
 }
 
-// Evidence. The list and download need the case to be visible to the caller. Upload needs evidence:write.
+// Evidence. The list, download and custody log need evidence:read. Upload needs evidence:write. Both also need the case to be visible.
 export interface EvidenceItem {
   id: string;
   case_id: string;

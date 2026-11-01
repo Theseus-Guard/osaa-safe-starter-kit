@@ -352,6 +352,16 @@ describe("case and evidence endpoints", () => {
     expect(bodyOf(0)).toEqual({ reason: "Handled" });
   });
 
+  it("reopens a case with the reason", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+
+    await api.reopenCase("case/1", "New evidence");
+
+    expect(urlOf(0)).toBe("/api/v1/cases/case%2F1/reopen");
+    expect(methodOf(0)).toBe("POST");
+    expect(bodyOf(0)).toEqual({ reason: "New evidence" });
+  });
+
   it("sends the reason only for a not-applicable deadline", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, {})).mockResolvedValueOnce(jsonResponse(200, {}));
 

@@ -45,7 +45,12 @@ function HomeView({ profile, notice, onLogout, onPasswordChanged }: Props) {
         </Alert>
       )}
       {page === "overview" && <Overview profile={profile} notice={notice} />}
-      {page === "cases" && (caseId === null ? <CasesPage /> : <CaseDetailPage caseId={caseId} />)}
+      {page === "cases" &&
+        (caseId === null ? (
+          <CasesPage permissions={profile.permissions} />
+        ) : (
+          <CaseDetailPage caseId={caseId} permissions={profile.permissions} />
+        ))}
       {page === "users" && isAdmin && <UsersPage currentUserId={profile.id} />}
       {page === "privacy" && isAdmin && <PrivacyPage />}
       {page === "roles" && isAdmin && <RolesMatrix editable />}

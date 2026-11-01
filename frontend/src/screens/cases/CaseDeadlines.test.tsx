@@ -48,7 +48,16 @@ beforeEach(() => {
 
 describe("CaseDeadlines", () => {
   it("shows each task with its status and the actions that apply", () => {
-    render(<CaseDeadlines caseId="case-1" deadlines={TASKS} closed={false} onChanged={() => {}} />);
+    render(
+      <CaseDeadlines
+        caseId="case-1"
+        deadlines={TASKS}
+        closed={false}
+        canUpdate
+        canMarkNotApplicable
+        onChanged={() => {}}
+      />,
+    );
 
     expect(screen.getByText("Preliminary safe report")).toBeInTheDocument();
     const openRow = screen.getByText("Preliminary safe report").closest("tr") as HTMLElement;
@@ -66,7 +75,16 @@ describe("CaseDeadlines", () => {
     update.mockResolvedValue(updated);
     const onChanged = vi.fn();
     const user = userEvent.setup();
-    render(<CaseDeadlines caseId="case-1" deadlines={TASKS} closed={false} onChanged={onChanged} />);
+    render(
+      <CaseDeadlines
+        caseId="case-1"
+        deadlines={TASKS}
+        closed={false}
+        canUpdate
+        canMarkNotApplicable
+        onChanged={onChanged}
+      />,
+    );
 
     const openRow = screen.getByText("Preliminary safe report").closest("tr") as HTMLElement;
     await user.click(openRow.querySelector("button") as HTMLButtonElement);
@@ -78,7 +96,16 @@ describe("CaseDeadlines", () => {
 
   it("asks for a reason before a task is marked not applicable", async () => {
     const user = userEvent.setup();
-    render(<CaseDeadlines caseId="case-1" deadlines={TASKS} closed={false} onChanged={() => {}} />);
+    render(
+      <CaseDeadlines
+        caseId="case-1"
+        deadlines={TASKS}
+        closed={false}
+        canUpdate
+        canMarkNotApplicable
+        onChanged={() => {}}
+      />,
+    );
 
     await user.click(within(openRow()).getByRole("button", { name: "Not applicable" }));
     await user.click(screen.getByRole("button", { name: "Confirm" }));
@@ -90,7 +117,16 @@ describe("CaseDeadlines", () => {
   it("sends the trimmed reason with a not-applicable change", async () => {
     update.mockResolvedValue({ id: "case-1" } as CaseDetail);
     const user = userEvent.setup();
-    render(<CaseDeadlines caseId="case-1" deadlines={TASKS} closed={false} onChanged={() => {}} />);
+    render(
+      <CaseDeadlines
+        caseId="case-1"
+        deadlines={TASKS}
+        closed={false}
+        canUpdate
+        canMarkNotApplicable
+        onChanged={() => {}}
+      />,
+    );
 
     await user.click(within(openRow()).getByRole("button", { name: "Not applicable" }));
     await user.type(screen.getByLabelText("Reason Preliminary safe report does not apply"), "  Not a reportable incident  ");
@@ -105,7 +141,16 @@ describe("CaseDeadlines", () => {
     const { ApiError } = await vi.importActual<typeof import("../../api")>("../../api");
     update.mockRejectedValue(new ApiError(403, "only a triager may mark a deadline not applicable"));
     const user = userEvent.setup();
-    render(<CaseDeadlines caseId="case-1" deadlines={TASKS} closed={false} onChanged={() => {}} />);
+    render(
+      <CaseDeadlines
+        caseId="case-1"
+        deadlines={TASKS}
+        closed={false}
+        canUpdate
+        canMarkNotApplicable
+        onChanged={() => {}}
+      />,
+    );
 
     await user.click(within(openRow()).getByRole("button", { name: "Not applicable" }));
     await user.type(screen.getByLabelText("Reason Preliminary safe report does not apply"), "Not relevant");
@@ -117,7 +162,9 @@ describe("CaseDeadlines", () => {
   });
 
   it("locks the actions on a closed case", () => {
-    render(<CaseDeadlines caseId="case-1" deadlines={TASKS} closed onChanged={() => {}} />);
+    render(
+      <CaseDeadlines caseId="case-1" deadlines={TASKS} closed canUpdate canMarkNotApplicable onChanged={() => {}} />,
+    );
 
     for (const button of screen.getAllByRole("button", { name: /Mark done|Set open|Not applicable/ })) {
       expect(button).toBeDisabled();
@@ -126,14 +173,70 @@ describe("CaseDeadlines", () => {
 
   it("locks the actions on a task that is not stored yet", () => {
     const unstored: DeadlineTask = { ...TASKS[0], id: null };
-    render(<CaseDeadlines caseId="case-1" deadlines={[unstored]} closed={false} onChanged={() => {}} />);
+    render(
+      <CaseDeadlines
+        caseId="case-1"
+        deadlines={[unstored]}
+        closed={false}
+        canUpdate
+        canMarkNotApplicable
+        onChanged={() => {}}
+      />,
+    );
 
     expect(screen.getByRole("button", { name: "Mark done" })).toBeDisabled();
   });
 
+  it("locks every status action for a caller without case update rights", () => {
+    render(
+      <CaseDeadlines
+        caseId="case-1"
+        deadlines={TASKS}
+        closed={false}
+        canUpdate={false}
+        canMarkNotApplicable
+        onChanged={() => {}}
+      />,
+    );
+
+    expect(within(openRow()).getByRole("button", { name: "Mark done" })).toBeDisabled();
+    expect(within(openRow()).getByRole("button", { name: "Not applicable" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Set open" })).toBeDisabled();
+  });
+
+  it("locks only Not applicable for a caller who is not a triager", async () => {
+    update.mockResolvedValue({ id: "case-1" } as CaseDetail);
+    const user = userEvent.setup();
+    render(
+      <CaseDeadlines
+        caseId="case-1"
+        deadlines={TASKS}
+        closed={false}
+        canUpdate
+        canMarkNotApplicable={false}
+        onChanged={() => {}}
+      />,
+    );
+
+    expect(within(openRow()).getByRole("button", { name: "Not applicable" })).toBeDisabled();
+    expect(within(openRow()).getByRole("button", { name: "Mark done" })).toBeEnabled();
+
+    await user.click(within(openRow()).getByRole("button", { name: "Mark done" }));
+    expect(update).toHaveBeenCalledWith("case-1", "task-1", "done", undefined);
+  });
+
   it("shows the recorded reason for a not-applicable task", () => {
     const na: DeadlineTask = { ...TASKS[0], status: "not_applicable", not_applicable_reason: "Out of scope" };
-    render(<CaseDeadlines caseId="case-1" deadlines={[na]} closed={false} onChanged={() => {}} />);
+    render(
+      <CaseDeadlines
+        caseId="case-1"
+        deadlines={[na]}
+        closed={false}
+        canUpdate
+        canMarkNotApplicable
+        onChanged={() => {}}
+      />,
+    );
 
     expect(screen.getByText("Reason: Out of scope")).toBeInTheDocument();
   });

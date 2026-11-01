@@ -28,6 +28,18 @@ const assignments = vi.mocked(listAssignments);
 const evidence = vi.mocked(listEvidence);
 const history = vi.mocked(getCaseHistory);
 
+// A triager with full case access and evidence access.
+const FULL_ACCESS = [
+  "cases:read_all",
+  "cases:triage",
+  "cases:assign",
+  "cases:close",
+  "evidence:read",
+  "evidence:write",
+];
+// A reporter can submit cases and see their own. The case controls stay locked and evidence is hidden.
+const REPORTER = ["cases:submit", "cases:read_own"];
+
 const OPEN_CASE: CaseDetail = {
   id: "case-1",
   reference: "CASE-1",
@@ -59,7 +71,7 @@ beforeEach(() => {
 
 describe("CaseDetailPage", () => {
   it("shows the case with its deadlines, assignments, evidence and history", async () => {
-    render(<CaseDetailPage caseId="case-1" />);
+    render(<CaseDetailPage caseId="case-1" permissions={FULL_ACCESS} />);
 
     expect(await screen.findByText("Example incident")).toBeInTheDocument();
     expect(screen.getByText("Deadline tasks")).toBeInTheDocument();
@@ -73,7 +85,7 @@ describe("CaseDetailPage", () => {
   it("reloads the history after the case is closed", async () => {
     close.mockResolvedValue({ ...OPEN_CASE, status: "closed", closed_at: "2026-11-01T07:00:00Z", close_reason: "Done" });
     const user = userEvent.setup();
-    render(<CaseDetailPage caseId="case-1" />);
+    render(<CaseDetailPage caseId="case-1" permissions={FULL_ACCESS} />);
 
     await screen.findByText("Example incident");
     expect(history).toHaveBeenCalledTimes(1);
@@ -83,5 +95,62 @@ describe("CaseDetailPage", () => {
 
     await waitFor(() => expect(history).toHaveBeenCalledTimes(2));
     expect(await screen.findByText("Closed")).toBeInTheDocument();
+  });
+
+  it("hides the evidence section without evidence:read or evidence:write", async () => {
+    render(<CaseDetailPage caseId="case-1" permissions={REPORTER} />);
+
+    expect(await screen.findByText("Example incident")).toBeInTheDocument();
+    expect(screen.queryByText("Evidence", { exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Upload evidence/)).not.toBeInTheDocument();
+    expect(evidence).not.toHaveBeenCalled();
+  });
+
+  it("shows the evidence list without the upload form when the caller can only read", async () => {
+    render(<CaseDetailPage caseId="case-1" permissions={["cases:read_all", "evidence:read"]} />);
+
+    expect(await screen.findByText("Evidence", { exact: true })).toBeInTheDocument();
+    expect(evidence).toHaveBeenCalledWith("case-1", 20, 0);
+    expect(screen.queryByLabelText(/Upload evidence/)).not.toBeInTheDocument();
+  });
+
+  it("shows the upload form without loading the list when the caller can only write", async () => {
+    render(<CaseDetailPage caseId="case-1" permissions={["cases:read_assigned", "evidence:write"]} />);
+
+    expect(await screen.findByLabelText(/Upload evidence/)).toBeInTheDocument();
+    expect(evidence).not.toHaveBeenCalled();
+  });
+
+  it("locks the close form for a reporter and offers no reopen", async () => {
+    render(<CaseDetailPage caseId="case-1" permissions={REPORTER} />);
+
+    expect(await screen.findByText("Your account cannot close cases.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Close case" })).not.toBeInTheDocument();
+  });
+
+  it("offers reopen on a closed case to a caller with cases:close", async () => {
+    get.mockResolvedValue({ ...OPEN_CASE, status: "closed", closed_at: "2026-11-01T07:00:00Z", close_reason: "Done" });
+    render(<CaseDetailPage caseId="case-1" permissions={FULL_ACCESS} />);
+
+    expect(await screen.findByRole("button", { name: "Reopen case" })).toBeInTheDocument();
+  });
+
+  it("hides reopen on a closed case from a caller without cases:close", async () => {
+    get.mockResolvedValue({ ...OPEN_CASE, status: "closed", closed_at: "2026-11-01T07:00:00Z", close_reason: "Done" });
+    render(<CaseDetailPage caseId="case-1" permissions={["cases:read_all", "evidence:read"]} />);
+
+    expect(await screen.findByText("Closed")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reopen case" })).not.toBeInTheDocument();
+  });
+
+  it("shows the reopen reason from the case detail", async () => {
+    get.mockResolvedValue({
+      ...OPEN_CASE,
+      status: "open",
+      reopen_reason: "New evidence arrived",
+    });
+    render(<CaseDetailPage caseId="case-1" permissions={FULL_ACCESS} />);
+
+    expect(await screen.findByText("New evidence arrived")).toBeInTheDocument();
   });
 });

@@ -46,7 +46,7 @@ describe("CaseHistory", () => {
     expect(screen.getByText("Status: open -> closed")).toBeInTheDocument();
   });
 
-  it("marks actor and details as not shown for a stripped entry", async () => {
+  it("labels the actor and the details as restricted for a stripped entry", async () => {
     history.mockResolvedValue(
       page({
         total: 1,
@@ -56,8 +56,60 @@ describe("CaseHistory", () => {
     render(<CaseHistory caseId="case-1" refreshKey={0} />);
 
     expect(await screen.findByText("Case created")).toBeInTheDocument();
-    expect(screen.getByText("Not shown", { selector: "td.font-mono" })).toBeInTheDocument();
-    expect(screen.getByText("Not shown", { selector: "td span" })).toBeInTheDocument();
+    expect(screen.getAllByText("Restricted")).toHaveLength(2);
+    expect(screen.queryByText("Not shown")).not.toBeInTheDocument();
+    expect(screen.queryByText("None recorded")).not.toBeInTheDocument();
+  });
+
+  it("labels only the actor as restricted when the details are visible", async () => {
+    history.mockResolvedValue(
+      page({
+        total: 1,
+        items: [
+          {
+            id: "entry-1",
+            action: "case.reopened",
+            created_at: "2026-11-01T06:00:00Z",
+            actor_id: null,
+            details: { reason: "New evidence arrived" },
+          },
+        ],
+      }),
+    );
+    render(<CaseHistory caseId="case-1" refreshKey={0} />);
+
+    expect(await screen.findByText("Case reopened")).toBeInTheDocument();
+    expect(screen.getAllByText("Restricted")).toHaveLength(1);
+    expect(screen.getByText("Reason: New evidence arrived")).toBeInTheDocument();
+  });
+
+  it("shows the close and reopen reasons when the caller has full access", async () => {
+    history.mockResolvedValue(
+      page({
+        total: 2,
+        items: [
+          {
+            id: "entry-2",
+            action: "case.reopened",
+            created_at: "2026-11-01T07:00:00Z",
+            actor_id: "user-1",
+            details: { reason: "New evidence arrived" },
+          },
+          {
+            id: "entry-1",
+            action: "case.closed",
+            created_at: "2026-11-01T06:00:00Z",
+            actor_id: "user-1",
+            details: { reason: "Incident contained" },
+          },
+        ],
+      }),
+    );
+    render(<CaseHistory caseId="case-1" refreshKey={0} />);
+
+    expect(await screen.findByText("Reason: New evidence arrived")).toBeInTheDocument();
+    expect(screen.getByText("Reason: Incident contained")).toBeInTheDocument();
+    expect(screen.queryByText("Restricted")).not.toBeInTheDocument();
   });
 
   it("says so when an entry for a full-access caller has no details", async () => {
@@ -70,7 +122,7 @@ describe("CaseHistory", () => {
     render(<CaseHistory caseId="case-1" refreshKey={0} />);
 
     expect(await screen.findByText("None recorded")).toBeInTheDocument();
-    expect(screen.queryByText("Not shown", { selector: "td span" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Restricted")).not.toBeInTheDocument();
   });
 
   it("requests the next page with the page size", async () => {
