@@ -484,6 +484,34 @@ export function removeAssignment(caseId: string, userId: string): Promise<void> 
   });
 }
 
+// A link between two cases that concern the same incident. Linking changes nothing else on either case.
+// linked_case_id and linked_case_title are null when the caller cannot see the other case.
+export interface CaseLink {
+  linked_case_id: string | null;
+  linked_case_title: string | null;
+  created_at: string;
+}
+
+// Needs case read access. Answers 404 when the caller cannot see the case.
+export function listCaseLinks(caseId: string): Promise<CaseLink[]> {
+  return request<CaseLink[]>(`/cases/${encodeURIComponent(caseId)}/links`);
+}
+
+// Needs cases:triage. Both cases must be visible to the caller and open, and not linked yet.
+export function addCaseLink(caseId: string, linkedCaseId: string): Promise<CaseLink> {
+  return request<CaseLink>(`/cases/${encodeURIComponent(caseId)}/links`, {
+    method: "POST",
+    json: { linked_case_id: linkedCaseId },
+  });
+}
+
+// Needs cases:triage. Soft deletes the link; the row is kept in the database.
+export function removeCaseLink(caseId: string, linkedCaseId: string): Promise<void> {
+  return request(`/cases/${encodeURIComponent(caseId)}/links/${encodeURIComponent(linkedCaseId)}`, {
+    method: "DELETE",
+  });
+}
+
 // Needs reporter_contact:read. Every call is written to the audit log, so call it only on an explicit user action.
 // Resolves to null when no contact is recorded: the reporter gave none, or the case was not opened through the reporter channel.
 export async function getReporterContact(caseId: string): Promise<string | null> {
