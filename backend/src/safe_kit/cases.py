@@ -419,6 +419,45 @@ def list_assignments(case_id: str, scope: CaseScope) -> list[Assignment] | None:
     return [Assignment(*row) for row in rows]
 
 
+@dataclass(frozen=True)
+class AssignableUser:
+    id: str
+    username: str
+    first_name: str | None
+    last_name: str | None
+    role: str
+
+
+def list_assignable_users(case_id: str, scope: CaseScope) -> list[AssignableUser] | None:
+    """Users the caller may pick for an assignment on the case, or None when the scope may not see the case.
+
+    A user is listed only when the account is active and not deleted, its role is in ASSIGNABLE_ROLES (the rule
+    assign_member enforces, so every listed user can be assigned), and the role currently holds cases:assign in
+    role_permissions. The reporter role is excluded explicitly: reporters are not assignees, and the exclusion
+    holds even if the reporter role were granted cases:assign. Read-only: it writes no audit row.
+    """
+    with connect() as conn:
+        if not is_visible_on(conn, case_id, scope):
+            return None
+        rows = conn.execute(
+            """
+            SELECT u.id::text, u.username, u.first_name, u.last_name, u.role
+            FROM users u
+            WHERE NOT u.is_deleted AND u.is_active
+              AND u.role = ANY(%s::text[])
+              AND u.role <> 'reporter'
+              AND EXISTS (
+                  SELECT 1 FROM role_permissions rp
+                  JOIN permissions p ON p.name = rp.permission AND NOT p.is_deleted
+                  WHERE rp.role = u.role AND rp.permission = 'cases:assign' AND NOT rp.is_deleted
+              )
+            ORDER BY u.username
+            """,
+            (sorted(ASSIGNABLE_ROLES),),
+        ).fetchall()
+    return [AssignableUser(*row) for row in rows]
+
+
 def assign_member(case_id: str, user_id: str, scope: CaseScope) -> tuple[Outcome, Assignment | None]:
     """Give an investigator or reviewer an active assignment on the case."""
     with connect() as conn:

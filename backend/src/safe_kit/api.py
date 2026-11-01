@@ -42,6 +42,7 @@ from safe_kit.cases import (
     count_visible_cases,
     create_case,
     find_visible_case,
+    list_assignable_users,
     list_assignments,
     list_reviews,
     list_visible_cases,
@@ -639,6 +640,14 @@ class AssignmentRequest(BaseModel):
     user_id: uuid.UUID
 
 
+class AssignableUserResponse(BaseModel):
+    id: str
+    username: str
+    first_name: str | None
+    last_name: str | None
+    role: str
+
+
 class AssignmentResponse(BaseModel):
     id: str
     case_id: str
@@ -958,6 +967,31 @@ def get_case_assignments(
     if assignments is None:
         raise CASE_NOT_FOUND
     return [_assignment_response(assignment) for assignment in assignments]
+
+
+@app.get("/api/v1/cases/{case_id}/assignable-users", response_model=list[AssignableUserResponse])
+def get_assignable_users(
+    case_id: uuid.UUID,
+    actor: User = Depends(require_permission("cases:assign")),
+) -> list[AssignableUserResponse]:
+    """List the users the assignment picker may offer on this case.
+
+    It exists so that a cases:assign holder can pick an assignee without users:manage, which GET /api/v1/users
+    needs. It is read-only, so it writes no audit row. Only name and role are returned, no email or timestamps.
+    """
+    users_for_case = list_assignable_users(str(case_id), _scope(actor))
+    if users_for_case is None:
+        raise CASE_NOT_FOUND
+    return [
+        AssignableUserResponse(
+            id=user.id,
+            username=user.username,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            role=user.role,
+        )
+        for user in users_for_case
+    ]
 
 
 @app.post("/api/v1/cases/{case_id}/assignments", status_code=201, response_model=AssignmentResponse)
