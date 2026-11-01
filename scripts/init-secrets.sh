@@ -20,4 +20,7 @@ generate() {
 }
 
 generate db_password
+generate db_migrator_password
+generate db_app_password
+generate db_worker_password
 generate jwt_signing_key

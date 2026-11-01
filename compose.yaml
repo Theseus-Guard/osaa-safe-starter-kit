@@ -1,6 +1,8 @@
 name: safe-starter-kit
 
-# Skeleton: PostgreSQL -> one-shot migration -> API/worker; the gateway and the container CLI use the same API.
+# Startup order: db -> db-roles (role setup, idempotent) -> migrate (migration owner) -> api, worker; gateway after api.
+# Each runtime service uses its own database role and its own secret file. The bootstrap superuser (POSTGRES_USER)
+# is used only by db and db-roles.
 # Network split: "backend" is internal (no external egress, DB port not published); "edge" is only for the gateway.
 
 x-app: &app
@@ -15,26 +17,30 @@ x-app: &app
     - ALL
   security_opt:
     - no-new-privileges:true
-  environment:
-    SAFE_DB_HOST: db
-    SAFE_DB_NAME: safe
-    SAFE_DB_USER: safe_app
-    SAFE_DB_PASSWORD_FILE: /run/secrets/db_password
-  secrets:
-    - db_password
   restart: unless-stopped
+
+x-db-target: &db-target
+  SAFE_DB_HOST: db
+  SAFE_DB_NAME: safe
 
 services:
   db:
-    image: postgres:18
+    image: postgres:18.6-trixie@sha256:3a4264520e121176619f54ff867d12774bc81e95e7b84db58d63bccdb6144b81
     environment:
       POSTGRES_DB: safe
       POSTGRES_USER: safe_app
       POSTGRES_PASSWORD_FILE: /run/secrets/db_password
     secrets:
       - db_password
+      - db_migrator_password
+      - db_app_password
+      - db_worker_password
     volumes:
       - db-data:/var/lib/postgresql
+      # Fresh volume only: the image runs this once, at first initialisation.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+      # Local socket shared with db-roles: the bootstrap superuser is reached without a network password.
+      - pg-socket:/var/run/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U safe_app -d safe"]
       interval: 5s
@@ -44,12 +50,40 @@ services:
       - backend
     restart: unless-stopped
 
-  migrate:
-    <<: *app
-    command: ["python", "-m", "safe_kit.migrate"]
+  # One-shot. Runs the same role script as the initdb hook, so existing volumes get the roles too.
+  db-roles:
+    image: postgres:18.6-trixie@sha256:3a4264520e121176619f54ff867d12774bc81e95e7b84db58d63bccdb6144b81
+    entrypoint: ["sh", "/opt/safe/roles.sh"]
+    environment:
+      PGHOST: /var/run/postgresql
+      POSTGRES_DB: safe
+      POSTGRES_USER: safe_app
+    secrets:
+      - db_migrator_password
+      - db_app_password
+      - db_worker_password
+    volumes:
+      - ./db/init/10-roles.sh:/opt/safe/roles.sh:ro
+      - pg-socket:/var/run/postgresql
     depends_on:
       db:
         condition: service_healthy
+    networks:
+      - backend
+    restart: "no"
+
+  migrate:
+    <<: *app
+    command: ["python", "-m", "safe_kit.migrate"]
+    environment:
+      <<: *db-target
+      SAFE_DB_USER: safe_migrator
+      SAFE_DB_PASSWORD_FILE: /run/secrets/db_migrator_password
+    secrets:
+      - db_migrator_password
+    depends_on:
+      db-roles:
+        condition: service_completed_successfully
     networks:
       - backend
     restart: "no"
@@ -58,13 +92,12 @@ services:
     <<: *app
     command: ["uvicorn", "safe_kit.api:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
-      SAFE_DB_HOST: db
-      SAFE_DB_NAME: safe
-      SAFE_DB_USER: safe_app
-      SAFE_DB_PASSWORD_FILE: /run/secrets/db_password
+      <<: *db-target
+      SAFE_DB_USER: safe_api
+      SAFE_DB_PASSWORD_FILE: /run/secrets/db_app_password
       SAFE_JWT_KEY_FILE: /run/secrets/jwt_signing_key
     secrets:
-      - db_password
+      - db_app_password
       - jwt_signing_key
     depends_on:
       migrate:
@@ -82,6 +115,12 @@ services:
   worker:
     <<: *app
     command: ["python", "-m", "safe_kit.worker"]
+    environment:
+      <<: *db-target
+      SAFE_DB_USER: safe_worker
+      SAFE_DB_PASSWORD_FILE: /run/secrets/db_worker_password
+    secrets:
+      - db_worker_password
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -137,6 +176,12 @@ services:
 secrets:
   db_password:
     file: ./secrets/db_password.txt
+  db_migrator_password:
+    file: ./secrets/db_migrator_password.txt
+  db_app_password:
+    file: ./secrets/db_app_password.txt
+  db_worker_password:
+    file: ./secrets/db_worker_password.txt
   jwt_signing_key:
     file: ./secrets/jwt_signing_key.txt
 
@@ -147,3 +192,4 @@ networks:
 
 volumes:
   db-data: {}
+  pg-socket: {}
