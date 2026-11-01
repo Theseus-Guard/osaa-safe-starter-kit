@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 from safe_kit import audit
 from safe_kit import system_timezone
 from safe_kit.db import connect
-from safe_kit.deadlines import BusinessCalendar, deadlines_for
+from safe_kit.deadlines import BusinessCalendar, deadline_start, deadlines_for
 from safe_kit.system_timezone import TimezoneNotConfigured
 
 # The working calendar is provisional until the owning organization confirms its working days and holidays.
@@ -173,6 +173,16 @@ class Review:
     created_at: datetime
 
 
+# The five SAFE deadline tasks. Their due dates follow t0. weekly_update is not one of them.
+SAFE_DEADLINE_KINDS = (
+    "affected_customers",
+    "preliminary_safe_report",
+    "broader_advisory",
+    "preliminary_public_report",
+    "remediation_status",
+)
+
+
 def deadline_tasks_for(t0: datetime, calendar: BusinessCalendar) -> list[DeadlineTask]:
     """The tasks created with a case. weekly_update is not created here: it depends on risks still being open."""
     due = deadlines_for(t0, calendar)
@@ -183,6 +193,37 @@ def deadline_tasks_for(t0: datetime, calendar: BusinessCalendar) -> list[Deadlin
         DeadlineTask("preliminary_public_report", due.preliminary_public_report, "open"),
         DeadlineTask("remediation_status", due.remediation_status, "open"),
     ]
+
+
+def resync_deadlines(conn, case_id: str) -> tuple[datetime, dict[str, dict[str, str]]]:
+    """Recompute the due dates of the SAFE deadline tasks from the current t0. Statuses are not changed.
+
+    Runs on the caller's transaction and returns t0 with the moved due dates, as {kind: {"old": iso, "new": iso}}.
+    The caller writes the audit row, so the change and its record commit together.
+    """
+    awareness_time, calendar_timezone = conn.execute(
+        "SELECT awareness_time, calendar_timezone FROM cases WHERE id = %s", (case_id,)
+    ).fetchone()
+    operator_times = [
+        row[0]
+        for row in conn.execute(
+            "SELECT occurred_at FROM awareness_events "
+            "WHERE case_id = %s AND awareness_kind = 'operator' AND NOT is_deleted",
+            (case_id,),
+        ).fetchall()
+    ]
+    t0 = deadline_start(awareness_time, operator_times)
+    expected = {task.kind: task.due_at for task in deadline_tasks_for(t0, calendar_for(calendar_timezone))}
+    moved: dict[str, dict[str, str]] = {}
+    stored = conn.execute(
+        "SELECT id::text, kind, due_at FROM deadline_tasks WHERE case_id = %s AND NOT is_deleted AND kind = ANY(%s)",
+        (case_id, list(SAFE_DEADLINE_KINDS)),
+    ).fetchall()
+    for task_id, kind, due_at in stored:
+        if due_at != expected[kind]:
+            conn.execute("UPDATE deadline_tasks SET due_at = %s WHERE id = %s", (expected[kind], task_id))
+            moved[kind] = {"old": due_at.isoformat(), "new": expected[kind].isoformat()}
+    return t0, moved
 
 
 def closure_blockers(review_count: int, tasks: Iterable[tuple[str, str]]) -> list[str]:
@@ -312,7 +353,7 @@ def insert_case(conn, title: str, awareness_time: datetime, created_by: str) -> 
     if setting is None:
         raise TimezoneNotConfigured()
     calendar_timezone = setting.timezone
-    tasks = deadline_tasks_for(awareness_time, calendar_for(calendar_timezone))
+    tasks = deadline_tasks_for(deadline_start(awareness_time, ()), calendar_for(calendar_timezone))
     sequence = conn.execute("SELECT nextval('case_reference_seq')").fetchone()[0]
     reference = f"SAFE-{datetime.now(UTC).year}-{sequence:06d}"
     row = conn.execute(
