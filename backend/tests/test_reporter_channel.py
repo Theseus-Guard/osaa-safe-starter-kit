@@ -207,6 +207,15 @@ def test_contact_refusals_are_404(client, caller, monkeypatch, outcome, detail):
     assert response.json()["detail"] == detail
 
 
+def test_contact_refused_after_the_window_is_409_with_a_stable_code(client, caller, monkeypatch):
+    monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"reporter_contact:read"}))
+    monkeypatch.setattr(api, "read_reporter_contact", lambda case_id, scope: (ContactOutcome.WINDOW_CLOSED, None))
+    response = client.get(f"/api/v1/reports/{CASE_ID}/contact")
+    assert response.status_code == 409
+    assert response.json() == {"detail": {"status": "reporter_contact_window_closed"}}
+    assert "contact" not in response.json()
+
+
 # --- database --------------------------------------------------------------------------------------------------
 
 
@@ -249,6 +258,9 @@ class ActingClient:
     def post(self, url, **kwargs):
         return self._request("post", url, **kwargs)
 
+    def patch(self, url, **kwargs):
+        return self._request("patch", url, **kwargs)
+
 
 @pytest.fixture
 def db_client():
@@ -265,6 +277,7 @@ def people():
         "triager": new_user("triager"),
         "investigator": new_user("investigator"),
         "other_investigator": new_user("investigator"),
+        "reviewer": new_user("reviewer"),
     }
 
 
@@ -410,3 +423,97 @@ def test_contact_of_a_report_without_contact_is_null_and_still_audited(db_client
     assert response.json()["contact"] is None
     assert len(contact_audit_rows(case_id)) == 1
 
+
+def close_reporter_case(db_client, people, case_id: str) -> None:
+    """Close a reporter-channel case through the API: assign a reviewer, review it, finish every task, then close.
+
+    The first assignment needs reporter_contact:read, because the case has no assignee yet.
+    """
+    triager = db_client(people["triager"])
+    with role_holds("triager", "reporter_contact:read"):
+        assigned = triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]})
+    assert assigned.status_code == 201, assigned.text
+    reviewed = db_client(people["reviewer"]).post(f"/api/v1/cases/{case_id}/reviews", json={"outcome": "pass"})
+    assert reviewed.status_code == 201, reviewed.text
+    body = triager.get(f"/api/v1/cases/{case_id}").json()
+    for task in body["deadlines"]:
+        patched = triager.patch(f"/api/v1/cases/{case_id}/deadlines/{task['id']}", json={"status": "done"})
+        assert patched.status_code == 200, patched.text
+    closed = triager.post(f"/api/v1/cases/{case_id}/close", json={"reason": "Closed for the contact window test"})
+    assert closed.status_code == 200, closed.text
+
+
+def backdate_closure(case_id: str, hours: int, closure: int = -1) -> None:
+    """Move one closure of the case back by the given hours in the database. closure indexes the closures in
+    time order: -1 is the latest, 0 the first. Only the timestamp logic of the read window needs this."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id::text FROM case_status_changes WHERE case_id = %s AND action = 'closed' AND NOT is_deleted "
+            "ORDER BY changed_at",
+            (case_id,),
+        ).fetchall()
+        conn.execute(
+            "UPDATE case_status_changes SET changed_at = now() - make_interval(hours => %s) WHERE id = %s",
+            (hours, rows[closure][0]),
+        )
+
+
+def read_contact_as_holder(db_client, people, case_id: str):
+    with role_holds("triager", "reporter_contact:read"):
+        return db_client(people["triager"]).get(f"/api/v1/reports/{case_id}/contact")
+
+
+@requires_database
+def test_contact_is_readable_while_the_case_is_open(db_client, people):
+    case_id = open_report_via_api(db_client, people["reporter"])
+    response = read_contact_as_holder(db_client, people, case_id)
+    assert response.status_code == 200, response.text
+    assert response.json()["contact"] == CONTACT
+    assert len(contact_audit_rows(case_id)) == 1
+
+
+@requires_database
+def test_contact_is_readable_71_hours_after_closure(db_client, people):
+    case_id = open_report_via_api(db_client, people["reporter"])
+    close_reporter_case(db_client, people, case_id)
+    backdate_closure(case_id, hours=71)
+    response = read_contact_as_holder(db_client, people, case_id)
+    assert response.status_code == 200, response.text
+    assert response.json()["contact"] == CONTACT
+    assert len(contact_audit_rows(case_id)) == 1
+
+
+@requires_database
+def test_contact_is_refused_73_hours_after_closure_and_writes_no_audit_row(db_client, people):
+    case_id = open_report_via_api(db_client, people["reporter"])
+    close_reporter_case(db_client, people, case_id)
+    backdate_closure(case_id, hours=73)
+    response = read_contact_as_holder(db_client, people, case_id)
+    assert response.status_code == 409, response.text
+    assert response.json() == {"detail": {"status": "reporter_contact_window_closed"}}
+    assert CONTACT not in response.text
+    assert contact_audit_rows(case_id) == []
+
+
+@requires_database
+def test_reopened_case_is_readable_again_and_the_latest_closure_counts(db_client, people):
+    case_id = open_report_via_api(db_client, people["reporter"])
+    triager = db_client(people["triager"])
+    close_reporter_case(db_client, people, case_id)
+    backdate_closure(case_id, hours=73)
+    assert read_contact_as_holder(db_client, people, case_id).status_code == 409
+
+    reopened = triager.post(f"/api/v1/cases/{case_id}/reopen", json={"reason": "New facts found"})
+    assert reopened.status_code == 200, reopened.text
+    response = read_contact_as_holder(db_client, people, case_id)
+    assert response.status_code == 200, response.text
+    assert response.json()["contact"] == CONTACT
+    assert len(contact_audit_rows(case_id)) == 1
+
+    # A second closure starts a new window. The first closure is 73 hours old, but the latest one is new.
+    closed_again = triager.post(f"/api/v1/cases/{case_id}/close", json={"reason": "Closed again"})
+    assert closed_again.status_code == 200, closed_again.text
+    backdate_closure(case_id, hours=73, closure=0)
+    response = read_contact_as_holder(db_client, people, case_id)
+    assert response.status_code == 200, response.text
+    assert len(contact_audit_rows(case_id)) == 2

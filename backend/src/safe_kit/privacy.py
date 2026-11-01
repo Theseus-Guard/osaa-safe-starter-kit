@@ -390,7 +390,7 @@ CATALOG: tuple[TableEntry, ...] = (
         purpose="Keeping the reporter's identity apart from the case content, so the reporter is not exposed to retaliation.",
         retention="Kept with its case. Follows the case retention once it is defined.",
         retention_defined=False,
-        security="Written only when a case is submitted through the reporter intake. Read only through GET /api/v1/reports/{case_id}/contact with reporter_contact:read, which is granted to no role by default and is audited. The case history hides the reporter's account from every caller.",
+        security="Written only when a case is submitted through the reporter intake. Read only through GET /api/v1/reports/{case_id}/contact with reporter_contact:read, which is granted to no role by default and is audited. The contact is readable while the case is open, or within 72 hours after its latest closure; a later read is refused and not audited. The case history hides the reporter's account from every caller.",
         deletion_mode="Soft delete (is_deleted, deleted_at).",
         created_column="created_at",
     ),

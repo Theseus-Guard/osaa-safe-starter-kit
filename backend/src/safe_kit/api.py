@@ -869,12 +869,19 @@ def get_reporter_contact(
     case_id: uuid.UUID,
     actor: User = Depends(require_permission("reporter_contact:read")),
 ) -> ReporterContactResponse:
-    """The contact the reporter gave. Audited in the same transaction as the read."""
+    """The contact the reporter gave. Audited in the same transaction as the read.
+
+    Readable while the case is open, or within REPORTER_CONTACT_WINDOW_HOURS (72) after its latest closure. A case
+    closed longer ago is refused with 409 and detail status reporter_contact_window_closed; the refusal writes no
+    audit row. A reopened case is open again and readable. A case with no reporter contact is 404.
+    """
     outcome, contact = read_reporter_contact(str(case_id), _scope(actor))
     if outcome is ContactOutcome.NOT_FOUND:
         raise CASE_NOT_FOUND
     if outcome is ContactOutcome.NO_REPORTER:
         raise HTTPException(status_code=404, detail="reporter contact not found")
+    if outcome is ContactOutcome.WINDOW_CLOSED:
+        raise HTTPException(status_code=409, detail={"status": "reporter_contact_window_closed"})
     return ReporterContactResponse(case_id=str(case_id), contact=contact)
 
 

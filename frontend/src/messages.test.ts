@@ -19,6 +19,10 @@ describe("describeCode", () => {
     expect(describeCode("legal duty not found")).toBe("That legal duty does not exist on this case.");
   });
 
+  it("explains a reporter contact read refused after the 72-hour window", () => {
+    expect(describeCode("reporter_contact_window_closed")).toMatch(/72 hours after it was closed/);
+  });
+
   // Known bug in messages.ts: MESSAGES is a plain object, so inherited keys such as "constructor" are found
   // by the lookup and returned as a function instead of the fallback sentence. Remove ".fails" once fixed.
   it("does not match inherited object keys", () => {
