@@ -392,13 +392,15 @@ def update_case_legal_duty(
 class ClassificationRequest(BaseModel):
     # The version the editor read (0 when nothing is recorded yet). A different current version is refused with 409.
     expected_version: int = Field(ge=0)
-    # The five compact trigger values of R01. Duplicates are removed.
+    # The five compact trigger values of R01, or none_applies on its own. Duplicates are removed. An empty list means
+    # the triggers were not assessed.
     triggers: list[Literal[
         "unauthorized_access_or_change",
         "boundary_escape",
         "confidential_data_exposure",
         "out_of_scope_continuation",
         "harm_inaction_near_miss",
+        "none_applies",
     ]] = Field(default_factory=list, max_length=5)
     event_kind: Literal["incident", "near_miss", "blocked_attempt"] | None = None
     internal_incident_option: bool = False

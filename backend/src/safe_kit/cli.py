@@ -35,6 +35,7 @@ CLASSIFICATION_TRIGGERS = (
     "confidential_data_exposure",
     "out_of_scope_continuation",
     "harm_inaction_near_miss",
+    "none_applies",
 )
 EVENT_KINDS = ("incident", "near_miss", "blocked_attempt")
 IMPACT_AREAS = (
@@ -1101,7 +1102,9 @@ def _add_case_update_commands(case_commands) -> None:
         action="append",
         choices=CLASSIFICATION_TRIGGERS,
         metavar="TRIGGER",
-        help="Trigger value: " + ", ".join(CLASSIFICATION_TRIGGERS) + ". Repeat for each trigger (up to five)",
+        help="Trigger value: "
+        + ", ".join(CLASSIFICATION_TRIGGERS)
+        + ". Repeat for each trigger (up to five). none_applies cannot be combined with another value",
     )
     classification_set.add_argument("--event-kind", choices=EVENT_KINDS, help="Event kind")
     classification_set.add_argument(

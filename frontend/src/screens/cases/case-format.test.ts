@@ -15,6 +15,7 @@ describe("case record labels", () => {
   it("labels each R01 trigger in plain words", () => {
     expect(triggerLabel("harm_inaction_near_miss")).toBe("Harm, inaction or near miss");
     expect(triggerLabel("boundary_escape")).toBe("Boundary escape");
+    expect(triggerLabel("none_applies")).toBe("None applies");
   });
 
   it("shows a null record text as not recorded for the full view and as hidden otherwise", () => {
