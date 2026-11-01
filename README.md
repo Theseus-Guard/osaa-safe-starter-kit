@@ -65,6 +65,18 @@ cd backend && uv run pytest
 cd frontend && npm install && npm run build
 ```
 
+## Test coverage
+
+Measured on 2026-11-01 with the commands below. Figures are statement coverage of owned code; generated and third-party code is excluded.
+
+| Part | Command | Tests | Coverage |
+|---|---|---|---|
+| Backend, without database | `scripts/test-backend.sh` | 411 passed, 74 skipped | 79% |
+| Backend, with database | `scripts/test-backend.sh --db` | 485 passed | 92% |
+| Frontend | `cd frontend && npm run test:coverage` | 130 passed | 35% statements, 26% branches |
+
+The backend `--db` mode starts a throwaway PostgreSQL container and removes it afterwards. Database-backed tests are skipped unless `SAFE_TEST_DATABASE=1` is set, which the script does for you.
+
 ## Security notes
 
 - The application never deletes rows; deletion is a soft delete. Physical removal is a manual database action.
