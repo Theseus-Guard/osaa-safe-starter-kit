@@ -29,6 +29,7 @@ from safe_kit.cases import (
     redact_history,
 )
 from safe_kit.db import connect
+from test_case_records_db import reporter_contact_granted_directly
 from safe_kit.rbac import ADMIN_REQUIRED_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, list_role_permissions, set_role_permissions
 from safe_kit.users import User
 
@@ -1035,6 +1036,11 @@ def test_import_of_another_reporters_source_case_does_not_disclose_it(people):
 @contextmanager
 def role_holds(role: str, permission: str):
     """Grant one permission to a role for the length of the block. The role matrix is restored afterwards."""
+    if permission == "reporter_contact:read":
+        # The matrix refuses this permission, so the grant is written directly (see the helper's docstring).
+        with reporter_contact_granted_directly(role):
+            yield
+        return
     before = frozenset(list_role_permissions()[role])
     set_role_permissions(role, before | {permission})
     try:

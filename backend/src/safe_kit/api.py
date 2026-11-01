@@ -572,6 +572,8 @@ def admin_set_role_permissions(
             status_code=409,
             detail="the admin role cannot hold case or reporter contact permissions",
         )
+    if outcome is RoleOutcome.REPORTER_CONTACT_NOT_GRANTABLE:
+        raise HTTPException(status_code=409, detail={"status": "reporter_contact_not_grantable"})
     return RoleSummary(role=role, permissions=list_role_permissions()[role])
 
 

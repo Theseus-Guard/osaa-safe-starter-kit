@@ -13,9 +13,8 @@ Asserted with a database:
   administrator are refused and write nothing;
 - a reporter-channel case is hidden from triagers until it has an assignee, and the assignment needs the holder.
 
-Known open, marked xfail (strict) so the gap stays visible:
-- An administrator can grant reporter_contact:read to the triager role through the role matrix, then create a triager
-  account and read contacts. Blocking this needs a policy decision on who may read a contact (F0/F2).
+- No role can be granted reporter_contact:read through the role matrix, so an administrator cannot hand the contact to
+  a triager account. The refusal is 409 with detail status reporter_contact_not_grantable.
 
 Not in this file: the manual emergency escalation runbook and the abuse rate limit are not application code in F1. The
 reporter account's username is visible to an administrator, who creates reporter accounts. The case link and the
@@ -62,6 +61,23 @@ def refuse(*args, **kwargs):
 def test_the_admin_role_cannot_hold_a_case_or_contact_permission(extra):
     outcome = set_role_permissions("admin", frozenset(ADMIN_REQUIRED_PERMISSIONS | {extra}))
     assert outcome is RoleOutcome.ADMIN_CASE_CONTENT
+
+
+@pytest.mark.parametrize("role", ["reporter", "triager", "investigator", "reviewer", "disclosure_approver", "auditor"])
+def test_no_non_admin_role_can_be_granted_the_contact_permission(role):
+    outcome = set_role_permissions(role, frozenset(DEFAULT_ROLE_PERMISSIONS[role] | {"reporter_contact:read"}))
+    assert outcome is RoleOutcome.REPORTER_CONTACT_NOT_GRANTABLE
+
+
+def test_the_triager_role_api_refuses_the_contact_permission_with_a_status_detail(client, caller, monkeypatch):
+    monkeypatch.setattr(auth, "permissions_for_role", lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()))
+    as_role(caller, ADMIN_ID, "admin")
+    body = {"permissions": sorted(DEFAULT_ROLE_PERMISSIONS["triager"] | {"reporter_contact:read"})}
+
+    response = client.put("/api/v1/rbac/roles/triager/permissions", json=body)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {"status": "reporter_contact_not_grantable"}
 
 
 def test_the_admin_role_api_refuses_the_contact_permission_with_409(client, caller, monkeypatch):
@@ -164,14 +180,13 @@ def test_a_reporter_channel_case_is_hidden_from_triagers_until_assigned(channel_
 
 
 @requires_database
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "roles:manage can grant reporter_contact:read to the triager role. An administrator who creates a triager "
-        "account can then read reporter contacts. Who may read a contact is a policy decision (F0/F2), so the grant "
-        "is not refused in F1."
-    ),
-)
+def test_no_role_holds_the_contact_permission_after_the_migrations():
+    migrate()
+    matrix = list_role_permissions()
+    assert all("reporter_contact:read" not in permissions for permissions in matrix.values())
+
+
+@requires_database
 def test_the_admin_cannot_grant_the_contact_permission_to_another_role(channel_people):
     admin = channel_people["admin"]
     before = frozenset(list_role_permissions()["triager"])
