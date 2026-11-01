@@ -414,9 +414,10 @@ def test_reporter_can_still_change_its_own_password():
     assert audit_rows(target, audit.USER_PASSWORD_CHANGE) == [(target, {})]
 
 
-def test_reporter_contact_permission_is_in_the_catalog_and_held_by_no_role():
+def test_reporter_contact_permission_is_in_the_catalog_and_held_only_by_reporting_owner():
     from safe_kit import rbac
 
     assert "reporter_contact:read" in dict(rbac.list_catalog())
-    assert not any("reporter_contact:read" in permissions for permissions in rbac.list_role_permissions().values())
+    holders = {role for role, permissions in rbac.list_role_permissions().items() if "reporter_contact:read" in permissions}
+    assert holders == {"reporting_owner"}
 

@@ -111,8 +111,9 @@ def test_reporter_contact_holder_sees_every_case_including_unassigned_reporter_c
     assert scope.visibility_sql() == ("TRUE", ())
 
 
-def test_reporter_contact_permission_is_granted_to_no_role_by_default():
-    assert not any("reporter_contact:read" in permissions for permissions in DEFAULT_ROLE_PERMISSIONS.values())
+def test_reporter_contact_permission_is_granted_by_default_to_reporting_owner_only():
+    holders = {role for role, permissions in DEFAULT_ROLE_PERMISSIONS.items() if "reporter_contact:read" in permissions}
+    assert holders == {"reporting_owner"}
 
 
 def test_assignee_scope_needs_an_active_assignment():
