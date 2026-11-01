@@ -155,6 +155,36 @@ describe("CaseClassification", () => {
     );
   });
 
+  it("chooses none applies on its own: it clears the other triggers", async () => {
+    save.mockResolvedValue({ ...NONE, version: 1, triggers: ["none_applies"] });
+    const user = userEvent.setup();
+    render(<CaseClassification {...BASE_PROPS} />);
+
+    const dialog = await openEditor(user);
+    await user.click(within(dialog).getByRole("checkbox", { name: "Boundary escape" }));
+    await user.click(within(dialog).getByRole("checkbox", { name: "None applies" }));
+    await user.click(within(dialog).getByRole("button", { name: "Save new version" }));
+
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith("case-1", expect.objectContaining({ triggers: ["none_applies"] })),
+    );
+  });
+
+  it("choosing a trigger after none applies clears none applies", async () => {
+    save.mockResolvedValue({ ...NONE, version: 1, triggers: ["boundary_escape"] });
+    const user = userEvent.setup();
+    render(<CaseClassification {...BASE_PROPS} />);
+
+    const dialog = await openEditor(user);
+    await user.click(within(dialog).getByRole("checkbox", { name: "None applies" }));
+    await user.click(within(dialog).getByRole("checkbox", { name: "Boundary escape" }));
+    await user.click(within(dialog).getByRole("button", { name: "Save new version" }));
+
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith("case-1", expect.objectContaining({ triggers: ["boundary_escape"] })),
+    );
+  });
+
   it("reloads the displayed version and asks for a retry when the version changed underneath", async () => {
     save.mockRejectedValue(new ApiError(409, "classification_version_conflict", 3));
     get.mockResolvedValueOnce(NONE).mockResolvedValueOnce({ ...NONE, version: 3 });

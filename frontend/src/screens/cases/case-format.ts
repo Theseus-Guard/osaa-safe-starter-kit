@@ -84,6 +84,7 @@ const TRIGGER_LABELS: Record<string, string> = {
   confidential_data_exposure: "Confidential data exposure",
   out_of_scope_continuation: "Continuation outside the approved scope",
   harm_inaction_near_miss: "Harm, inaction or near miss",
+  none_applies: "None applies",
 };
 
 export function triggerLabel(trigger: string): string {

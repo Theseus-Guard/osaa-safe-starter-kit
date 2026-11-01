@@ -57,6 +57,9 @@ const NOT_RECORDED = "none";
 // The stable code of a stale save. The 409 body also carries current_version, which ApiError exposes.
 const CONFLICT_CODE = "classification_version_conflict";
 
+// The trigger value that records that no trigger applies. It cannot be combined with another trigger.
+const NONE_APPLIES: Trigger = "none_applies";
+
 export function CaseClassification({ caseId, closed, canWrite, canReadFullView, onRecorded }: Props) {
   const { timezone } = useSystemTimezone();
   const zone = timezone ?? "UTC";
@@ -226,7 +229,13 @@ function EditClassificationForm({ caseId, current, zone, onSaved, onConflict }: 
   const [busy, setBusy] = useState(false);
 
   function toggleTrigger(trigger: Trigger, checked: boolean) {
-    setTriggers((list) => (checked ? [...list.filter((item) => item !== trigger), trigger] : list.filter((item) => item !== trigger)));
+    setTriggers((list) => {
+      const without = list.filter((item) => item !== trigger);
+      if (!checked) return without;
+      // "None applies" stands alone: choosing it clears the other triggers, and choosing another trigger clears it.
+      if (trigger === NONE_APPLIES) return [trigger];
+      return [...without.filter((item) => item !== NONE_APPLIES), trigger];
+    });
   }
 
   async function handleSubmit(event: FormEvent) {

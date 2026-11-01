@@ -43,6 +43,8 @@ FIVE_TRIGGERS = (
     "out_of_scope_continuation",
     "harm_inaction_near_miss",
 )
+# none_applies is an explicit value of its own: it records that no trigger applies, and it stands alone.
+TRIGGER_VALUES = (*FIVE_TRIGGERS, "none_applies")
 
 
 def classified(**changes) -> Classification:
@@ -78,12 +80,35 @@ def awareness(event_kind: str, index: int) -> AwarenessEvent:
     )
 
 
-def test_the_five_compact_triggers_are_the_only_accepted_values():
-    assert TRIGGERS == FIVE_TRIGGERS
+def test_the_five_compact_triggers_and_none_applies_are_the_only_accepted_values():
+    assert TRIGGERS == TRIGGER_VALUES
     assert ClassificationRequest(expected_version=0, triggers=list(FIVE_TRIGGERS)).triggers == list(FIVE_TRIGGERS)
     for value in ("other_trigger", "", "BOUNDARY_ESCAPE"):
         with pytest.raises(ValidationError):
             ClassificationRequest(expected_version=0, triggers=[value])
+
+
+def test_none_applies_is_accepted_alone_and_refused_with_another_trigger():
+    alone = ClassificationRequest(expected_version=0, triggers=["none_applies", "none_applies"])
+    assert alone.triggers == ["none_applies"]
+    with pytest.raises(ValidationError):
+        ClassificationRequest(expected_version=0, triggers=["none_applies", "boundary_escape"])
+    with pytest.raises(ValidationError):
+        ClassificationRequest(expected_version=0, triggers=["harm_inaction_near_miss", "none_applies"])
+
+
+def test_an_empty_trigger_list_is_not_assessed_and_is_reported_as_missing():
+    report = build_preliminary_report(case_with_deadlines(), classified(triggers=()), [], [], [], True, NOW)
+    assert {"field": "classification.triggers", "state": "missing"} in report["missing_fields"]
+    assert report["complete"] is False
+
+
+def test_none_applies_is_a_recorded_answer_and_not_a_missing_field():
+    report = build_preliminary_report(
+        case_with_deadlines(), classified(triggers=("none_applies",)), [awareness("incident", 0)], [], [], True, NOW
+    )
+    assert report["classification"]["triggers"] == ["none_applies"]
+    assert {"field": "classification.triggers", "state": "missing"} not in report["missing_fields"]
 
 
 def test_a_repeated_trigger_is_removed_and_the_plan_order_is_kept():
@@ -178,6 +203,22 @@ def test_triggers_are_stored_without_duplicates_in_plan_order(triage_people):
     expected = ["unauthorized_access_or_change", "harm_inaction_near_miss"]
     assert saved.json()["triggers"] == expected
     assert triager.get(f"/api/v1/cases/{case_id}/classification").json()["triggers"] == expected
+
+
+@requires_database
+def test_none_applies_is_stored_alone_and_refused_with_another_trigger(triage_people):
+    reporter, triager = triage_people["reporter"], triage_people["triager"]
+    case_id = new_case(reporter)
+    url = f"/api/v1/cases/{case_id}/classification"
+
+    refused = triager.put(url, json={**classification_body(0), "triggers": ["none_applies", "boundary_escape"]})
+    assert refused.status_code == 422, refused.text
+    assert triager.get(url).json()["version"] == 0
+
+    saved = triager.put(url, json={**classification_body(0), "triggers": ["none_applies", "none_applies"]})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["triggers"] == ["none_applies"]
+    assert triager.get(url).json()["triggers"] == ["none_applies"]
 
 
 @requires_database

@@ -27,13 +27,16 @@ AWARENESS_KINDS = frozenset({"operator", "affected_party", "external_report"})
 # case classification.
 EVENT_KINDS = frozenset({"incident", "near_miss", "blocked_attempt"})
 
-# The five compact trigger values of R01, in the order of the plan. They are the input of the classification.
+# The five compact trigger values of R01, in the order of the plan, and the explicit "none applies" value.
+# They are the input of the classification. An empty trigger list means the triggers were not assessed.
+NONE_APPLIES = "none_applies"
 TRIGGERS = (
     "unauthorized_access_or_change",  # unauthorized access or change
     "boundary_escape",  # boundary escape
     "confidential_data_exposure",  # confidential data
     "out_of_scope_continuation",  # continuation outside the approved scope
     "harm_inaction_near_miss",  # harm, inaction, or near miss
+    NONE_APPLIES,  # no trigger applies; it cannot be combined with another trigger
 )
 
 # Impact areas that every case must address (plans/01, impact section, and T03). An area with no active row is
@@ -154,11 +157,14 @@ class Classification:
 
 
 def normalize_triggers(triggers: Iterable[str]) -> tuple[str, ...]:
-    """Distinct trigger values in the plan's order. A value outside the five is refused."""
+    """Distinct trigger values in the plan's order. A value outside TRIGGERS is refused, and so is none_applies
+    combined with another value."""
     chosen = set(triggers)
     unknown = chosen - set(TRIGGERS)
     if unknown:
         raise ValueError("unknown trigger: " + ", ".join(sorted(unknown)))
+    if NONE_APPLIES in chosen and len(chosen) > 1:
+        raise ValueError("none_applies cannot be combined with other triggers")
     return tuple(trigger for trigger in TRIGGERS if trigger in chosen)
 
 

@@ -885,6 +885,16 @@ def test_awareness_occurred_at_in_the_future_is_refused_before_any_request(api, 
     assert "--occurred-at cannot be in the future" in err
 
 
+def test_classification_set_accepts_none_applies_as_a_trigger(api, capsys):
+    api.route("PUT", f"{CASE_PATH}/classification", body=classification_body(version=1))
+    code, out, err = run(
+        capsys, "case", "classification", "set", CASE_ID, "--expected-version", "0", "--trigger", "none_applies",
+        "--username", "alice",
+    )
+    assert code == 0, err
+    assert api.calls[1]["json"]["triggers"] == ["none_applies"]
+
+
 def test_classification_set_sends_every_field(api, capsys):
     api.route("PUT", f"{CASE_PATH}/classification", body=classification_body(version=4))
     code, out, err = run(

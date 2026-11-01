@@ -728,13 +728,14 @@ export function updateLegalDuty(caseId: string, dutyId: string, changes: LegalDu
   );
 }
 
-// The five compact trigger values of R01.
+// The five compact trigger values of R01, and none_applies, which records that no trigger applies and stands alone.
 export const TRIGGERS = [
   "unauthorized_access_or_change",
   "boundary_escape",
   "confidential_data_exposure",
   "out_of_scope_continuation",
   "harm_inaction_near_miss",
+  "none_applies",
 ] as const;
 export type Trigger = (typeof TRIGGERS)[number];
 

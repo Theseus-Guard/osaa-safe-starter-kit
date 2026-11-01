@@ -119,13 +119,14 @@ def sample_case() -> Case:
 # --- the vocabulary -------------------------------------------------------------------------------------------------
 
 
-def test_the_five_compact_triggers_are_the_plan_values_in_order():
+def test_the_five_compact_triggers_are_the_plan_values_in_order_and_none_applies_follows_them():
     assert TRIGGERS == (
         "unauthorized_access_or_change",
         "boundary_escape",
         "confidential_data_exposure",
         "out_of_scope_continuation",
         "harm_inaction_near_miss",
+        "none_applies",
     )
 
 
@@ -148,6 +149,15 @@ def test_normalize_triggers_removes_duplicates_and_keeps_the_plan_order():
 def test_normalize_triggers_refuses_a_value_outside_the_five():
     with pytest.raises(ValueError, match="unknown trigger"):
         normalize_triggers(["made_up"])
+
+
+def test_none_applies_alone_means_no_trigger_applies():
+    assert normalize_triggers(["none_applies", "none_applies"]) == ("none_applies",)
+
+
+def test_none_applies_cannot_be_combined_with_another_trigger():
+    with pytest.raises(ValueError, match="none_applies cannot be combined"):
+        normalize_triggers(["none_applies", "boundary_escape"])
 
 
 # --- impacts: an empty set is not "no impact" -----------------------------------------------------------------------
