@@ -282,6 +282,10 @@ def test_me_with_valid_token(client):
         "role": "triager",
         "password_change_required": False,
         "timezone_setup_required": False,
+        "email": None,
+        "first_name": None,
+        "last_name": None,
+        "title": None,
     }
 
 

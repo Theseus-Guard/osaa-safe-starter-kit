@@ -163,6 +163,10 @@ class MeResponse(BaseModel):
     role: str
     password_change_required: bool
     timezone_setup_required: bool
+    email: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    title: str | None = None
 
 
 class SystemTimezoneResponse(BaseModel):
@@ -359,6 +363,7 @@ def me(user: User = Depends(current_user_pending_change)) -> MeResponse:
         role=user.role,
         password_change_required=user.must_change_password,
         timezone_setup_required=user.role == SETUP_ROLE and current_timezone_name() is None,
+        **profile_fields(user),
     )
 
 

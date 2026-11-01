@@ -24,6 +24,22 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(autouse=True)
+def system_timezone_configured():
+    """Case creation needs a system timezone. Set one on a freshly migrated test database."""
+    if os.environ.get("SAFE_TEST_DATABASE") != "1":
+        yield
+        return
+    from safe_kit.migrate import main as migrate
+
+    migrate()  # idempotent: applies pending migrations on a fresh test database
+    with connect() as conn:
+        exists = conn.execute("SELECT EXISTS (SELECT 1 FROM system_timezone WHERE NOT is_deleted)").fetchone()[0]
+        if not exists:
+            conn.execute("INSERT INTO system_timezone (timezone) VALUES ('Europe/Istanbul')")
+    yield
+
+
 @pytest.fixture(scope="session", autouse=True)
 def migrated_database():
     migrate.MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
