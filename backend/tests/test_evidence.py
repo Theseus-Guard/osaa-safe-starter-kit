@@ -16,7 +16,20 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from safe_kit import auth, evidence, evidence_api, evidence_crypto, evidence_keys, evidence_storage, migrate, users
+from safe_kit import (
+    api,
+    auth,
+    cases,
+    evidence,
+    evidence_api,
+    evidence_crypto,
+    evidence_keys,
+    evidence_storage,
+    migrate,
+    system_timezone,
+    users,
+)
+from safe_kit.cases import CaseScope
 from safe_kit.db import connect
 from safe_kit.evidence_keys import KeyProviderError, LocalFileKeyProvider, VaultTransitKeyProvider
 from safe_kit.evidence_storage import InvalidObjectKey, LocalVolumeStorage, ObjectNotFound, StorageError
@@ -111,7 +124,7 @@ def client(monkeypatch, provider):
     app.include_router(evidence_api.evidence_router)
     app.dependency_overrides[auth.current_user] = lambda: INVESTIGATOR
     monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"evidence:read", "evidence:write"}))
-    monkeypatch.setattr(evidence, "case_visible", lambda case_id, scope: True)
+    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope: True)
     monkeypatch.setattr(evidence_api, "_PROVIDER", provider)
     monkeypatch.setenv("SAFE_EVIDENCE_MAX_BYTES", "1000")
     return TestClient(app)
@@ -530,7 +543,7 @@ def test_upload_is_refused_when_no_key_is_configured(client, monkeypatch):
 
 
 def test_upload_to_a_case_the_caller_cannot_see_is_404(client, monkeypatch):
-    monkeypatch.setattr(evidence, "case_visible", lambda case_id, scope: False)
+    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope: False)
     body, content_type = multipart("scan.pdf", "application/pdf", PDF[:100])
     response = client.post(f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={"Content-Type": content_type})
     assert response.status_code == 404
@@ -559,7 +572,7 @@ def refuse(*args, **kwargs):
 @pytest.mark.parametrize("url_template", READ_ENDPOINTS)
 def test_reading_evidence_needs_evidence_read(client, monkeypatch, url_template):
     monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"evidence:write", "cases:read_assigned"}))
-    monkeypatch.setattr(evidence, "case_visible", refuse)
+    monkeypatch.setattr(evidence_api, "is_visible", refuse)
     monkeypatch.setattr(evidence, "find_stored", refuse)
     monkeypatch.setattr(evidence, "list_evidence", refuse)
     response = client.get(url_template.format(uuid.uuid4()))
@@ -570,7 +583,7 @@ def test_reading_evidence_needs_evidence_read(client, monkeypatch, url_template)
 @pytest.mark.parametrize("url_template", READ_ENDPOINTS)
 def test_reading_evidence_is_404_when_the_case_is_not_visible(client, monkeypatch, url_template):
     monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"evidence:read"}))
-    monkeypatch.setattr(evidence, "case_visible", lambda case_id, scope: False)
+    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope: False)
     monkeypatch.setattr(evidence, "find_stored", lambda evidence_id, scope: None)
     assert client.get(url_template.format(uuid.uuid4())).status_code == 404
 
@@ -633,3 +646,159 @@ def test_custody_events_are_append_only():
     with pytest.raises(psycopg.errors.RaiseException):
         with connect() as conn:
             conn.execute("UPDATE custody_events SET is_deleted = false, deleted_at = NULL WHERE id = %s", (event_id,))
+
+
+# --- case visibility applied to evidence: database-backed --------------------------------------------------------
+
+requires_database = pytest.mark.skipif(
+    os.environ.get("SAFE_TEST_DATABASE") != "1",
+    reason="set SAFE_TEST_DATABASE=1 and the SAFE_DB_* settings to run the database tests",
+)
+
+
+def db_user(role: str) -> str:
+    return users.create_user("t-" + uuid.uuid4().hex[:12], "temporary passphrase", role)
+
+
+def request_as(user_id: str, method: str, url: str, **kwargs):
+    """One request through the real app, made as the given user. The caller is set before every request."""
+    user = users.find_user_by_id(user_id)
+    assert user is not None
+    api.app.dependency_overrides[auth.current_user] = lambda: user
+    return getattr(TestClient(api.app), method)(url, **kwargs)
+
+
+def evidence_count(case_id: str) -> int:
+    with connect() as conn:
+        return conn.execute(
+            "SELECT count(*) FROM evidence_items WHERE case_id = %s AND NOT is_deleted", (case_id,)
+        ).fetchone()[0]
+
+
+def downloaded_events(evidence_id: str) -> int:
+    with connect() as conn:
+        return conn.execute(
+            "SELECT count(*) FROM custody_events WHERE evidence_id = %s AND action = %s AND NOT is_deleted",
+            (evidence_id, evidence.DOWNLOADED),
+        ).fetchone()[0]
+
+
+@pytest.fixture
+def evidence_world(monkeypatch, provider):
+    """A migrated database, one case with one stored evidence item, and the users around it.
+
+    The investigator is assigned to the case; the other investigator and the reviewer are not.
+    """
+    migrate.MIGRATIONS_DIR = MIGRATIONS
+    assert migrate.main() == 0
+    people = {
+        "reporter": db_user("reporter"),
+        "triager": db_user("triager"),
+        "investigator": db_user("investigator"),
+        "other_investigator": db_user("investigator"),
+        "reviewer": db_user("reviewer"),
+    }
+    if system_timezone.current_timezone_name() is None:
+        system_timezone.set_timezone("Europe/Istanbul", None, False, people["triager"])
+    storage = MemoryStorage()
+    monkeypatch.setattr(evidence_api, "_PROVIDER", provider)
+    monkeypatch.setattr(evidence_api, "storage_from_env", lambda: storage)
+    case = cases.create_case("Evidence access case", datetime(2026, 10, 30, 9, tzinfo=UTC), people["reporter"])
+    outcome, _ = cases.assign_member(case.id, people["investigator"], CaseScope(people["triager"], read_all=True))
+    assert outcome is cases.Outcome.OK
+    item = evidence.create_evidence(
+        case.id, people["investigator"], "scan.pdf", "application/pdf", PDF, storage, provider
+    )
+    yield {"people": people, "case_id": case.id, "evidence_id": item.id}
+    api.app.dependency_overrides.clear()
+
+
+@requires_database
+def test_unassigned_investigator_gets_the_same_404_as_a_missing_item_or_case(evidence_world):
+    other = evidence_world["people"]["other_investigator"]
+    case_id, evidence_id = evidence_world["case_id"], evidence_world["evidence_id"]
+    missing_case, missing_item = str(uuid.uuid4()), str(uuid.uuid4())
+    for method, hidden_url, absent_url in [
+        ("get", f"/api/v1/cases/{case_id}/evidence", f"/api/v1/cases/{missing_case}/evidence"),
+        ("get", f"/api/v1/evidence/{evidence_id}/download", f"/api/v1/evidence/{missing_item}/download"),
+        ("get", f"/api/v1/evidence/{evidence_id}/custody", f"/api/v1/evidence/{missing_item}/custody"),
+    ]:
+        hidden = request_as(other, method, hidden_url)
+        absent = request_as(other, method, absent_url)
+        assert hidden.status_code == absent.status_code == 404
+        assert hidden.json() == absent.json()
+
+
+@requires_database
+def test_refused_download_returns_no_bytes_and_records_no_download(evidence_world):
+    other = evidence_world["people"]["other_investigator"]
+    evidence_id = evidence_world["evidence_id"]
+    response = request_as(other, "get", f"/api/v1/evidence/{evidence_id}/download")
+    assert response.status_code == 404
+    assert response.content != PDF
+    assert downloaded_events(evidence_id) == 0
+
+
+@requires_database
+def test_unassigned_investigator_cannot_upload_to_a_case_it_cannot_see(evidence_world):
+    other = evidence_world["people"]["other_investigator"]
+    case_id = evidence_world["case_id"]
+    body, content_type = multipart("scan.pdf", "application/pdf", PDF[:100])
+    headers = {"Content-Type": content_type}
+    hidden = request_as(other, "post", f"/api/v1/cases/{case_id}/evidence", content=body, headers=headers)
+    absent = request_as(other, "post", f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers=headers)
+    assert hidden.status_code == absent.status_code == 404
+    assert hidden.json() == absent.json()
+    assert evidence_count(case_id) == 1  # the refused upload wrote nothing
+
+
+@requires_database
+def test_unassigned_reviewer_cannot_list_evidence_of_the_case(evidence_world):
+    reviewer = evidence_world["people"]["reviewer"]
+    response = request_as(reviewer, "get", f"/api/v1/cases/{evidence_world['case_id']}/evidence")
+    assert response.status_code == 404
+
+
+@requires_database
+def test_missing_evidence_permission_is_403_before_visibility_is_checked(evidence_world):
+    people = evidence_world["people"]
+    case_id, evidence_id = evidence_world["case_id"], evidence_world["evidence_id"]
+    # The reporter created the case, so the case is visible to it, and it still holds no evidence permission.
+    for method, url in [
+        ("get", f"/api/v1/cases/{case_id}/evidence"),
+        ("get", f"/api/v1/evidence/{evidence_id}/download"),
+        ("get", f"/api/v1/evidence/{evidence_id}/custody"),
+    ]:
+        assert request_as(people["reporter"], method, url).status_code == 403
+    body, content_type = multipart("scan.pdf", "application/pdf", PDF[:100])
+    upload = request_as(
+        people["reporter"], "post", f"/api/v1/cases/{case_id}/evidence", content=body,
+        headers={"Content-Type": content_type},
+    )
+    assert upload.status_code == 403
+    # The reviewer holds evidence:read but not evidence:write, and the case is hidden from it: 403 wins.
+    upload = request_as(
+        people["reviewer"], "post", f"/api/v1/cases/{case_id}/evidence", content=body,
+        headers={"Content-Type": content_type},
+    )
+    assert upload.status_code == 403
+
+
+@requires_database
+def test_assigned_investigator_reads_and_uploads_on_its_case(evidence_world):
+    investigator = evidence_world["people"]["investigator"]
+    case_id, evidence_id = evidence_world["case_id"], evidence_world["evidence_id"]
+    listing = request_as(investigator, "get", f"/api/v1/cases/{case_id}/evidence")
+    assert listing.status_code == 200
+    assert listing.json()["total"] == 1
+    download = request_as(investigator, "get", f"/api/v1/evidence/{evidence_id}/download")
+    assert download.status_code == 200
+    assert download.content == PDF
+    custody = request_as(investigator, "get", f"/api/v1/evidence/{evidence_id}/custody")
+    assert custody.status_code == 200
+    assert evidence.DOWNLOADED in [event["action"] for event in custody.json()]
+    body, content_type = multipart("notes.pdf", "application/pdf", PDF[:100])
+    upload = request_as(investigator, "post", f"/api/v1/cases/{case_id}/evidence", content=body,
+                        headers={"Content-Type": content_type})
+    assert upload.status_code == 201
+    assert evidence_count(case_id) == 2

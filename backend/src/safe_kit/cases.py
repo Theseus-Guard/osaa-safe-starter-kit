@@ -242,6 +242,16 @@ def _lock_visible_case(conn, case_id: str, scope: CaseScope) -> tuple | None:
     ).fetchone()
 
 
+def is_visible(case_id: str, scope: CaseScope) -> bool:
+    """True when the case exists, is not deleted, and the scope includes it.
+
+    This is the one check that answers "may this caller see this case" for a single case. Routes outside this
+    module (evidence_api) call it too, so the rule is not copied anywhere else.
+    """
+    with connect() as conn:
+        return _is_visible(conn, case_id, scope)
+
+
 def _is_visible(conn, case_id: str, scope: CaseScope) -> bool:
     visibility, params = scope.visibility_sql()
     row = conn.execute(

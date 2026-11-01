@@ -30,7 +30,7 @@ from starlette.types import Message, Receive
 
 from safe_kit import evidence
 from safe_kit.auth import permissions_of, require_permission
-from safe_kit.cases import CaseScope
+from safe_kit.cases import CaseScope, is_visible
 from safe_kit.evidence_keys import KeyProvider, KeyProviderError, key_provider_from_env
 from safe_kit.evidence_storage import StorageError, storage_from_env
 from safe_kit.users import User
@@ -177,7 +177,7 @@ async def upload_evidence(
 ) -> EvidenceResponse:
     """Multipart upload, field name "file". The body is read with a size limit; the file is encrypted before storage."""
     provider = _key_provider()
-    if not await run_in_threadpool(evidence.case_visible, str(case_id), _scope(actor)):
+    if not await run_in_threadpool(is_visible, str(case_id), _scope(actor)):
         raise HTTPException(status_code=404, detail="case not found")
     filename, content_type, data = await _read_file_field(request, evidence.max_bytes_from_env())
     if not data:
@@ -211,7 +211,7 @@ def list_case_evidence(
     offset: int = Query(default=0, ge=0),
     user: User = Depends(require_permission(EVIDENCE_READ)),
 ) -> EvidencePage:
-    if not evidence.case_visible(str(case_id), _scope(user)):
+    if not is_visible(str(case_id), _scope(user)):
         raise HTTPException(status_code=404, detail="case not found")
     items, total = evidence.list_evidence(str(case_id), limit, offset)
     return EvidencePage(items=[_response(item) for item in items], total=total, limit=limit, offset=offset)

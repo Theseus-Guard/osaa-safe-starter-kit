@@ -11,11 +11,12 @@ import json
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from safe_kit import api, audit, auth, system_timezone, users
+from safe_kit import api, audit, auth, case_import, system_timezone, users
 from safe_kit.cases import (
     Assignment,
     Case,
@@ -906,3 +907,100 @@ def test_admin_and_auditor_have_no_case_access(db_client, people):
         assert client.get(f"/api/v1/cases/{case_id}").status_code == 403
         assert client.get(f"/api/v1/cases/{case_id}/history").status_code == 403
         assert client.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]}).status_code == 403
+
+
+# --- negative access: a hidden case looks exactly like a missing one -----------------------------------------------
+
+EXAMPLES = Path(__file__).resolve().parents[2] / "schemas" / "examples"
+
+
+@requires_database
+def test_unassigned_investigator_and_reviewer_get_the_same_404_as_a_missing_case(db_client, people):
+    case_id = create_case_via_api(db_client, people["reporter"])
+    missing_id = str(uuid.uuid4())
+    for actor in (people["investigator"], people["reviewer"]):
+        client = db_client(actor)
+        for path in ("", "/assignments", "/history"):
+            hidden = client.get(f"/api/v1/cases/{case_id}{path}")
+            absent = client.get(f"/api/v1/cases/{missing_id}{path}")
+            assert hidden.status_code == absent.status_code == 404
+            assert hidden.json() == absent.json()
+        listed = {item["id"] for item in client.get("/api/v1/cases?limit=200").json()["items"]}
+        assert case_id not in listed
+
+
+@requires_database
+def test_unassigned_reviewer_gets_404_not_403_when_recording_a_review(db_client, people):
+    case_id = create_case_via_api(db_client, people["reporter"])
+    reviewer = db_client(people["reviewer"])
+    hidden = reviewer.post(f"/api/v1/cases/{case_id}/reviews", json={"outcome": "pass"})
+    absent = reviewer.post(f"/api/v1/cases/{uuid.uuid4()}/reviews", json={"outcome": "pass"})
+    # 403 would say "only an assigned reviewer" and so reveal that the case exists.
+    assert hidden.status_code == absent.status_code == 404
+    assert hidden.json() == absent.json()
+
+
+@requires_database
+def test_unassigned_investigator_gets_404_on_deadline_change_and_403_without_permission(db_client, people):
+    case_id = create_case_via_api(db_client, people["reporter"])
+    task_id = task_ids(db_client, people["triager"], case_id)["broader_advisory"]
+    investigator = db_client(people["investigator"])
+    hidden = investigator.patch(f"/api/v1/cases/{case_id}/deadlines/{task_id}", json={"status": "done"})
+    absent = investigator.patch(f"/api/v1/cases/{case_id}/deadlines/{uuid.uuid4()}", json={"status": "done"})
+    assert hidden.status_code == absent.status_code == 404
+    assert hidden.json() == absent.json()
+    # Closing needs cases:close, which the investigator does not hold, so the answer is 403 whatever the case.
+    assert investigator.post(f"/api/v1/cases/{case_id}/close", json={"reason": "done"}).status_code == 403
+
+
+@requires_database
+def test_reporter_cannot_read_another_reporters_assignments_or_history(db_client, people):
+    case_id = create_case_via_api(db_client, people["reporter"])
+    missing_id = str(uuid.uuid4())
+    other = db_client(people["other_reporter"])
+    for path in ("/assignments", "/history"):
+        hidden = other.get(f"/api/v1/cases/{case_id}{path}")
+        absent = other.get(f"/api/v1/cases/{missing_id}{path}")
+        assert hidden.status_code == absent.status_code == 404
+        assert hidden.json() == absent.json()
+    assert db_client(people["reporter"]).get(f"/api/v1/cases/{case_id}/history").status_code == 200
+
+
+@requires_database
+def test_list_filters_cannot_be_used_to_find_another_reporters_title(db_client, people):
+    marker = "Confidential " + uuid.uuid4().hex
+    created = db_client(people["other_reporter"]).post(
+        "/api/v1/cases",
+        json={"title": marker, "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat()},
+    )
+    assert created.status_code == 201
+    # The list has no filter parameters. Unknown parameters are ignored, so they must not narrow the list either.
+    plain = db_client(people["reporter"]).get("/api/v1/cases?limit=200")
+    assert plain.status_code == 200
+    assert marker not in plain.text
+    for query in (f"q={marker}", f"title={marker}", f"search={marker}", f"status=open&title={marker}"):
+        filtered = db_client(people["reporter"]).get(f"/api/v1/cases?limit=200&{query}")
+        assert filtered.status_code == 200
+        assert marker not in filtered.text
+        assert filtered.json() == plain.json()
+    # The creator still sees its own title, so the checks above would catch a title shown to the wrong caller.
+    assert marker in db_client(people["other_reporter"]).get("/api/v1/cases?limit=200").text
+
+
+@requires_database
+@pytest.mark.xfail(
+    strict=True,
+    reason="case import echoes case_id and reference of an existing case to any caller with cases:submit. "
+    "Fix: api.import_cases passes the caller's CaseScope and case_import returns the ids only when "
+    "cases.is_visible is true.",
+)
+def test_import_of_another_reporters_source_case_does_not_disclose_it(people):
+    record = json.loads((EXAMPLES / "valid-minimal.json").read_text(encoding="utf-8"))
+    record["case_id"] = str(uuid.uuid4())
+    record["timeline"]["awareness_time"]["value"] = "2026-10-30T09:00:00Z"
+    [created] = case_import.import_records([record], people["other_reporter"])
+    assert created.status == "imported"
+    [result] = case_import.import_records([record], people["reporter"])
+    assert result.status == "duplicate"
+    assert result.case_id is None
+    assert result.reference is None
