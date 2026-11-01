@@ -348,8 +348,11 @@ export interface CaseCreateBody {
   awareness_time: string;
 }
 
-export function listCases(limit: number, offset: number): Promise<CasePage> {
-  return request<CasePage>(`/cases?limit=${limit}&offset=${offset}`);
+// q matches the case reference (partial, case-insensitive) or the case UUID prefix. Omitted or blank q lists every visible case.
+export function listCases(limit: number, offset: number, q?: string): Promise<CasePage> {
+  const term = q?.trim() ?? "";
+  const search = term === "" ? "" : `&q=${encodeURIComponent(term)}`;
+  return request<CasePage>(`/cases?limit=${limit}&offset=${offset}${search}`);
 }
 
 export function getCase(caseId: string): Promise<CaseDetail> {

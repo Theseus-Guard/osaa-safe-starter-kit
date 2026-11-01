@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { caseAbilities, hasPermission } from "./permissions";
+import { canReadCases, caseAbilities, hasPermission } from "./permissions";
 
 describe("permissions", () => {
+  it("lets any case-read permission open the case search", () => {
+    expect(canReadCases(["cases:read_own"])).toBe(true);
+    expect(canReadCases(["cases:read_all"])).toBe(true);
+    expect(canReadCases(["cases:read_assigned"])).toBe(true);
+  });
+
+  it("keeps the case search from callers without a case-read permission", () => {
+    expect(canReadCases([])).toBe(false);
+    expect(canReadCases(["cases:submit", "cases:close", "users:manage"])).toBe(false);
+  });
+
   it("matches one exact permission name", () => {
     expect(hasPermission(["cases:close"], "cases:close")).toBe(true);
     expect(hasPermission(["cases:close"], "cases:close_all")).toBe(false);

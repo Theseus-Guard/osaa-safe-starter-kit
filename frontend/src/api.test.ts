@@ -286,6 +286,9 @@ describe("endpoints", () => {
     ["listPermissions", (a) => a.listPermissions(), "GET", "/api/v1/rbac/permissions"],
     ["updateRolePermissions", (a) => a.updateRolePermissions("auditor", ["cases:read"]), "PUT", "/api/v1/rbac/roles/auditor/permissions"],
     ["listCases", (a) => a.listCases(5, 0), "GET", "/api/v1/cases?limit=5&offset=0"],
+    ["listCases with q", (a) => a.listCases(8, 0, "SAFE-2026"), "GET", "/api/v1/cases?limit=8&offset=0&q=SAFE-2026"],
+    ["listCases encodes q", (a) => a.listCases(8, 0, "a b&c"), "GET", "/api/v1/cases?limit=8&offset=0&q=a%20b%26c"],
+    ["listCases omits blank q", (a) => a.listCases(8, 0, "   "), "GET", "/api/v1/cases?limit=8&offset=0"],
     ["getCase", (a) => a.getCase("case-1"), "GET", "/api/v1/cases/case-1"],
     ["getSystemTimezone", (a) => a.getSystemTimezone(), "GET", "/api/v1/system/timezone"],
     [

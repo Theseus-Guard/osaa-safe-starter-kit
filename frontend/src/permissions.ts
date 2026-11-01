@@ -24,6 +24,13 @@ export function hasPermission(permissions: readonly string[], name: string): boo
   return permissions.includes(name);
 }
 
+const CASE_READ_PERMISSIONS = ["cases:read_own", "cases:read_all", "cases:read_assigned"] as const;
+
+// Any case-read permission. Shows the header case search. The backend still filters the results to the cases the caller can see.
+export function canReadCases(permissions: readonly string[]): boolean {
+  return CASE_READ_PERMISSIONS.some((name) => hasPermission(permissions, name));
+}
+
 export function caseAbilities(permissions: readonly string[]): CaseAbilities {
   return {
     canSubmit: hasPermission(permissions, "cases:submit"),

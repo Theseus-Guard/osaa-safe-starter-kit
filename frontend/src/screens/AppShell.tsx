@@ -17,8 +17,10 @@ import {
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { SystemClock } from "@/components/system-clock";
 import { cn } from "@/lib/utils";
+import { canReadCases } from "../permissions";
 import { hashFor, Page, PAGE_INFO, PAGES } from "../routes";
 import { isThemePreference, setPreference, ThemePreference, useThemePreference } from "../theme";
+import { CaseSearch } from "./cases/CaseSearch";
 
 interface Props {
   profile: Me;
@@ -34,11 +36,13 @@ export function AppShell({ profile, page, onLogout, children, heading }: Props) 
   const isAdmin = profile.role === "admin";
   const visiblePages = PAGES.filter((item) => isAdmin || !PAGE_INFO[item].adminOnly);
   const info = heading ?? PAGE_INFO[page];
+  const canSearchCases = canReadCases(profile.permissions);
 
   return (
     <div className="flex min-h-svh flex-col">
-      <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-3 border-b bg-background px-4">
-        <div className="flex items-center gap-2">
+      {/* Mobile: the search wraps onto its own row under the brand and user menu. Desktop: one row, search centred. */}
+      <header className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b bg-background px-4 py-2 md:h-14 md:flex-nowrap md:py-0">
+        <div className="flex items-center gap-2 md:flex-1">
           {/* On md and up the sidebar is shown instead, so the trigger is hidden there. */}
           <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
             <SheetTrigger render={<Button variant="outline" size="icon" className="md:hidden" aria-label="Open navigation" />}>
@@ -59,7 +63,12 @@ export function AppShell({ profile, page, onLogout, children, heading }: Props) 
           </Sheet>
           <span className="font-semibold tracking-tight">SAFE-Starter-Kit</span>
         </div>
-        <div className="flex items-center gap-3">
+        {canSearchCases && (
+          <div className="order-last w-full md:order-none md:w-auto md:max-w-[38rem] md:flex-1">
+            <CaseSearch />
+          </div>
+        )}
+        <div className="flex items-center justify-end gap-3 md:flex-1">
           <SystemClock />
           <UserMenu profile={profile} onLogout={onLogout} />
         </div>
