@@ -486,6 +486,9 @@ def update_case_classification(
 ) -> ClassificationResponse:
     """Store the classification as the next version. The body holds every field; a field not sent is cleared."""
     scope = _scope(actor)
+    # The free-text fields are hidden from callers without cases:read_all, so their save would clear them. Refuse it.
+    if not scope.read_all:
+        raise HTTPException(status_code=403, detail="classification_requires_full_view")
     values: dict[str, Any] = {
         "triggers": tuple(body.triggers),
         "event_kind": body.event_kind,
