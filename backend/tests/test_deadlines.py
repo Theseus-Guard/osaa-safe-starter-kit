@@ -65,11 +65,17 @@ def test_t0_is_the_awareness_time_when_no_operator_event_exists():
     assert deadline_start(awareness, []) == awareness
 
 
-def test_t0_is_the_earliest_operator_event():
+def test_t0_is_the_earliest_operator_event_when_it_is_before_the_awareness_time():
     awareness = datetime(2026, 11, 2, 8, 0, tzinfo=UTC)
     earlier = datetime(2026, 10, 30, 12, 0, tzinfo=UTC)
     later = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
     assert deadline_start(awareness, [later, earlier]) == earlier
+
+
+def test_t0_never_moves_later_than_the_awareness_time():
+    awareness = datetime(2026, 11, 2, 8, 0, tzinfo=UTC)
+    later_operator_event = datetime(2026, 11, 2, 10, 0, tzinfo=UTC)
+    assert deadline_start(awareness, [later_operator_event]) == awareness
 
 
 def test_t0_is_returned_in_utc_and_naive_times_are_refused():

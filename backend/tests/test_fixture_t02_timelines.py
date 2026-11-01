@@ -7,8 +7,9 @@ Covered without a database:
 
 Covered with a database:
 - a case opened after its awareness time keeps that time; with no operator event its deadlines run from it;
-- t0 is the earliest operator awareness event. An earlier operator event moves the SAFE due dates, and the audit row of
-  that event records the move. An affected party event or an external report never moves them;
+- t0 is the earlier of the case awareness time and the operator awareness events. An operator event earlier than the
+  awareness time moves the SAFE due dates earlier, and the audit row of that event records the move. A later operator
+  event never moves t0. An affected party event or an external report never moves them;
 - an external report is recorded as an awareness event and leaves the case clock and the deadlines unchanged;
 - a legal duty due before a SAFE deadline does not move that deadline;
 - each change of the timeline writes exactly one audit row, and a repeated request writes none.
