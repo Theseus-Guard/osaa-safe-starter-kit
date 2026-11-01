@@ -3,6 +3,7 @@
 import argparse
 import getpass
 import json
+import mimetypes
 import os
 import sys
 import urllib.error
@@ -23,6 +24,8 @@ DEFAULT_PAGE_SIZE = 20
 MAX_PAGE_SIZE = 200
 # Same limit as the API (safe_kit.case_import.MAX_IMPORT_BYTES). The CLI does not import the backend package.
 MAX_IMPORT_FILE_BYTES = 1024 * 1024
+# Same default as the API (SAFE_EVIDENCE_MAX_BYTES). The server sets the real limit and answers 413 when it is lower.
+MAX_EVIDENCE_FILE_BYTES = 50 * 1024 * 1024
 
 
 class UsageError(Exception):
@@ -70,7 +73,18 @@ HTTP_MESSAGES = {
 }
 
 
-def _http_message(status: int) -> str:
+EVIDENCE_HTTP_MESSAGES = {
+    409: "the upload expired before it finished; try again",
+    413: "the file is larger than the server allows",
+    415: "the file type is not allowed. Allowed types: PDF, PNG, JPEG, plain text and JSON",
+    500: "the evidence could not be stored; it was not recorded as available",
+    503: "evidence storage is not configured on the server",
+}
+
+
+def _http_message(status: int, messages: dict[int, str] | None = None) -> str:
+    if messages and status in messages:
+        return messages[status]
     return HTTP_MESSAGES.get(status, f"request failed (HTTP {status})")
 
 
@@ -82,8 +96,15 @@ def _call(
     token: str | None = None,
     payload: dict | None = None,
     query: dict | None = None,
+    raw_body: bytes | None = None,
+    content_type: str | None = None,
+    messages: dict[int, str] | None = None,
 ) -> bytes:
-    """One API request. Returns the raw response body. Raises RequestFailed for any non-2xx or transport error."""
+    """One API request. Returns the raw response body. Raises RequestFailed for any non-2xx or transport error.
+
+    payload is sent as JSON. raw_body is sent unchanged with content_type (multipart uploads). messages overrides
+    the default text for the status codes it lists.
+    """
     url = base_url + path
     if query:
         url += "?" + urllib.parse.urlencode(query)
@@ -92,6 +113,9 @@ def _call(
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
+    elif raw_body is not None:
+        data = raw_body
+        headers["Content-Type"] = content_type or "application/octet-stream"
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, data=data, method=method, headers=headers)
@@ -99,7 +123,7 @@ def _call(
         with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             return response.read()
     except urllib.error.HTTPError as error:
-        raise RequestFailed(_http_message(error.code)) from None
+        raise RequestFailed(_http_message(error.code, messages)) from None
     except OSError:
         raise RequestFailed("the server could not be reached") from None
 
@@ -239,11 +263,22 @@ def _case_create(base_url: str, args: argparse.Namespace) -> None:
     _with_session(base_url, args, action)
 
 
-def _case_list(base_url: str, args: argparse.Namespace) -> None:
+def _case_id_arg(text: str) -> str:
+    try:
+        return str(uuid.UUID(text))
+    except ValueError:
+        raise UsageError("CASE_ID must be the case ID (a UUID) shown by 'case list'") from None
+
+
+def _check_paging(args: argparse.Namespace) -> None:
     if not 1 <= args.limit <= MAX_PAGE_SIZE:
         raise UsageError(f"--limit must be between 1 and {MAX_PAGE_SIZE}")
     if args.offset < 0:
         raise UsageError("--offset must be 0 or more")
+
+
+def _case_list(base_url: str, args: argparse.Namespace) -> None:
+    _check_paging(args)
 
     def action(base: str, token: str) -> None:
         raw = _call(
@@ -262,10 +297,7 @@ def _case_list(base_url: str, args: argparse.Namespace) -> None:
 
 
 def _case_show(base_url: str, args: argparse.Namespace) -> None:
-    try:
-        case_id = str(uuid.UUID(args.case_id))
-    except ValueError:
-        raise UsageError("CASE_ID must be the case ID (a UUID) shown by 'case list'") from None
+    case_id = _case_id_arg(args.case_id)
 
     def action(base: str, token: str) -> None:
         raw = _call(base, "GET", f"/api/v1/cases/{case_id}", token=token)
@@ -277,15 +309,21 @@ def _case_show(base_url: str, args: argparse.Namespace) -> None:
     _with_session(base_url, args, action)
 
 
-def _read_import_file(path: str) -> bytes:
+def _read_bounded_file(path: str, limit: int, too_large: str) -> bytes:
     try:
         with open(path, "rb") as handle:
-            raw = handle.read(MAX_IMPORT_FILE_BYTES + 1)
+            raw = handle.read(limit + 1)
     except OSError as error:
         raise UsageError(f"cannot read {path}: {error.strerror or 'unknown error'}") from None
-    if len(raw) > MAX_IMPORT_FILE_BYTES:
-        raise UsageError(f"the import file is larger than {MAX_IMPORT_FILE_BYTES} bytes")
+    if len(raw) > limit:
+        raise UsageError(too_large)
     return raw
+
+
+def _read_import_file(path: str) -> bytes:
+    return _read_bounded_file(
+        path, MAX_IMPORT_FILE_BYTES, f"the import file is larger than {MAX_IMPORT_FILE_BYTES} bytes"
+    )
 
 
 def _print_import_summary(summary: dict) -> None:
@@ -334,6 +372,135 @@ def _case_import(base_url: str, args: argparse.Namespace) -> None:
     _with_session(base_url, args, action)
 
 
+def _print_evidence(item: dict) -> None:
+    print(f"Evidence {item['id']}")
+    print(f"  Case ID:          {item['case_id']}")
+    print(f"  File:             {item['original_filename']}")
+    print(f"  Media type:       {item['media_type']}")
+    print(f"  Size (bytes):     {item['size_bytes']}")
+    print(f"  Status:           {item['status']}")
+    print(f"  SHA-256:          {item['sha256_plaintext'] or '-'}")
+    print(f"  Uploaded (UTC):   {item['created_at']}")
+
+
+def _print_evidence_page(page: dict) -> None:
+    items = page["items"]
+    if not items:
+        print(f"No evidence for this case. Total: {page['total']}")
+        return
+    rows = [("ID", "STATUS", "MEDIA TYPE", "SIZE (BYTES)", "FILE")]
+    rows += [
+        (item["id"], item["status"], item["media_type"], str(item["size_bytes"]), item["original_filename"])
+        for item in items
+    ]
+    widths = [max(len(row[column]) for row in rows) for column in range(4)]
+    for row in rows:
+        cells = [row[column].ljust(widths[column]) for column in range(4)] + [row[4]]
+        print("  ".join(cells).rstrip())
+    first = page["offset"] + 1
+    last = page["offset"] + len(items)
+    print(f"Showing {first}-{last} of {page['total']}")
+
+
+def _print_tasks(case: dict) -> None:
+    tasks = case["deadlines"]
+    if not tasks:
+        print(f"No deadline tasks for case {case['reference']}.")
+        return
+    rows = [("ID", "KIND", "DUE (UTC)", "STATUS", "NOTE")]
+    rows += [
+        (task["id"] or "-", task["kind"], task["due_at"], task["status"], task["not_applicable_reason"] or "")
+        for task in tasks
+    ]
+    widths = [max(len(row[column]) for row in rows) for column in range(4)]
+    print(f"Deadline tasks for case {case['reference']}:")
+    for row in rows:
+        cells = [row[column].ljust(widths[column]) for column in range(4)] + [row[4]]
+        print("  ".join(cells).rstrip())
+
+
+def _multipart_file(field: str, filename: str, content_type: str, data: bytes) -> tuple[bytes, str]:
+    """A multipart/form-data body holding one file. Returns the body and the Content-Type header value."""
+    boundary = uuid.uuid4().hex
+    # A quote or line break in the name would break the part header. The API sanitizes the name again.
+    safe_name = "".join("_" if char in '"\r\n' else char for char in filename)
+    head = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="{field}"; filename="{safe_name}"\r\n'
+        f"Content-Type: {content_type}\r\n\r\n"
+    ).encode("utf-8")
+    tail = f"\r\n--{boundary}--\r\n".encode("ascii")
+    return head + data + tail, f"multipart/form-data; boundary={boundary}"
+
+
+def _evidence_add(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+    # The file is read before the login, so a bad file never sends a password.
+    name = os.path.basename(args.file)
+    data = _read_bounded_file(
+        args.file,
+        MAX_EVIDENCE_FILE_BYTES,
+        f"the file is larger than {MAX_EVIDENCE_FILE_BYTES} bytes, the default upload limit",
+    )
+    if not data:
+        raise UsageError(f"{args.file} is empty")
+    # The media type is a hint only. The API checks it against the content and answers 415 when they differ.
+    media_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    body, content_type = _multipart_file("file", name, media_type, data)
+
+    def action(base: str, token: str) -> None:
+        raw = _call(
+            base,
+            "POST",
+            f"/api/v1/cases/{case_id}/evidence",
+            token=token,
+            raw_body=body,
+            content_type=content_type,
+            messages=EVIDENCE_HTTP_MESSAGES,
+        )
+        if args.json:
+            _print_json(raw)
+        else:
+            print("Evidence stored.")
+            _print_evidence(_json_object(raw))
+
+    _with_session(base_url, args, action)
+
+
+def _evidence_list(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+    _check_paging(args)
+
+    def action(base: str, token: str) -> None:
+        raw = _call(
+            base,
+            "GET",
+            f"/api/v1/cases/{case_id}/evidence",
+            token=token,
+            query={"limit": args.limit, "offset": args.offset},
+        )
+        if args.json:
+            _print_json(raw)
+        else:
+            _print_evidence_page(_json_object(raw))
+
+    _with_session(base_url, args, action)
+
+
+def _task_list(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+
+    def action(base: str, token: str) -> None:
+        # The deadline tasks are part of the case response, so this is the same request as case show.
+        raw = _call(base, "GET", f"/api/v1/cases/{case_id}", token=token)
+        if args.json:
+            _print_json(raw)
+        else:
+            _print_tasks(_json_object(raw))
+
+    _with_session(base_url, args, action)
+
+
 def _add_auth_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--username", help="Account name. Defaults to the SAFE_USERNAME environment variable")
     parser.add_argument("--json", action="store_true", help="Print the API response body as JSON")
@@ -374,6 +541,34 @@ def build_parser() -> argparse.ArgumentParser:
     imported.add_argument("file", metavar="FILE", help='JSON file: {"import_format_version": 1, "records": [...]}')
     _add_auth_options(imported)
     imported.set_defaults(handler=_case_import)
+
+    evidence = subcommands.add_parser("evidence", help="Add and list the evidence of a case")
+    evidence_commands = evidence.add_subparsers(dest="evidence_command", required=True)
+
+    added = evidence_commands.add_parser("add", help="Upload a file as evidence for a case")
+    added.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    added.add_argument(
+        "file",
+        metavar="FILE",
+        help="File to upload: PDF, PNG, JPEG, plain text or JSON, up to 50 MiB by default",
+    )
+    _add_auth_options(added)
+    added.set_defaults(handler=_evidence_add)
+
+    evidence_list = evidence_commands.add_parser("list", help="List the evidence of one of your cases")
+    evidence_list.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    evidence_list.add_argument("--limit", type=int, default=DEFAULT_PAGE_SIZE, help="Items per page (1 to 200)")
+    evidence_list.add_argument("--offset", type=int, default=0, help="Number of items to skip")
+    _add_auth_options(evidence_list)
+    evidence_list.set_defaults(handler=_evidence_list)
+
+    task = subcommands.add_parser("task", help="Show the deadline tasks of a case")
+    task_commands = task.add_subparsers(dest="task_command", required=True)
+
+    task_listing = task_commands.add_parser("list", help="List the deadline tasks of one of your cases")
+    task_listing.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    _add_auth_options(task_listing)
+    task_listing.set_defaults(handler=_task_list)
     return parser
 
 

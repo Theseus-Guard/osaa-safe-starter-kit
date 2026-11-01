@@ -2,13 +2,14 @@
 
 Upload is two steps so that a crash never leaves an unexplained object or a row that claims to be stored:
   1. insert the row as pending, with the wrapped data key, nonce, and key id;
-  2. write the encrypted object, then set the row to available with both checksums, and record the custody event
-     and the audit row in the same transaction.
-If the write fails, the row is marked failed. A pending row left behind by a crash is marked failed by
-fail_stale_pending. Nothing is deleted.
+  2. write the encrypted object, read it back and verify it with the same checks as a download, then set the row to
+     available with both checksums, and record the custody event and the audit row in the same transaction.
+If the write or the verification fails, the row is marked failed with a custody event. A pending row left behind by
+a crash is marked failed by fail_stale_pending. Nothing is deleted.
 
 Download decrypts only after the ciphertext checksum matches. The plaintext checksum is checked before any byte is
-returned. A failed check records a "failed" custody event and the caller gets no content.
+returned. A failed check records a "failed" custody event, and an integrity failure also moves the item to failed.
+The caller gets no content.
 
 File contents, keys, and file names never go to logs or to audit details.
 """
@@ -71,6 +72,21 @@ class VerificationFailed(Exception):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
+
+
+class StoreVerificationFailed(StorageError):
+    """The object was written but does not read back as the bytes that were sealed. The row is marked failed."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+# Verification reasons that mean the stored object is not what was written. An item with one of these moves to failed.
+# storage_read_failed and key_unavailable are availability problems: they are recorded in custody only.
+INTEGRITY_FAILURE_REASONS = frozenset(
+    {"object_missing", "decryption_failed", "ciphertext_checksum_mismatch", "plaintext_checksum_mismatch"}
+)
 
 
 # Declared media type -> check that the bytes look like that type. The declared type alone is not trusted.
@@ -238,9 +254,12 @@ def create_evidence(
     storage: EvidenceStorage,
     provider: KeyProvider,
 ) -> EvidenceItem:
-    """Encrypt, store, and record one evidence object. The caller has already checked size and media type.
+    """Encrypt, store, verify, and record one evidence object. The caller has already checked size and media type.
 
-    Raises StorageError or KeyProviderError when the object cannot be stored. The row is then marked failed.
+    The object is read back and checked with the same rules as a download before the row becomes available.
+    Raises StorageError (StoreVerificationFailed when the read-back does not match) or KeyProviderError when the
+    object cannot be stored or verified. The row is then marked failed. Raises UploadExpired when reconciliation
+    marked the row failed before the upload finished.
     """
     name = sanitize_filename(filename)
     storage_key = str(uuid.uuid4())
@@ -254,9 +273,27 @@ def create_evidence(
     except Exception:
         _mark_failed(evidence_id, uploader_id, "storage_write_failed")
         raise
-    return _mark_available(
-        evidence_id, uploader_id, sha256_hex(data), sha256_hex(sealed.ciphertext),
+    plaintext_digest = sha256_hex(data)
+    ciphertext_digest = sha256_hex(sealed.ciphertext)
+    expected = StoredEvidence(
+        id=evidence_id,
+        case_id=case_id,
+        original_filename=name,
+        media_type=media_type,
+        sha256_plaintext=plaintext_digest,
+        sha256_ciphertext=ciphertext_digest,
+        storage_key=storage_key,
+        key_id=sealed.key_id,
+        wrapped_data_key=sealed.wrapped_data_key,
+        nonce=sealed.nonce,
+        status=PENDING,
     )
+    try:
+        read_original(expected, storage, provider)
+    except VerificationFailed as failure:
+        _mark_failed(evidence_id, uploader_id, failure.reason)
+        raise StoreVerificationFailed(failure.reason) from None
+    return _mark_available(evidence_id, uploader_id, plaintext_digest, ciphertext_digest)
 
 
 def _insert_pending(
@@ -390,7 +427,14 @@ def record_download(evidence_id: str, actor_id: str, case_id: str) -> None:
 
 
 def record_failure(evidence_id: str, actor_id: str | None, reason: str) -> None:
+    """Record a failed verification of a stored object. The custody event is always written. An integrity failure
+    also moves an available item to failed, so later downloads answer 409 instead of trying the object again."""
     with connect() as conn:
+        if reason in INTEGRITY_FAILURE_REASONS:
+            conn.execute(
+                "UPDATE evidence_items SET status = 'failed' WHERE id = %s AND status = 'available' AND NOT is_deleted",
+                (evidence_id,),
+            )
         _custody(conn, evidence_id, actor_id, FAILED_EVENT, {"reason": reason})
 
 
