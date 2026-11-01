@@ -7,6 +7,7 @@ A self-hosted starter kit for organizations that take part in the Shared AI Find
 ## Independence and SAFE baseline
 
 - SAFE-Starter-Kit is an independent open-source project. It is not an official Alliance product.
+- Theseus Guard, Inc. is a member of the Linux Foundation and of the Open Secure AI Alliance (OSAA).
 - It is developed to conform to **SAFE v1.0** (dated 2026-10-21), published by the SAFE Working Group in the [wg-safe repository](https://github.com/OpenSecureAIAlliance/wg-safe), at commit `08c0d6a11163d10ac878a15dc9f53b5b322fd7cb`.
 - The SAFE specification is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Its text is attributed to the Open Secure AI Alliance SAFE Working Group and wg-safe contributors. Any reuse keeps that attribution.
 - This project is not endorsed, certified, or approved by the Open Secure AI Alliance or its committees.
