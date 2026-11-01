@@ -1,0 +1,21 @@
+{
+  "name": "safe-starter-kit-docs",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node scripts/sync-docs.mjs && docusaurus start",
+    "build": "node scripts/sync-docs.mjs && docusaurus build",
+    "serve": "docusaurus serve",
+    "clear": "docusaurus clear",
+    "sync": "node scripts/sync-docs.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@docusaurus/core": "^3.10.2",
+    "@docusaurus/preset-classic": "^3.10.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  }
+}
