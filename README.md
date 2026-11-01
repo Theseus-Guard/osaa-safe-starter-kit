@@ -72,9 +72,9 @@ Measured on 2026-11-01 with the commands below. Figures are statement coverage o
 
 | Part | Command | Tests | Coverage |
 |---|---|---|---|
-| Backend, without database | `scripts/test-backend.sh` | 862 passed, 213 skipped, 1 xfailed | 80% |
-| Backend, with database | `scripts/test-backend.sh --db` | 1074 passed, 1 skipped, 1 xfailed | 97% |
-| Frontend | `cd frontend && npm run test:coverage` | 343 passed | 69% statements |
+| Backend, without database | `scripts/test-backend.sh` | 919 passed, 224 skipped, 1 xfailed | 81% |
+| Backend, with database | `scripts/test-backend.sh --db` | 1142 passed, 1 skipped, 1 xfailed | 97% |
+| Frontend | `cd frontend && npm run test:coverage` | 347 passed | 72% statements |
 
 The backend `--db` mode starts a throwaway PostgreSQL container and removes it afterwards. Database-backed tests are skipped unless `SAFE_TEST_DATABASE=1` is set, which the script does for you.
 
