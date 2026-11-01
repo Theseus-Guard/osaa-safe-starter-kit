@@ -21,8 +21,8 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "triager": frozenset(
         {"cases:read_assigned", "cases:read_all", "cases:triage", "cases:assign", "cases:close", "evidence:read"}
     ),
-    "investigator": frozenset({"cases:read_assigned", "evidence:read", "evidence:write"}),
-    "reviewer": frozenset({"cases:read_assigned", "evidence:read", "reviews:write"}),
+    "investigator": frozenset({"cases:read_assigned", "cases:assignable", "evidence:read", "evidence:write"}),
+    "reviewer": frozenset({"cases:read_assigned", "cases:assignable", "evidence:read", "reviews:write"}),
     "disclosure_approver": frozenset({"disclosures:approve"}),
     "auditor": frozenset({"audit:read"}),
     # By design the admin role has no case permissions: platform administration

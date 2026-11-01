@@ -156,18 +156,18 @@ def timezone_set():
 
 @pytest.fixture
 def granted(timezone_set):
-    """Grant or revoke cases:assign on a role for one test, then put the role back as it was."""
+    """Grant or revoke a permission on a role for one test (cases:assignable by default), then restore the roles."""
     admin = new_user("admin")
     original = {}
 
-    def set_permission(role: str, granted_flag: bool) -> None:
+    def set_permission(role: str, granted_flag: bool, permission: str = "cases:assignable") -> None:
         if role not in original:
             original[role] = list_role_permissions()[role]
         wanted = set(original[role])
         if granted_flag:
-            wanted.add("cases:assign")
+            wanted.add(permission)
         else:
-            wanted.discard("cases:assign")
+            wanted.discard(permission)
         set_role_permissions(role, frozenset(wanted), actor_id=admin)
 
     yield set_permission
@@ -221,21 +221,55 @@ def test_listing_follows_the_role_grant_and_triagers_are_never_listed(db_client,
     case_id = create_case_via_api(reporter)
     investigator = new_user("investigator")
     reviewer = new_user("reviewer")
-    # The triager holds cases:assign by default, but triagers are not assignees, so the picker never offers them.
-    assert triager not in listed_ids(db_client, triager, case_id)
-    assert investigator not in listed_ids(db_client, triager, case_id)
-    granted("investigator", True)
+    # Investigators and reviewers hold cases:assignable by default. The triager holds cases:assign (it makes the
+    # assignments) but not cases:assignable, so the picker never offers it.
     assert investigator in listed_ids(db_client, triager, case_id)
+    assert reviewer in listed_ids(db_client, triager, case_id)
+    assert triager not in listed_ids(db_client, triager, case_id)
     granted("investigator", False)
     assert investigator not in listed_ids(db_client, triager, case_id)
-    assert reviewer not in listed_ids(db_client, triager, case_id)
+    assert reviewer in listed_ids(db_client, triager, case_id)
+    granted("investigator", True)
+    assert investigator in listed_ids(db_client, triager, case_id)
+
+
+@requires_database
+def test_triager_with_cases_assign_is_not_listed_and_cannot_be_assigned(db_client, granted):
+    reporter = new_user("reporter")
+    triager = new_user("triager")
+    case_id = create_case_via_api(reporter)
+    # Holds cases:assign (checked by the endpoint) and must not be an assignee.
+    assert "cases:assign" in DEFAULT_ROLE_PERMISSIONS["triager"]
+    assert "cases:assignable" not in DEFAULT_ROLE_PERMISSIONS["triager"]
+    assert triager not in listed_ids(db_client, triager, case_id)
+    response = db_client(triager).post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": triager})
+    assert response.status_code == 422
+    assert response.json() == {"detail": "assignee must be an investigator or reviewer"}
+
+
+@requires_database
+def test_assignability_follows_the_grant_not_the_role_name(db_client, granted):
+    reporter = new_user("reporter")
+    triager = new_user("triager")
+    case_id = create_case_via_api(reporter)
+    auditor = new_user("auditor")
+    url = f"/api/v1/cases/{case_id}/assignments"
+    assert auditor not in listed_ids(db_client, triager, case_id)
+    assert db_client(triager).post(url, json={"user_id": auditor}).status_code == 422
+    granted("auditor", True)
+    assert auditor in listed_ids(db_client, triager, case_id)
+    assert db_client(triager).post(url, json={"user_id": auditor}).status_code == 201
+    granted("auditor", False)
+    assert auditor not in listed_ids(db_client, triager, case_id)
+    assert db_client(triager).post(url, json={"user_id": new_user("auditor")}).status_code == 422
 
 
 @requires_database
 def test_unassigned_holder_of_cases_assign_gets_404_for_a_case_it_cannot_see(db_client, granted):
     reporter = new_user("reporter")
     case_id = create_case_via_api(reporter)
-    granted("investigator", True)
+    # The endpoint needs cases:assign; the investigator holds it only for this test, so the 404 is about visibility.
+    granted("investigator", True, "cases:assign")
     unassigned = new_user("investigator")
     response = db_client(unassigned).get(f"/api/v1/cases/{case_id}/assignable-users")
     assert response.status_code == 404
