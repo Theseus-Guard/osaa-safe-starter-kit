@@ -13,7 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 const ADMIN_REQUIRED = ["users:manage", "users:reset_password", "roles:manage"];
 const REQUIRED_REASON = "The admin role must keep this permission, so admins cannot lock themselves out.";
 // A bounded height with a scroll container keeps the header sticky.
-const TABLE_SCROLL_CLASS = "max-h-[70vh] overflow-auto rounded-md border [&_[data-slot=table-container]]:overflow-visible";
+const TABLE_FRAME_CLASS = "overflow-hidden rounded-md border";
 
 interface Props {
   editable: boolean;
@@ -118,7 +118,7 @@ export function RolesMatrix({ editable }: Props) {
 
         {loaded && editable && (
           <>
-            <div className={TABLE_SCROLL_CLASS}>
+            <div className={TABLE_FRAME_CLASS}>
               <Table>
                 <TableHeader className="sticky top-0 z-10 bg-muted">
                   <TableRow>
@@ -183,7 +183,7 @@ export function RolesMatrix({ editable }: Props) {
         )}
 
         {loaded && !editable && (
-          <div className={TABLE_SCROLL_CLASS}>
+          <div className={TABLE_FRAME_CLASS}>
             <Table>
               <TableHeader className="sticky top-0 z-10 bg-muted">
                 <TableRow>

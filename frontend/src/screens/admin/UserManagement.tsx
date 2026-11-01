@@ -18,7 +18,7 @@ const COLUMN_COUNT = 7;
 const PROTECTED_REASON = "The protected admin account cannot be changed.";
 const SELF_RESET_REASON = "Use Change password on the Account page to change your own password.";
 // A bounded height with a scroll container keeps the table header sticky.
-const TABLE_SCROLL_CLASS = "max-h-[70vh] overflow-auto rounded-md border [&_[data-slot=table-container]]:overflow-visible";
+const TABLE_FRAME_CLASS = "overflow-hidden rounded-md border";
 
 interface Props {
   currentUserId: string;
@@ -133,7 +133,7 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
             <AlertDescription>{loadError}</AlertDescription>
           </Alert>
         )}
-        <div className={TABLE_SCROLL_CLASS}>
+        <div className={TABLE_FRAME_CLASS}>
           <Table>
             <TableHeader className="sticky top-0 z-10 bg-muted">
               <TableRow>

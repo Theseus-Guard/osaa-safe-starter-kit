@@ -13,7 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 
 const PAGE_SIZE = 20;
 // A bounded height with a scroll container keeps the header sticky.
-const TABLE_SCROLL_CLASS = "max-h-[70vh] overflow-auto rounded-md border [&_[data-slot=table-container]]:overflow-visible";
+const TABLE_FRAME_CLASS = "overflow-hidden rounded-md border";
 
 interface Props {
   // The caller's permission names from /auth/me.
@@ -75,7 +75,7 @@ export function CasesPage({ permissions }: Props) {
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}
-        <div className={TABLE_SCROLL_CLASS}>
+        <div className={TABLE_FRAME_CLASS}>
           <Table>
             <TableHeader className="sticky top-0 z-10 bg-muted">
               <TableRow>

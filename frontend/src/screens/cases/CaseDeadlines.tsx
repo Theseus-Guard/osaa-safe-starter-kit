@@ -69,7 +69,7 @@ export function CaseDeadlines({ caseId, deadlines, closed, canUpdate, canMarkNot
         {deadlines.length === 0 ? (
           <p className="text-sm text-muted-foreground">No deadline tasks.</p>
         ) : (
-          <div className="overflow-auto rounded-md border [&_[data-slot=table-container]]:overflow-visible">
+          <div className="overflow-hidden rounded-md border">
             <Table>
               <TableHeader className="bg-muted">
                 <TableRow>

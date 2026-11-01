@@ -61,7 +61,7 @@ export function CaseHistory({ caseId, refreshKey }: Props) {
         )}
         {page && page.items.length === 0 && <p className="text-sm text-muted-foreground">No history yet.</p>}
         {page && page.items.length > 0 && (
-          <div className="max-h-[50vh] overflow-auto rounded-md border [&_[data-slot=table-container]]:overflow-visible">
+          <div className="overflow-hidden rounded-md border">
             <Table>
               <TableHeader className="sticky top-0 z-10 bg-muted">
                 <TableRow>

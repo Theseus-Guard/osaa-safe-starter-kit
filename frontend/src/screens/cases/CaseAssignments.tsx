@@ -70,7 +70,7 @@ export function CaseAssignments({ caseId, closed, canAssign }: Props) {
           <p className="text-sm text-muted-foreground">No one is assigned to this case yet.</p>
         )}
         {items !== null && items.length > 0 && (
-          <div className="overflow-auto rounded-md border [&_[data-slot=table-container]]:overflow-visible">
+          <div className="overflow-hidden rounded-md border">
             <Table>
               <TableHeader className="bg-muted">
                 <TableRow>
