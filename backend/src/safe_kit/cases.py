@@ -59,17 +59,24 @@ class Outcome(Enum):
     NOT_APPLICABLE_FORBIDDEN = "not_applicable_forbidden"
 
 
+REPORTER_CASE_SQL = "EXISTS (SELECT 1 FROM reporter_identities ri WHERE ri.case_id = cases.id AND NOT ri.is_deleted)"
+ASSIGNED_CASE_SQL = "EXISTS (SELECT 1 FROM case_assignments ca WHERE ca.case_id = cases.id AND NOT ca.is_deleted)"
+
+
 @dataclass(frozen=True)
 class CaseScope:
     """What the caller may see, taken from the caller's permissions.
 
     read_own: the caller created the case. read_all: every case. read_assigned: the caller has an active assignment.
+    reporter_contact: the caller holds reporter_contact:read. Such a caller sees every case, including reporter-channel
+    cases that have no assignment yet, so the reporting owner can assign them.
     """
 
     user_id: str
     read_all: bool = False
     read_own: bool = False
     read_assigned: bool = False
+    reporter_contact: bool = False
 
     @classmethod
     def from_permissions(cls, user_id: str, permissions: frozenset[str]) -> "CaseScope":
@@ -78,12 +85,19 @@ class CaseScope:
             read_all="cases:read_all" in permissions,
             read_own="cases:read_own" in permissions,
             read_assigned="cases:read_assigned" in permissions,
+            reporter_contact="reporter_contact:read" in permissions,
         )
 
     def visibility_sql(self) -> tuple[str, tuple[Any, ...]]:
-        """A condition on the cases table that holds exactly for the cases this scope may see."""
+        """A condition on the cases table that holds exactly for the cases this scope may see.
+
+        A case opened through the reporter channel (it has an active reporter identity) is hidden from read_all
+        callers until it has an active assignment. A caller with reporter_contact:read sees it regardless.
+        """
         if self.read_all:
-            return "TRUE", ()
+            if self.reporter_contact:
+                return "TRUE", ()
+            return f"(NOT {REPORTER_CASE_SQL} OR {ASSIGNED_CASE_SQL})", ()
         clauses: list[str] = []
         params: list[Any] = []
         if self.read_own:
@@ -249,10 +263,11 @@ def is_visible(case_id: str, scope: CaseScope) -> bool:
     module (evidence_api) call it too, so the rule is not copied anywhere else.
     """
     with connect() as conn:
-        return _is_visible(conn, case_id, scope)
+        return is_visible_on(conn, case_id, scope)
 
 
-def _is_visible(conn, case_id: str, scope: CaseScope) -> bool:
+def is_visible_on(conn, case_id: str, scope: CaseScope) -> bool:
+    """The same check as is_visible, on the caller's connection, so it shares the caller's transaction."""
     visibility, params = scope.visibility_sql()
     row = conn.execute(
         f"SELECT 1 FROM cases WHERE id = %s AND NOT is_deleted AND {visibility}",
@@ -335,27 +350,43 @@ def find_visible_case(case_id: str, scope: CaseScope) -> Case | None:
     return replace(_to_case(row[:-1]), deadlines=tasks, reopen_reason=row[-1])
 
 
-def list_visible_cases(scope: CaseScope, limit: int, offset: int) -> list[Case]:
+def _search_sql(q: str | None) -> tuple[str, tuple[Any, ...]]:
+    """A case matches q when its reference contains q, or its id starts with q (both case-insensitive).
+
+    The LIKE wildcards in q are escaped, so q is always matched as plain text.
+    """
+    if not q:
+        return "TRUE", ()
+    escaped = q.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+    return (
+        "(cases.reference ILIKE %s ESCAPE '!' OR cases.id::text ILIKE %s ESCAPE '!')",
+        (f"%{escaped}%", f"{escaped}%"),
+    )
+
+
+def list_visible_cases(scope: CaseScope, limit: int, offset: int, q: str | None = None) -> list[Case]:
     visibility, params = scope.visibility_sql()
+    search, search_params = _search_sql(q)
     with connect() as conn:
         rows = conn.execute(
             f"""
             SELECT {_CASE_COLUMNS} FROM cases
-            WHERE NOT is_deleted AND {visibility}
+            WHERE NOT is_deleted AND {visibility} AND {search}
             ORDER BY created_at DESC, id
             LIMIT %s OFFSET %s
             """,
-            (*params, limit, offset),
+            (*params, *search_params, limit, offset),
         ).fetchall()
     return [_to_case(row) for row in rows]
 
 
-def count_visible_cases(scope: CaseScope) -> int:
+def count_visible_cases(scope: CaseScope, q: str | None = None) -> int:
     visibility, params = scope.visibility_sql()
+    search, search_params = _search_sql(q)
     with connect() as conn:
         row = conn.execute(
-            f"SELECT count(*) FROM cases WHERE NOT is_deleted AND {visibility}",
-            params,
+            f"SELECT count(*) FROM cases WHERE NOT is_deleted AND {visibility} AND {search}",
+            (*params, *search_params),
         ).fetchone()
     return row[0]
 
@@ -363,7 +394,7 @@ def count_visible_cases(scope: CaseScope) -> int:
 def list_assignments(case_id: str, scope: CaseScope) -> list[Assignment] | None:
     """Active assignments of a case, or None when the scope may not see the case."""
     with connect() as conn:
-        if not _is_visible(conn, case_id, scope):
+        if not is_visible_on(conn, case_id, scope):
             return None
         rows = conn.execute(
             """
@@ -487,7 +518,7 @@ def record_review(case_id: str, outcome: str, note: str | None, scope: CaseScope
 def list_reviews(case_id: str, scope: CaseScope) -> list[dict[str, str | None]] | None:
     """Active reviews of a case, newest first, or None when the scope may not see the case."""
     with connect() as conn:
-        if not _is_visible(conn, case_id, scope):
+        if not is_visible_on(conn, case_id, scope):
             return None
         rows = conn.execute(
             """
@@ -658,7 +689,7 @@ def case_history(
     """
     evidence_filter = (include_evidence, sorted(audit.EVIDENCE_AUDIT_ACTIONS))
     with connect() as conn:
-        if not _is_visible(conn, case_id, scope):
+        if not is_visible_on(conn, case_id, scope):
             return None
         rows = conn.execute(
             f"SELECT ae.id::text, ae.action, ae.created_at, ae.actor_id::text, ae.details, csc.reason {history_join}"

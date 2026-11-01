@@ -16,7 +16,7 @@ from safe_kit.security import (
 )
 from safe_kit.sessions import InvalidRefreshToken
 from safe_kit.system_timezone import TimezoneSetting
-from safe_kit.users import PasswordReused, User
+from safe_kit.users import PasswordReused, ReporterAccountResetRefused, User
 
 PASSWORD = "correct horse battery"
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -104,6 +104,9 @@ class FakeStore:
         return True
 
     def reset_password(self, user_id, temporary_password, actor_id=None, source="api"):
+        # Same rule as users.reset_password: a reporter account cannot be reset by an administrator.
+        if user_id in self.users and self.users[user_id].role == "reporter":
+            raise ReporterAccountResetRefused
         return self._set_password(user_id, temporary_password, must_change=True)
 
     # --- audit ---
@@ -454,6 +457,21 @@ def test_admin_reset_sets_temporary_password_and_ends_old_sessions(client):
     assert login(client, "alice", PASSWORD).status_code == 401
     temporary = login_tokens(client, "alice", "temporary passphrase")
     assert temporary["password_change_required"] is True
+
+
+def test_admin_cannot_reset_a_reporter_account_password(client, store):
+    reporter = "88888888-8888-8888-8888-888888888888"
+    store.add_user(reporter, "reporter-one", "reporter")
+    admin_token = login_tokens(client, "carol")["access_token"]
+    response = client.post(
+        f"/api/v1/users/{reporter}/password",
+        headers=bearer_header(admin_token),
+        json={"temporary_password": "temporary passphrase"},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "reporter_account_reset_refused"
+    # The account keeps its password: the reporter can still sign in with the one it chose.
+    assert login(client, "reporter-one", PASSWORD).status_code == 200
 
 
 def test_non_admin_cannot_reset_passwords(client):

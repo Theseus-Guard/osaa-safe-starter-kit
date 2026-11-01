@@ -20,6 +20,7 @@ from safe_kit.users import (
     admin_exists,
     bootstrap_admin,
     PasswordReused,
+    ReporterAccountResetRefused,
     find_user,
     normalize_email,
     reset_password,
@@ -133,6 +134,13 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "password cannot be reused: it matches one of this account's last "
             f"{PASSWORD_HISTORY_DEPTH} passwords or a temporary password issued to it",
+            file=sys.stderr,
+        )
+        return 1
+    except ReporterAccountResetRefused:
+        print(
+            f"refused: {args.username} is a reporter account. An administrator cannot reset the password of a "
+            "reporter account (reporter_account_reset_refused). The password was not changed.",
             file=sys.stderr,
         )
         return 1

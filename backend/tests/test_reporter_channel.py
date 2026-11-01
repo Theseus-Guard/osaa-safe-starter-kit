@@ -14,11 +14,13 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
+from contextlib import contextmanager
+
 from safe_kit import api, audit, auth, system_timezone, users
 from safe_kit.cases import Case, HistoryEntry
 from safe_kit.db import connect
-from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS
-from safe_kit.reporter_channel import hide_reporter
+from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS, list_role_permissions, set_role_permissions
+from safe_kit.reporter_channel import REPORTER_CONTACT_READ, ContactOutcome, hide_reporter
 from safe_kit.users import User
 
 REPORTER_ID = "11111111-1111-1111-1111-111111111111"
@@ -169,6 +171,42 @@ def test_history_hides_the_reporter_account_from_triagers_too(client, caller, mo
     assert REPORTER_ID not in response.text
 
 
+def test_contact_needs_the_reporter_contact_permission(client, caller, monkeypatch):
+    monkeypatch.setattr(api, "read_reporter_contact", lambda *args: pytest.fail("must not reach the service"))
+    # The reporter's own role has no reporter_contact:read, and neither does the triager.
+    assert client.get(f"/api/v1/reports/{CASE_ID}/contact").status_code == 403
+    as_role(caller, TRIAGER_ID, "triager")
+    assert client.get(f"/api/v1/reports/{CASE_ID}/contact").status_code == 403
+
+
+def test_contact_is_returned_to_a_holder(client, caller, monkeypatch):
+    as_role(caller, TRIAGER_ID, "triager")
+    monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"reporter_contact:read"}))
+    seen = {}
+
+    def fake_read(case_id, scope):
+        seen["scope"] = scope
+        return ContactOutcome.OK, "reach me at the desk"
+
+    monkeypatch.setattr(api, "read_reporter_contact", fake_read)
+    response = client.get(f"/api/v1/reports/{CASE_ID}/contact")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"case_id": CASE_ID, "contact": "reach me at the desk"}
+    assert seen["scope"].reporter_contact is True and seen["scope"].user_id == TRIAGER_ID
+
+
+@pytest.mark.parametrize(
+    "outcome, detail",
+    [(ContactOutcome.NOT_FOUND, "case not found"), (ContactOutcome.NO_REPORTER, "reporter contact not found")],
+)
+def test_contact_refusals_are_404(client, caller, monkeypatch, outcome, detail):
+    monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"reporter_contact:read"}))
+    monkeypatch.setattr(api, "read_reporter_contact", lambda case_id, scope: (outcome, None))
+    response = client.get(f"/api/v1/reports/{CASE_ID}/contact")
+    assert response.status_code == 404
+    assert response.json()["detail"] == detail
+
+
 # --- database --------------------------------------------------------------------------------------------------
 
 
@@ -225,7 +263,29 @@ def people():
     return {
         "reporter": new_user("reporter"),
         "triager": new_user("triager"),
+        "investigator": new_user("investigator"),
+        "other_investigator": new_user("investigator"),
     }
+
+
+@contextmanager
+def role_holds(role: str, permission: str):
+    """Grant one permission to a role for the length of the block. The role matrix is restored afterwards."""
+    before = frozenset(list_role_permissions()[role])
+    set_role_permissions(role, before | {permission})
+    try:
+        yield
+    finally:
+        set_role_permissions(role, before)
+
+
+def contact_audit_rows(case_id: str) -> list[tuple]:
+    with connect() as conn:
+        return conn.execute(
+            "SELECT actor_id::text, target_type, target_id FROM audit_events "
+            "WHERE action = %s AND target_id = %s AND NOT is_deleted",
+            (REPORTER_CONTACT_READ, case_id),
+        ).fetchall()
 
 
 CONTACT = "reporter contact for database test"
@@ -258,6 +318,13 @@ def test_report_stores_the_reporter_and_contact_apart_from_the_case(db_client, p
 @requires_database
 def test_no_caller_gets_the_reporter_account_or_contact(db_client, people):
     case_id = open_report_via_api(db_client, people["reporter"])
+    # A triager sees a reporter-channel case only once it is assigned (see test_case_access.py). The reporting owner,
+    # who holds reporter_contact:read, makes the assignment.
+    with role_holds("triager", "reporter_contact:read"):
+        assigned = db_client(people["triager"]).post(
+            f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["investigator"]}
+        )
+    assert assigned.status_code == 201, assigned.text
     triager = db_client(people["triager"])
     responses = [
         db_client(people["reporter"]).get(f"/api/v1/cases/{case_id}"),
@@ -275,3 +342,71 @@ def test_no_caller_gets_the_reporter_account_or_contact(db_client, people):
     history = triager.get(f"/api/v1/cases/{case_id}/history").json()["items"]
     created = [item for item in history if item["action"] == audit.CASE_CREATE]
     assert len(created) == 1 and created[0]["actor_id"] is None
+
+
+@requires_database
+def test_contact_holder_reads_the_contact_and_the_read_is_audited(db_client, people):
+    case_id = open_report_via_api(db_client, people["reporter"])
+    with role_holds("triager", "reporter_contact:read"):
+        response = db_client(people["triager"]).get(f"/api/v1/reports/{case_id}/contact")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"case_id": case_id, "contact": CONTACT}
+    assert contact_audit_rows(case_id) == [(people["triager"], "case", case_id)]
+
+
+@requires_database
+def test_contact_read_without_the_permission_is_refused_and_not_audited(db_client, people):
+    case_id = open_report_via_api(db_client, people["reporter"])
+    for actor in (people["reporter"], people["triager"]):
+        response = db_client(actor).get(f"/api/v1/reports/{case_id}/contact")
+        assert response.status_code == 403
+        assert CONTACT not in response.text
+    assert contact_audit_rows(case_id) == []
+
+
+@requires_database
+def test_contact_of_a_case_the_holder_cannot_see_is_404_and_not_audited(db_client, people):
+    case_id = open_report_via_api(db_client, people["reporter"])
+    # Investigators have read_assigned only. With the permission, an unassigned investigator still cannot see the case.
+    with role_holds("investigator", "reporter_contact:read"):
+        hidden = db_client(people["investigator"]).get(f"/api/v1/reports/{case_id}/contact")
+        absent = db_client(people["investigator"]).get(f"/api/v1/reports/{uuid.uuid4()}/contact")
+    assert hidden.status_code == absent.status_code == 404
+    assert hidden.json() == absent.json()
+    assert CONTACT not in hidden.text
+    assert contact_audit_rows(case_id) == []
+
+
+@requires_database
+def test_contact_of_a_case_without_reporter_identity_is_404_and_not_audited(db_client, people):
+    # A case opened through the ordinary intake, which has no reporter identity.
+    created = db_client(people["reporter"]).post(
+        "/api/v1/cases",
+        json={"title": "Not from the reporter channel", "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat()},
+    )
+    assert created.status_code == 201, created.text
+    case_id = created.json()["id"]
+    with role_holds("triager", "reporter_contact:read"):
+        response = db_client(people["triager"]).get(f"/api/v1/reports/{case_id}/contact")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "reporter contact not found"
+    assert contact_audit_rows(case_id) == []
+
+
+@requires_database
+def test_contact_holder_sees_the_contact_of_a_reporter_case_before_assignment(db_client, people):
+    case_id = open_report_via_api(db_client, people["reporter"])
+    with role_holds("triager", "reporter_contact:read"):
+        response = db_client(people["triager"]).get(f"/api/v1/reports/{case_id}/contact")
+    assert response.status_code == 200 and response.json()["contact"] == CONTACT
+
+
+@requires_database
+def test_contact_of_a_report_without_contact_is_null_and_still_audited(db_client, people):
+    case_id = open_report_via_api(db_client, people["reporter"], contact=None)
+    with role_holds("triager", "reporter_contact:read"):
+        response = db_client(people["triager"]).get(f"/api/v1/reports/{case_id}/contact")
+    assert response.status_code == 200
+    assert response.json()["contact"] is None
+    assert len(contact_audit_rows(case_id)) == 1
+

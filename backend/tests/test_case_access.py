@@ -10,6 +10,7 @@ Two layers:
 import json
 import os
 import uuid
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -27,7 +28,7 @@ from safe_kit.cases import (
     redact_history,
 )
 from safe_kit.db import connect
-from safe_kit.rbac import ADMIN_REQUIRED_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS
+from safe_kit.rbac import ADMIN_REQUIRED_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, list_role_permissions, set_role_permissions
 from safe_kit.users import User
 
 REPORTER_ID = "11111111-1111-1111-1111-111111111111"
@@ -93,8 +94,23 @@ def test_reporter_scope_sees_only_own_cases():
     assert params == (REPORTER_ID,)
 
 
-def test_triager_scope_sees_every_case():
-    assert CaseScope.from_permissions(TRIAGER_ID, DEFAULT_ROLE_PERMISSIONS["triager"]).visibility_sql() == ("TRUE", ())
+def test_triager_scope_sees_every_case_except_unassigned_reporter_cases():
+    sql, params = CaseScope.from_permissions(TRIAGER_ID, DEFAULT_ROLE_PERMISSIONS["triager"]).visibility_sql()
+    assert sql == (
+        "(NOT EXISTS (SELECT 1 FROM reporter_identities ri WHERE ri.case_id = cases.id AND NOT ri.is_deleted) "
+        "OR EXISTS (SELECT 1 FROM case_assignments ca WHERE ca.case_id = cases.id AND NOT ca.is_deleted))"
+    )
+    assert params == ()
+
+
+def test_reporter_contact_holder_sees_every_case_including_unassigned_reporter_cases():
+    scope = CaseScope.from_permissions(TRIAGER_ID, DEFAULT_ROLE_PERMISSIONS["triager"] | {"reporter_contact:read"})
+    assert scope.reporter_contact is True
+    assert scope.visibility_sql() == ("TRUE", ())
+
+
+def test_reporter_contact_permission_is_granted_to_no_role_by_default():
+    assert not any("reporter_contact:read" in permissions for permissions in DEFAULT_ROLE_PERMISSIONS.values())
 
 
 def test_assignee_scope_needs_an_active_assignment():
@@ -204,12 +220,12 @@ def test_unknown_or_invisible_case_is_404_on_every_read(client, caller, monkeypa
 def test_list_is_built_from_the_callers_scope(client, caller, monkeypatch):
     seen = {}
 
-    def fake_list(scope, limit, offset):
+    def fake_list(scope, limit, offset, q=None):
         seen["scope"] = scope
         return []
 
     monkeypatch.setattr(api, "list_visible_cases", fake_list)
-    monkeypatch.setattr(api, "count_visible_cases", lambda scope: 0)
+    monkeypatch.setattr(api, "count_visible_cases", lambda scope, q=None: 0)
     as_role(caller, TRIAGER_ID, "triager")
     assert client.get("/api/v1/cases").status_code == 200
     assert seen["scope"] == CaseScope(user_id=TRIAGER_ID, read_all=True, read_assigned=True)
@@ -536,6 +552,10 @@ def create_case_via_api(db_client, reporter: str) -> str:
 
 def get_case(db_client, actor: str, case_id: str):
     return db_client(actor).get(f"/api/v1/cases/{case_id}")
+
+
+def scope_of(user_id: str, role: str) -> CaseScope:
+    return CaseScope.from_permissions(user_id, DEFAULT_ROLE_PERMISSIONS[role])
 
 
 def task_ids(db_client, triager: str, case_id: str) -> dict[str, str]:
@@ -974,11 +994,12 @@ def test_list_filters_cannot_be_used_to_find_another_reporters_title(db_client, 
         json={"title": marker, "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat()},
     )
     assert created.status_code == 201
-    # The list has no filter parameters. Unknown parameters are ignored, so they must not narrow the list either.
+    # The list filters by q only (reference or id prefix; see the q tests below). Other parameters are ignored, so
+    # they must not narrow the list either.
     plain = db_client(people["reporter"]).get("/api/v1/cases?limit=200")
     assert plain.status_code == 200
     assert marker not in plain.text
-    for query in (f"q={marker}", f"title={marker}", f"search={marker}", f"status=open&title={marker}"):
+    for query in (f"title={marker}", f"search={marker}", f"status=open&title={marker}"):
         filtered = db_client(people["reporter"]).get(f"/api/v1/cases?limit=200&{query}")
         assert filtered.status_code == 200
         assert marker not in filtered.text
@@ -988,19 +1009,157 @@ def test_list_filters_cannot_be_used_to_find_another_reporters_title(db_client, 
 
 
 @requires_database
-@pytest.mark.xfail(
-    strict=True,
-    reason="case import echoes case_id and reference of an existing case to any caller with cases:submit. "
-    "Fix: api.import_cases passes the caller's CaseScope and case_import returns the ids only when "
-    "cases.is_visible is true.",
-)
 def test_import_of_another_reporters_source_case_does_not_disclose_it(people):
     record = json.loads((EXAMPLES / "valid-minimal.json").read_text(encoding="utf-8"))
     record["case_id"] = str(uuid.uuid4())
     record["timeline"]["awareness_time"]["value"] = "2026-10-30T09:00:00Z"
-    [created] = case_import.import_records([record], people["other_reporter"])
+    [created] = case_import.import_records([record], scope_of(people["other_reporter"], "reporter"))
     assert created.status == "imported"
-    [result] = case_import.import_records([record], people["reporter"])
+    [result] = case_import.import_records([record], scope_of(people["reporter"], "reporter"))
     assert result.status == "duplicate"
     assert result.case_id is None
     assert result.reference is None
+    # The creator of the case still gets its ids on a repeat, so the check above is not an empty answer.
+    [own] = case_import.import_records([record], scope_of(people["other_reporter"], "reporter"))
+    assert own.status == "duplicate"
+    assert own.case_id == created.case_id and own.reference == created.reference
+
+
+@contextmanager
+def role_holds(role: str, permission: str):
+    """Grant one permission to a role for the length of the block. The role matrix is restored afterwards."""
+    before = frozenset(list_role_permissions()[role])
+    set_role_permissions(role, before | {permission})
+    try:
+        yield
+    finally:
+        set_role_permissions(role, before)
+
+
+def open_report_via_api(db_client, reporter: str, title: str = "Reporter channel case") -> str:
+    response = db_client(reporter).post(
+        "/api/v1/reports",
+        json={"title": title, "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat()},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+def listed_ids(db_client, actor: str, q: str | None = None) -> set[str]:
+    params = {"limit": 200} | ({"q": q} if q is not None else {})
+    response = db_client(actor).get("/api/v1/cases", params=params)
+    assert response.status_code == 200, response.text
+    return {item["id"] for item in response.json()["items"]}
+
+
+# --- reporter-channel cases are hidden from read_all callers until assigned (D2) -----------------------------------
+
+
+@requires_database
+def test_unassigned_reporter_case_is_hidden_from_a_triager(db_client, people):
+    case_id = open_report_via_api(db_client, people["reporter"])
+    triager = db_client(people["triager"])
+    # In the list, on the case read, and in the history, the triager gets the same answer as for a missing case.
+    assert case_id not in listed_ids(db_client, people["triager"])
+    assert triager.get(f"/api/v1/cases/{case_id}").status_code == 404
+    assert triager.get(f"/api/v1/cases/{case_id}/history").status_code == 404
+    assert triager.get(f"/api/v1/cases/{case_id}/assignments").status_code == 404
+    # The reporter still sees its own case, with no assignment.
+    assert case_id in listed_ids(db_client, people["reporter"])
+    assert get_case(db_client, people["reporter"], case_id).status_code == 200
+
+
+@requires_database
+def test_assigned_reporter_case_is_visible_to_a_triager(db_client, people):
+    case_id = open_report_via_api(db_client, people["reporter"])
+    # The reporting owner assigns it. Assignment needs the case to be visible, so the owner holds reporter_contact:read.
+    with role_holds("triager", "reporter_contact:read"):
+        response = db_client(people["triager"]).post(
+            f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["investigator"]}
+        )
+    assert response.status_code == 201, response.text
+    # The case now has an active assignment, so the triager without the permission sees it too.
+    assert case_id in listed_ids(db_client, people["triager"])
+    assert get_case(db_client, people["triager"], case_id).status_code == 200
+    assert db_client(people["triager"]).get(f"/api/v1/cases/{case_id}/history").status_code == 200
+
+
+@requires_database
+def test_reporter_contact_holder_sees_unassigned_reporter_case(db_client, people):
+    case_id = open_report_via_api(db_client, people["reporter"])
+    assert case_id not in listed_ids(db_client, people["triager"])
+    # Only the triager role has read_all, so the holder is a triager that has been granted the permission.
+    with role_holds("triager", "reporter_contact:read"):
+        assert case_id in listed_ids(db_client, people["triager"])
+        assert get_case(db_client, people["triager"], case_id).status_code == 200
+        assert db_client(people["triager"]).get(f"/api/v1/cases/{case_id}/history").status_code == 200
+        contact = db_client(people["triager"]).get(f"/api/v1/reports/{case_id}/contact")
+        assert contact.status_code == 200, contact.text
+    # Without the permission again, the case is hidden again.
+    assert case_id not in listed_ids(db_client, people["triager"])
+    assert get_case(db_client, people["triager"], case_id).status_code == 404
+
+
+@requires_database
+def test_hidden_reporter_case_is_not_counted_for_a_triager(db_client, people):
+    before = db_client(people["triager"]).get("/api/v1/cases?limit=1").json()["total"]
+    open_report_via_api(db_client, people["reporter"], title="Hidden from triagers")
+    after = db_client(people["triager"]).get("/api/v1/cases?limit=1").json()["total"]
+    assert after == before
+
+
+# --- q: case-insensitive match on the reference or the id prefix (F1) ----------------------------------------------
+
+
+@requires_database
+def test_q_matches_reference_partially_and_id_prefix_in_any_case(db_client, people):
+    case_id = create_case_via_api(db_client, people["reporter"])
+    reference = db_client(people["reporter"]).get(f"/api/v1/cases/{case_id}").json()["reference"]
+    for query in (reference, reference.lower(), reference[5:12], case_id[:8], case_id[:8].upper()):
+        ids = listed_ids(db_client, people["reporter"], query)
+        assert case_id in ids, query
+    # Every returned case matches q, so nothing unrelated comes through.
+    response = db_client(people["reporter"]).get("/api/v1/cases", params={"limit": 200, "q": reference[5:12]})
+    for item in response.json()["items"]:
+        assert reference[5:12].lower() in item["reference"].lower()
+
+
+@requires_database
+def test_q_is_combined_with_visibility(db_client, people):
+    own = create_case_via_api(db_client, people["reporter"])
+    own_reference = db_client(people["reporter"]).get(f"/api/v1/cases/{own}").json()["reference"]
+    # Another reporter searches for the exact reference and the id of a case it may not see.
+    assert own not in listed_ids(db_client, people["other_reporter"], own_reference)
+    assert own not in listed_ids(db_client, people["other_reporter"], own[:8])
+    other = db_client(people["other_reporter"]).get("/api/v1/cases", params={"limit": 200, "q": own_reference})
+    assert other.status_code == 200 and other.json()["total"] == 0 and other.json()["items"] == []
+    # The owner finds it.
+    assert own in listed_ids(db_client, people["reporter"], own_reference)
+
+
+@requires_database
+def test_q_total_counts_only_the_matches(db_client, people):
+    case_id = create_case_via_api(db_client, people["reporter"])
+    reference = db_client(people["reporter"]).get(f"/api/v1/cases/{case_id}").json()["reference"]
+    body = db_client(people["triager"]).get("/api/v1/cases", params={"limit": 200, "q": reference}).json()
+    assert body["total"] == len(body["items"]) == 1
+    assert body["items"][0]["id"] == case_id
+
+
+@requires_database
+def test_q_treats_like_wildcards_as_plain_text_and_ignores_titles(db_client, people):
+    marker = "Title marker " + uuid.uuid4().hex
+    created = db_client(people["reporter"]).post(
+        "/api/v1/cases",
+        json={"title": marker, "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat()},
+    )
+    assert created.status_code == 201
+    for query in ("%", "_", "SAFE-%", marker):
+        response = db_client(people["triager"]).get("/api/v1/cases", params={"limit": 200, "q": query})
+        assert response.status_code == 200
+        assert response.json()["total"] == 0, query
+    # A blank q is no filter at all.
+    plain = db_client(people["triager"]).get("/api/v1/cases?limit=200").json()
+    blank = db_client(people["triager"]).get("/api/v1/cases", params={"limit": 200, "q": "  "}).json()
+    assert blank["total"] == plain["total"]
+

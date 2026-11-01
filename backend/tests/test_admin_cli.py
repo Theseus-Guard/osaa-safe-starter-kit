@@ -6,7 +6,7 @@ import psycopg
 import pytest
 
 from safe_kit import admin
-from safe_kit.users import AdminAlreadyExists, PasswordReused
+from safe_kit.users import AdminAlreadyExists, PasswordReused, ReporterAccountResetRefused
 
 PASSWORD = "bootstrap passphrase"
 EMAIL = "first.admin@example.com"
@@ -98,6 +98,21 @@ def test_reset_password_resets_the_account(calls, monkeypatch, capsys):
     assert admin.main(["reset-password", "--username", "alice"]) == 0
     assert recorded["reset"] == [("00000000-0000-0000-0000-000000000002", PASSWORD)]
     assert "password change required" in capsys.readouterr().out
+
+
+def test_reset_password_refuses_a_reporter_account(calls, monkeypatch, capsys):
+    recorded, state = calls
+    state["reset_error"] = ReporterAccountResetRefused()
+    monkeypatch.setattr(
+        admin, "find_user", lambda username: SimpleNamespace(id="00000000-0000-0000-0000-000000000003")
+    )
+    feed_password(monkeypatch, PASSWORD)
+    assert admin.main(["reset-password", "--username", "reporter-one"]) == 1
+    err = capsys.readouterr().err
+    assert "reporter account" in err
+    assert "reporter_account_reset_refused" in err
+    assert "password was not changed" in err
+    assert "password reset for" not in capsys.readouterr().out
 
 
 def test_reset_password_refuses_a_recent_password(calls, monkeypatch, capsys):

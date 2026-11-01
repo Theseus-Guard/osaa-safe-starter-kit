@@ -32,6 +32,7 @@ from safe_kit.case_import import (
     prepare_record,
     validate_record,
 )
+from safe_kit.cases import CaseScope
 from safe_kit.db import connect
 from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS
 from safe_kit.system_timezone import TimezoneNotConfigured
@@ -231,8 +232,8 @@ def client(caller):
 def service(monkeypatch):
     state = {"calls": [], "results": None, "error": None}
 
-    def fake_import(records, actor_id):
-        state["calls"].append((len(records), actor_id))
+    def fake_import(records, scope):
+        state["calls"].append((len(records), scope.user_id))
         if state["error"] is not None:
             raise state["error"]
         if state["results"] is not None:
@@ -292,6 +293,10 @@ def new_reporter() -> str:
     return users.create_user("t-" + uuid.uuid4().hex[:12], "temporary passphrase", "reporter")
 
 
+def scope_for(actor_id: str) -> CaseScope:
+    return CaseScope.from_permissions(actor_id, DEFAULT_ROLE_PERMISSIONS["reporter"])
+
+
 def cases_created_by(actor_id: str) -> int:
     with connect() as conn:
         return conn.execute("SELECT count(*) FROM cases WHERE created_by = %s", (actor_id,)).fetchone()[0]
@@ -310,7 +315,7 @@ def test_valid_record_is_imported_with_its_case_deadlines_registry_and_audit():
     actor = new_reporter()
     record = example_record()
 
-    [result] = import_records([record], actor)
+    [result] = import_records([record], scope_for(actor))
 
     assert result.status == "imported"
     [(stored_case_id, digest, payload)] = registry_rows(record["case_id"])
@@ -345,9 +350,9 @@ def test_valid_record_is_imported_with_its_case_deadlines_registry_and_audit():
 def test_repeated_identical_record_is_a_duplicate_and_creates_nothing():
     actor = new_reporter()
     record = example_record()
-    [first] = import_records([record], actor)
+    [first] = import_records([record], scope_for(actor))
 
-    [second] = import_records([record], actor)
+    [second] = import_records([record], scope_for(actor))
 
     assert second.status == "duplicate"
     assert (second.case_id, second.reference) == (first.case_id, first.reference)
@@ -358,9 +363,9 @@ def test_repeated_identical_record_is_a_duplicate_and_creates_nothing():
 def test_same_case_id_with_different_content_is_a_conflict_and_changes_nothing():
     actor = new_reporter()
     record = example_record()
-    [first] = import_records([record], actor)
+    [first] = import_records([record], scope_for(actor))
 
-    [changed] = import_records([{**record, "narrative_summary": "Changed after the first import."}], actor)
+    [changed] = import_records([{**record, "narrative_summary": "Changed after the first import."}], scope_for(actor))
 
     assert changed.status == "conflict"
     assert changed.reference == first.reference
@@ -378,7 +383,7 @@ def test_each_record_stands_on_its_own_within_one_file():
     del bad["record_schema_version"]
     unknown = example_record(record_schema_version="0.2.0")
 
-    results = import_records([good, bad, unknown, good], actor)
+    results = import_records([good, bad, unknown, good], scope_for(actor))
 
     assert [result.status for result in results] == ["imported", "rejected", "rejected", "duplicate"]
     assert results[1].errors and "record_schema_version" in results[1].errors[0]
@@ -402,7 +407,7 @@ def test_database_failure_on_one_record_leaves_nothing_for_it_and_the_batch_goes
 
     monkeypatch.setattr(case_import.cases, "insert_case", flaky_insert)
 
-    results = import_records([broken, healthy], actor)
+    results = import_records([broken, healthy], scope_for(actor))
 
     assert [result.status for result in results] == ["failed", "imported"]
     assert registry_rows(broken["case_id"]) == []

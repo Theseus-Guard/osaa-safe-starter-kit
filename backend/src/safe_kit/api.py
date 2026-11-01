@@ -69,7 +69,7 @@ from safe_kit.rate_limit import clear as clear_rate_limit
 from safe_kit.rate_limit import hit as hit_rate_limit
 from safe_kit.privacy import CSV_COLUMNS, inventory, inventory_csv_rows
 from safe_kit.rbac import RoleOutcome, list_catalog, list_role_permissions, set_role_permissions
-from safe_kit.reporter_channel import hide_reporter, submit_report
+from safe_kit.reporter_channel import ContactOutcome, hide_reporter, read_reporter_contact, submit_report
 from safe_kit.security import (
     MIN_PASSWORD_LENGTH,
     access_token_ttl,
@@ -92,6 +92,7 @@ from safe_kit.users import (
     InvalidProfile,
     InvalidUsername,
     PasswordReused,
+    ReporterAccountResetRefused,
     UpdateOutcome,
     User,
     admin_exists,
@@ -264,6 +265,8 @@ PROTECTED_DETAIL = "the protected admin account cannot be disabled, deleted, or 
 # Detail code of the 422 when a new password matches one of the account's last PASSWORD_HISTORY_DEPTH passwords
 # or a temporary password issued to the account.
 PASSWORD_REUSED_DETAIL = "password_reused"
+# Detail code of the 409 when an administrator tries to reset the password of a reporter account.
+REPORTER_RESET_REFUSED_DETAIL = "reporter_account_reset_refused"
 
 
 def _summary(user: User) -> UserSummary:
@@ -517,6 +520,8 @@ def admin_reset_password(
         found = reset_password(str(user_id), body.temporary_password, actor_id=actor.id)
     except PasswordReused:
         raise HTTPException(status_code=422, detail=PASSWORD_REUSED_DETAIL)
+    except ReporterAccountResetRefused:
+        raise HTTPException(status_code=409, detail=REPORTER_RESET_REFUSED_DETAIL)
     if not found:
         raise HTTPException(status_code=404, detail="user not found")
     return Response(status_code=204)
@@ -828,6 +833,25 @@ def open_report(
     return _case_response(case, _scope(actor))
 
 
+class ReporterContactResponse(BaseModel):
+    case_id: str
+    contact: str | None
+
+
+@app.get("/api/v1/reports/{case_id}/contact", response_model=ReporterContactResponse)
+def get_reporter_contact(
+    case_id: uuid.UUID,
+    actor: User = Depends(require_permission("reporter_contact:read")),
+) -> ReporterContactResponse:
+    """The contact the reporter gave. Audited in the same transaction as the read."""
+    outcome, contact = read_reporter_contact(str(case_id), _scope(actor))
+    if outcome is ContactOutcome.NOT_FOUND:
+        raise CASE_NOT_FOUND
+    if outcome is ContactOutcome.NO_REPORTER:
+        raise HTTPException(status_code=404, detail="reporter contact not found")
+    return ReporterContactResponse(case_id=str(case_id), contact=contact)
+
+
 async def _read_import_body(request: Request) -> bytes:
     """Read the import file with a size limit. A request with no Content-Length cannot exceed it either."""
     message = f"the import file exceeds the limit of {MAX_IMPORT_BYTES} bytes"
@@ -874,7 +898,7 @@ async def import_cases(
     except ImportFileError as error:
         raise HTTPException(status_code=422, detail=str(error))
     try:
-        results = await run_in_threadpool(import_records, records, actor.id)
+        results = await run_in_threadpool(import_records, records, _scope(actor))
     except TimezoneNotConfigured:
         raise HTTPException(status_code=409, detail="system timezone is not configured")
     return _import_response(results)
@@ -884,12 +908,15 @@ async def import_cases(
 def list_cases(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    q: str | None = Query(default=None, max_length=100),
     actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS)),
 ) -> CasePage:
+    # q matches the reference (partial) or the id prefix. It only narrows the cases the caller may already see.
     scope = _scope(actor)
+    search = q.strip() if q is not None else None
     return CasePage(
-        items=[_case_summary(case) for case in list_visible_cases(scope, limit, offset)],
-        total=count_visible_cases(scope),
+        items=[_case_summary(case) for case in list_visible_cases(scope, limit, offset, q=search)],
+        total=count_visible_cases(scope, q=search),
         limit=limit,
         offset=offset,
     )

@@ -75,6 +75,11 @@ class PasswordReused(Exception):
     or a temporary password that was ever issued to the account."""
 
 
+class ReporterAccountResetRefused(Exception):
+    """An administrator may not reset the password of a reporter account. The reporter keeps the account they chose,
+    so no administrator can sign in as the person who opened a case."""
+
+
 def normalize_email(value: str | None) -> str:
     """The one email rule, used by the API, the profile endpoints, and the CLI.
 
@@ -297,21 +302,25 @@ def _set_password(
     action: str,
     actor_id: str | None,
     details: dict,
+    refuse_reporter: bool = False,
 ) -> bool:
     """Replace the password and end every session of the user. Returns False if the user does not exist.
 
     Raises PasswordReused, before anything is written, if the new password is one of the account's last
     PASSWORD_HISTORY_DEPTH passwords or a temporary password issued to the account, however long ago.
-    Access tokens issued before this moment are rejected by the sessions_valid_after check.
+    Raises ReporterAccountResetRefused, before anything is written, when refuse_reporter is set and the account
+    has the reporter role. Access tokens issued before this moment are rejected by the sessions_valid_after check.
     """
     with connect() as conn:
         # Locks the account row, so two password changes for the same user run one after the other.
         account = conn.execute(
-            "SELECT 1 FROM users WHERE id = %s AND NOT is_deleted FOR UPDATE",
+            "SELECT role FROM users WHERE id = %s AND NOT is_deleted FOR UPDATE",
             (user_id,),
         ).fetchone()
         if account is None:
             return False
+        if refuse_reporter and account[0] == "reporter":
+            raise ReporterAccountResetRefused
         # The last PASSWORD_HISTORY_DEPTH entries, plus every temporary entry, however old.
         candidates = conn.execute(
             "SELECT password_hash FROM ("
@@ -343,6 +352,7 @@ def reset_password(user_id: str, temporary_password: str, actor_id: str | None =
     """Admin or operator reset. The user must choose a new password at next login.
 
     actor_id is None and source is "cli" when the operator resets a password from the container.
+    Raises ReporterAccountResetRefused for an account with the reporter role.
     """
     return _set_password(
         user_id,
@@ -351,6 +361,7 @@ def reset_password(user_id: str, temporary_password: str, actor_id: str | None =
         action=audit.USER_PASSWORD_RESET,
         actor_id=actor_id,
         details={"source": source},
+        refuse_reporter=True,
     )
 
 

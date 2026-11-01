@@ -29,6 +29,7 @@ from jsonschema import Draft202012Validator
 from psycopg.types.json import Jsonb
 
 from safe_kit import audit, cases, system_timezone
+from safe_kit.cases import CaseScope
 from safe_kit.db import connect
 from safe_kit.system_timezone import TimezoneNotConfigured
 
@@ -161,28 +162,32 @@ def prepare_record(record: Any, now: datetime) -> PreparedRecord:
     )
 
 
-def import_records(records: list[Any], actor_id: str) -> list[RecordResult]:
-    """Import the records one at a time and report each result. The actor becomes the creator of every new case."""
+def import_records(records: list[Any], scope: CaseScope) -> list[RecordResult]:
+    """Import the records one at a time and report each result. The caller becomes the creator of every new case.
+
+    A duplicate or conflict names the existing case only when the caller may see it. Otherwise the result carries the
+    outcome alone, so an import cannot be used to learn the ids of another reporter's case.
+    """
     with connect() as conn:
         if system_timezone.read_current(conn) is None:
             raise TimezoneNotConfigured()
     now = datetime.now(UTC)
-    return [_import_one(index, record, actor_id, now) for index, record in enumerate(records)]
+    return [_import_one(index, record, scope, now) for index, record in enumerate(records)]
 
 
-def _import_one(index: int, record: Any, actor_id: str, now: datetime) -> RecordResult:
+def _import_one(index: int, record: Any, scope: CaseScope, now: datetime) -> RecordResult:
     try:
         prepared = prepare_record(record, now)
     except RecordRejected as rejected:
         return RecordResult(index=index, status="rejected", errors=tuple(rejected.errors))
     try:
-        return _store(index, prepared, actor_id)
+        return _store(index, prepared, scope)
     except psycopg.Error:
         # The transaction was rolled back, so this record left nothing behind. The batch goes on.
         return RecordResult(index=index, status="failed", source_case_id=prepared.source_case_id)
 
 
-def _store(index: int, prepared: PreparedRecord, actor_id: str) -> RecordResult:
+def _store(index: int, prepared: PreparedRecord, scope: CaseScope) -> RecordResult:
     with connect() as conn:
         # Serializes imports of the same source case, so two concurrent files cannot both create it.
         conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (prepared.source_case_id,))
@@ -196,6 +201,8 @@ def _store(index: int, prepared: PreparedRecord, actor_id: str) -> RecordResult:
         ).fetchone()
         if existing is not None:
             status = "duplicate" if existing[2] == prepared.fingerprint else "conflict"
+            if not cases.is_visible_on(conn, existing[0], scope):
+                return RecordResult(index=index, status=status, source_case_id=prepared.source_case_id)
             return RecordResult(
                 index=index,
                 status=status,
@@ -203,7 +210,7 @@ def _store(index: int, prepared: PreparedRecord, actor_id: str) -> RecordResult:
                 case_id=existing[0],
                 reference=existing[1],
             )
-        case = cases.insert_case(conn, prepared.title, prepared.awareness_time, actor_id)
+        case = cases.insert_case(conn, prepared.title, prepared.awareness_time, scope.user_id)
         registry_id = conn.execute(
             """
             INSERT INTO case_import_records (source_case_id, case_id, record_schema_version, content_sha256, payload, imported_by)
@@ -216,7 +223,7 @@ def _store(index: int, prepared: PreparedRecord, actor_id: str) -> RecordResult:
                 RECORD_SCHEMA_VERSION,
                 prepared.fingerprint,
                 Jsonb(prepared.payload),
-                actor_id,
+                scope.user_id,
             ),
         ).fetchone()[0]
         audit.record(
@@ -224,7 +231,7 @@ def _store(index: int, prepared: PreparedRecord, actor_id: str) -> RecordResult:
             audit.CASE_IMPORT,
             "case_import",
             registry_id,
-            actor_id=actor_id,
+            actor_id=scope.user_id,
             details={
                 "source_case_id": prepared.source_case_id,
                 "case_id": case.id,

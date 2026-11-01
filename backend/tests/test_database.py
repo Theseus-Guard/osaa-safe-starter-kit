@@ -137,7 +137,7 @@ def test_failed_change_leaves_no_audit_row():
 
 
 def test_password_reset_is_audited_with_the_operator_source():
-    target = new_user("reporter")
+    target = new_user("triager")
     assert users.reset_password(target, "another temporary passphrase", source="cli") is True
     rows = audit_rows(target, audit.USER_PASSWORD_RESET)
     assert rows == [(None, {"source": "cli"})]
@@ -301,7 +301,7 @@ def password_changed_at(user_id: str) -> datetime:
 
 
 def test_every_password_write_is_recorded_as_an_argon2_hash():
-    target = new_user("reporter")
+    target = new_user("triager")
     first = password_history_hashes(target)
     assert len(first) == 1
     assert security.verify_password(first[0], "temporary passphrase")
@@ -344,7 +344,7 @@ def test_temporary_password_cannot_be_chosen_as_the_next_password():
 
 
 def test_temporary_password_stays_refused_after_later_changes():
-    target = new_user("reporter")
+    target = new_user("triager")
     for new in ["first passphrase here", "second passphrase here", "third passphrase here", "fourth passphrase here"]:
         assert users.change_own_password(target, new) is True
     # Four later changes: the temporary password is outside the last three, and it is still refused.
@@ -357,7 +357,7 @@ def test_temporary_password_stays_refused_after_later_changes():
 
 
 def test_last_three_passwords_are_refused_and_the_fourth_most_recent_is_allowed():
-    target = new_user("reporter")
+    target = new_user("triager")
     passwords = ["first passphrase here", "second passphrase here", "third passphrase here", "fourth passphrase here"]
     for new in passwords:
         assert users.change_own_password(target, new) is True
@@ -394,3 +394,29 @@ def test_expired_password_forces_a_change_until_the_user_changes_it():
     user = users.find_user_by_id(target)
     assert user.must_change_password is False
     assert user.password_changed_at > datetime.now(UTC) - timedelta(days=1)
+
+
+def test_reporter_account_password_cannot_be_reset_by_an_administrator():
+    target = new_user("reporter")
+    hashes_before = password_history_hashes(target)
+    changed_before = password_changed_at(target)
+    with pytest.raises(users.ReporterAccountResetRefused):
+        users.reset_password(target, "another temporary passphrase", source="cli")
+    # Refused before anything is written: the password, its history, and the audit trail are unchanged.
+    assert password_history_hashes(target) == hashes_before
+    assert password_changed_at(target) == changed_before
+    assert audit_rows(target, audit.USER_PASSWORD_RESET) == []
+
+
+def test_reporter_can_still_change_its_own_password():
+    target = new_user("reporter")
+    assert users.change_own_password(target, "a new passphrase here") is True
+    assert audit_rows(target, audit.USER_PASSWORD_CHANGE) == [(target, {})]
+
+
+def test_reporter_contact_permission_is_in_the_catalog_and_held_by_no_role():
+    from safe_kit import rbac
+
+    assert "reporter_contact:read" in dict(rbac.list_catalog())
+    assert not any("reporter_contact:read" in permissions for permissions in rbac.list_role_permissions().values())
+

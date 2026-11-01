@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from fastapi.testclient import TestClient
 
-from safe_kit import api, auth, cases
+from safe_kit import api, auth
 from safe_kit.cases import CALENDAR_VERSION, Case, calendar_for, create_case, deadline_tasks_for
 from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS
 from safe_kit.system_timezone import TimezoneNotConfigured
@@ -102,11 +102,11 @@ def store(monkeypatch):
         case = state["cases"].get(case_id)
         return case if case is not None and visible(case, scope) else None
 
-    def fake_list(scope, limit, offset):
+    def fake_list(scope, limit, offset, q=None):
         mine = [case for case in state["cases"].values() if visible(case, scope)]
         return mine[offset : offset + limit]
 
-    def fake_count(scope):
+    def fake_count(scope, q=None):
         return sum(1 for case in state["cases"].values() if visible(case, scope))
 
     monkeypatch.setattr(api, "create_case", fake_create)
