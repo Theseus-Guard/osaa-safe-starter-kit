@@ -2,7 +2,7 @@
 
 A self-hosted starter kit for organizations that take part in the Shared AI Findings Exchange (SAFE). It supports the SAFE workflow for AI incidents and near misses: intake, deadline tracking, evidence preservation, review, controlled disclosure, and corrective actions.
 
-> **Status: early development.** This is not a production system. It has no TLS, no OIDC/SSO, no evidence storage, and no disclosure workflow yet. Do not use it with real incident data. See [ROADMAP.md](ROADMAP.md) for the phases.
+> **Status: early development.** This is not a production system. It has HTTPS with a development certificate, but no production certificate, no OIDC/SSO, and no disclosure workflow yet. Do not use it with real incident data. See [ROADMAP.md](ROADMAP.md) for the phases.
 
 ## Independence and SAFE baseline
 
@@ -38,10 +38,11 @@ Requirements: Docker with Compose v2.
 
 ```sh
 ./scripts/init-secrets.sh
+sh scripts/make-dev-cert.sh
 docker compose up -d --build --wait
 ```
 
-The gateway listens only on `http://127.0.0.1:8080`.
+The gateway serves HTTPS only, at `https://127.0.0.1:8443`, with a development certificate. Your browser will warn until you trust the local CA. See [gateway/README-TLS.md](gateway/README-TLS.md).
 
 The first admin is created once from the command line. The password is read from stdin and must be at least 12 characters:
 
@@ -84,7 +85,7 @@ The backend `--db` mode starts a throwaway PostgreSQL container and removes it a
 - Passwords are stored as Argon2id hashes. Login is rate limited.
 - Access tokens are short-lived and kept in memory in the browser. Refresh tokens are rotated.
 - The application roles cannot change the schema. The bootstrap superuser password is random and not stored.
-- Not yet implemented: TLS, OIDC/SSO, encryption at rest for the database volume, evidence storage, and backup/restore procedures.
+- Not yet implemented: a production certificate, OIDC/SSO, encryption at rest for the database volume, the disclosure workflow, a Vault Transit key provider, and backup/restore procedures.
 
 ## Versioning and SAFE compatibility
 

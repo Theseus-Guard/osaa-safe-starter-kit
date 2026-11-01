@@ -2,7 +2,7 @@
 
 ## Status
 
-SAFE-Starter-Kit is in early development. It is not a production system: it has no TLS, no OIDC/SSO, and no encryption at rest yet. Do not deploy it with real incident data.
+SAFE-Starter-Kit is in early development. It is not a production system: it has HTTPS only with a development certificate, no OIDC/SSO, and no encryption at rest for the database yet. Evidence files are encrypted by the application, with the key read from a file. Do not deploy it with real incident data.
 
 ## Supported versions
 

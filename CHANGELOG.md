@@ -19,7 +19,15 @@ Every release entry states the **SAFE compatibility baseline**: the SAFE version
 - Personal data inventory (metadata only) with JSON and CSV export.
 - System timezone chosen at first admin login; changes are confirmed and audited.
 - React and TypeScript web UI, container CLI with case commands.
+- HTTPS-only gateway with a development certificate authority (`scripts/make-dev-cert.sh`) and HSTS.
+- Case lifecycle: assignment, deadline status per task, closing and reopening with stored reasons, and case history. Reasons and evidence events are shown only to roles that hold the matching permission.
+- Evidence: upload, download, and a custody record for each event. Files are encrypted with AES-256-GCM, keys come from a file, and uploads have a size limit and a media-type allowlist. New permission `evidence:read`; `evidence:write` is needed to upload.
+- Case import from a versioned JSON file (`import_format_version` 1), through the API and `safe-kit case import`. Each record reports imported, duplicate, conflict, rejected, or failed.
+- Profile fields (first name, last name, title, email); the top bar shows the full name and username.
+- Test suites for the backend and the frontend, with coverage measured by the commands in the README.
 
 ### Not yet implemented
-- TLS, OIDC/SSO, evidence storage, disclosure workflow, backup and restore procedures, encryption at rest.
-- Verification on Ubuntu 24.04 and 26.04 LTS.
+- A production certificate, OIDC/SSO, encryption at rest for the database volume, and backup and restore procedures.
+- The disclosure workflow and the later review framework (F2), including export and recipient packages.
+- The independent reporter channel, the Vault Transit key provider, and object storage for evidence.
+- Verification on Ubuntu 24.04 and 26.04 LTS, which is planned after all other work.
