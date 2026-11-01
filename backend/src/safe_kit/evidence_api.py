@@ -196,7 +196,11 @@ async def upload_evidence(
             data,
             storage_from_env(),
             provider,
+            _scope(actor),
         )
+    except evidence.CaseNotVisible:
+        # The case stopped being visible after the check above; refused the same way as a missing case.
+        raise HTTPException(status_code=404, detail="case not found") from None
     except evidence.UploadExpired:
         raise HTTPException(status_code=409, detail="the upload expired before it finished; retry") from None
     except (StorageError, KeyProviderError):

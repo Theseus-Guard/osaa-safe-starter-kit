@@ -131,7 +131,7 @@ def client(monkeypatch, provider):
 
 
 def fake_create(calls: list):
-    def create(case_id, uploader_id, filename, media_type, data, storage, provider):
+    def create(case_id, uploader_id, filename, media_type, data, storage, provider, scope):
         calls.append((case_id, uploader_id, filename, media_type, len(data)))
         return evidence.EvidenceItem(
             id=str(uuid.uuid4()),
@@ -707,7 +707,8 @@ def evidence_world(monkeypatch, provider):
     outcome, _ = cases.assign_member(case.id, people["investigator"], CaseScope(people["triager"], read_all=True))
     assert outcome is cases.Outcome.OK
     item = evidence.create_evidence(
-        case.id, people["investigator"], "scan.pdf", "application/pdf", PDF, storage, provider
+        case.id, people["investigator"], "scan.pdf", "application/pdf", PDF, storage, provider,
+        CaseScope(people["triager"], read_all=True),
     )
     yield {"people": people, "case_id": case.id, "evidence_id": item.id}
     api.app.dependency_overrides.clear()

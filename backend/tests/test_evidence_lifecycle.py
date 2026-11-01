@@ -130,7 +130,7 @@ class Ledger:
 def ledger(monkeypatch) -> Ledger:
     book = Ledger()
 
-    def insert_pending(case_id, uploader_id, name, media_type, size_bytes, storage_key, key_id, wrapped, nonce):
+    def insert_pending(case_id, uploader_id, name, media_type, size_bytes, storage_key, key_id, wrapped, nonce, scope):
         evidence_id = str(uuid.uuid4())
         book.rows[evidence_id] = "pending"
         book.events.append("pending")
@@ -166,9 +166,14 @@ def ledger(monkeypatch) -> Ledger:
     return book
 
 
+def read_all(user_id: str) -> CaseScope:
+    return CaseScope.from_permissions(user_id, frozenset({"cases:read_all"}))
+
+
 def upload(storage, provider, data: bytes = PDF):
+    uploader = str(uuid.uuid4())
     return evidence.create_evidence(
-        str(uuid.uuid4()), str(uuid.uuid4()), "scan.pdf", "application/pdf", data, storage, provider,
+        str(uuid.uuid4()), uploader, "scan.pdf", "application/pdf", data, storage, provider, read_all(uploader),
     )
 
 
@@ -464,7 +469,9 @@ def database_storage_key(evidence_id: str) -> str:
 def test_upload_is_available_in_the_database_with_an_uploaded_custody_event(provider):
     user_id, case_id = database_case()
     storage = ScriptedStorage([])
-    item = evidence.create_evidence(case_id, user_id, "scan.pdf", "application/pdf", PDF, storage, provider)
+    item = evidence.create_evidence(
+        case_id, user_id, "scan.pdf", "application/pdf", PDF, storage, provider, read_all(user_id),
+    )
     assert database_status(item.id) == "available"
     assert [event.action for event in evidence.custody_events(item.id)] == ["uploaded"]
 
@@ -475,6 +482,7 @@ def test_failed_write_is_failed_in_the_database_with_a_reason(provider):
     with pytest.raises(StorageError):
         evidence.create_evidence(
             case_id, user_id, "scan.pdf", "application/pdf", PDF, ScriptedStorage([], mode="fail_write"), provider,
+            read_all(user_id),
         )
     with connect() as conn:
         rows = conn.execute(
@@ -489,7 +497,9 @@ def test_failed_write_is_failed_in_the_database_with_a_reason(provider):
 def test_integrity_failure_on_download_moves_the_row_to_failed(provider):
     user_id, case_id = database_case()
     storage = ScriptedStorage([])
-    item = evidence.create_evidence(case_id, user_id, "scan.pdf", "application/pdf", PDF, storage, provider)
+    item = evidence.create_evidence(
+        case_id, user_id, "scan.pdf", "application/pdf", PDF, storage, provider, read_all(user_id),
+    )
     key = database_storage_key(item.id)
     storage.objects[key] = b"damaged" + storage.objects[key][7:]
     scope = CaseScope.from_permissions(user_id, frozenset({"cases:read_all"}))
@@ -508,7 +518,9 @@ def test_integrity_failure_on_download_moves_the_row_to_failed(provider):
 @requires_database
 def test_availability_failure_on_download_keeps_the_row_available(provider):
     user_id, case_id = database_case()
-    item = evidence.create_evidence(case_id, user_id, "scan.pdf", "application/pdf", PDF, ScriptedStorage([]), provider)
+    item = evidence.create_evidence(
+        case_id, user_id, "scan.pdf", "application/pdf", PDF, ScriptedStorage([]), provider, read_all(user_id),
+    )
     evidence.record_failure(item.id, user_id, "key_unavailable")
     assert database_status(item.id) == "available"
     assert evidence.custody_events(item.id)[-1].details == {"reason": "key_unavailable"}

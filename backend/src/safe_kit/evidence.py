@@ -5,7 +5,10 @@ Upload is two steps so that a crash never leaves an unexplained object or a row 
   2. write the encrypted object, read it back and verify it with the same checks as a download, then set the row to
      available with both checksums, and record the custody event and the audit row in the same transaction.
 If the write or the verification fails, the row is marked failed with a custody event. A pending row left behind by
-a crash is marked failed by fail_stale_pending. Nothing is deleted.
+a crash is marked failed by fail_stale_pending, which the worker runs on a fixed interval. Nothing is deleted.
+
+The case visibility is checked again inside the transaction that inserts the pending row, so a case that stops being
+visible after the API check is refused before any row or object exists.
 
 Download decrypts only after the ciphertext checksum matches. The plaintext checksum is checked before any byte is
 returned. A failed check records a "failed" custody event, and an integrity failure also moves the item to failed.
@@ -27,7 +30,7 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from safe_kit import audit
-from safe_kit.cases import CaseScope
+from safe_kit.cases import CaseScope, is_visible_on
 from safe_kit.db import connect
 from safe_kit.evidence_crypto import IntegrityError, open_sealed, seal, sha256_hex
 from safe_kit.evidence_keys import KeyProvider, KeyProviderError
@@ -36,6 +39,8 @@ from safe_kit.evidence_storage import EvidenceStorage, ObjectNotFound, StorageEr
 DEFAULT_MAX_BYTES = 50 * 1024 * 1024
 MAX_FILENAME_LENGTH = 255
 MAX_SUFFIX_LENGTH = 16
+# A pending row older than this is failed by reconciliation. It is longer than an upload that is still running can
+# take, so a live upload is not failed; an upload that loses the race gets UploadExpired.
 DEFAULT_PENDING_MINUTES = 30
 
 PENDING = "pending"
@@ -72,6 +77,10 @@ class VerificationFailed(Exception):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
+
+
+class CaseNotVisible(Exception):
+    """The case is not visible to the uploader when the pending row would be written. Nothing is stored."""
 
 
 class StoreVerificationFailed(StorageError):
@@ -234,17 +243,6 @@ def _custody(conn, evidence_id: str, actor_id: str | None, action: str, details:
     )
 
 
-def case_visible(case_id: str, scope: CaseScope) -> bool:
-    """True when the case exists, is not deleted, and the caller's case scope includes it (case ACL in cases.py)."""
-    visibility, params = scope.visibility_sql()
-    with connect() as conn:
-        row = conn.execute(
-            f"SELECT 1 FROM cases WHERE id = %s AND NOT is_deleted AND {visibility}",
-            (case_id, *params),
-        ).fetchone()
-    return row is not None
-
-
 def create_evidence(
     case_id: str,
     uploader_id: str,
@@ -253,9 +251,12 @@ def create_evidence(
     data: bytes,
     storage: EvidenceStorage,
     provider: KeyProvider,
+    scope: CaseScope,
 ) -> EvidenceItem:
     """Encrypt, store, verify, and record one evidence object. The caller has already checked size and media type.
 
+    The case must be visible to scope when the pending row is inserted; otherwise CaseNotVisible is raised before
+    anything is stored.
     The object is read back and checked with the same rules as a download before the row becomes available.
     Raises StorageError (StoreVerificationFailed when the read-back does not match) or KeyProviderError when the
     object cannot be stored or verified. The row is then marked failed. Raises UploadExpired when reconciliation
@@ -266,7 +267,7 @@ def create_evidence(
     sealed = seal(data, storage_key, provider)
     evidence_id = _insert_pending(
         case_id, uploader_id, name, media_type, len(data), storage_key, sealed.key_id,
-        sealed.wrapped_data_key, sealed.nonce,
+        sealed.wrapped_data_key, sealed.nonce, scope,
     )
     try:
         storage.put(storage_key, sealed.ciphertext)
@@ -306,8 +307,13 @@ def _insert_pending(
     key_id: str,
     wrapped_data_key: bytes,
     nonce: bytes,
+    scope: CaseScope,
 ) -> str:
     with connect() as conn:
+        # The same visibility rule as the API check, run on this connection so the check and the insert commit or
+        # roll back together. A visibility change committed before this statement is seen here.
+        if not is_visible_on(conn, case_id, scope):
+            raise CaseNotVisible()
         row = conn.execute(
             """
             INSERT INTO evidence_items
@@ -476,14 +482,22 @@ def custody_events(evidence_id: str) -> list[CustodyEvent]:
 
 
 def fail_stale_pending(older_than_minutes: int = DEFAULT_PENDING_MINUTES) -> list[str]:
-    """Mark pending rows older than the limit as failed, with a custody event. Returns their ids. Deletes nothing."""
+    """Mark pending rows older than the limit as failed, with a custody event. Returns their ids. Deletes nothing.
+
+    Safe to run from several worker processes at once. Rows locked by another transaction (an upload that is
+    finishing, or another worker) are skipped, not waited for, so each row is failed once and gets one custody event.
+    """
     if older_than_minutes <= 0:
         raise ValueError("older_than_minutes must be positive")
     with connect() as conn:
         rows = conn.execute(
             """
             UPDATE evidence_items SET status = 'failed'
-            WHERE status = 'pending' AND NOT is_deleted AND created_at < now() - make_interval(mins => %s::int)
+            WHERE id IN (
+                SELECT id FROM evidence_items
+                WHERE status = 'pending' AND NOT is_deleted AND created_at < now() - make_interval(mins => %s::int)
+                FOR UPDATE SKIP LOCKED
+            )
             RETURNING id::text
             """,
             (older_than_minutes,),
