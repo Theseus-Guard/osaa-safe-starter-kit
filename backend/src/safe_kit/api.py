@@ -1160,5 +1160,10 @@ from safe_kit.evidence_api import evidence_router  # noqa: E402
 
 app.include_router(evidence_router)
 
+# Case record endpoints: awareness events, impacts, legal duties, classification, and the preliminary report.
+from safe_kit.case_records_api import case_records_router  # noqa: E402
+
+app.include_router(case_records_router)
+
 
 app.include_router(profile_router)
