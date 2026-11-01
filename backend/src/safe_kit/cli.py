@@ -5,7 +5,6 @@ import getpass
 import json
 import mimetypes
 import os
-import re
 import sys
 import urllib.error
 import urllib.parse
@@ -50,8 +49,8 @@ IMPACT_SEVERITIES = ("none", "low", "medium", "high", "critical", "unknown")
 AWARENESS_KINDS = ("operator", "affected_party", "external_report")
 LEGAL_DUTY_KINDS = ("statutory", "contractual")
 LEGAL_DUTY_STATUSES = ("open", "done")
-# The API puts the current classification version in the 409 detail of a stale save.
-CURRENT_VERSION = re.compile(r"the current version is (\d+)")
+# The API answers a stale classification save with this status in a structured 409 detail, next to current_version.
+CLASSIFICATION_VERSION_CONFLICT = "classification_version_conflict"
 
 
 class UsageError(Exception):
@@ -62,10 +61,11 @@ class RequestFailed(Exception):
     """The API or the login failed. The message is shown to the user. Exit code 1.
 
     status and detail are set when the API answered with an error. Only the command that asked for a clearer
-    message reads them. The detail is the API's short detail text, never a request body.
+    message reads them. The detail is the API's detail: a short text, or a structured object with a status string
+    (see _error_detail). It is never a request body.
     """
 
-    def __init__(self, message: str, *, status: int | None = None, detail: str | None = None) -> None:
+    def __init__(self, message: str, *, status: int | None = None, detail: str | dict | None = None) -> None:
         super().__init__(message)
         self.status = status
         self.detail = detail
@@ -123,14 +123,21 @@ def _http_message(status: int, messages: dict[int, str] | None = None) -> str:
     return HTTP_MESSAGES.get(status, f"request failed (HTTP {status})")
 
 
-def _error_detail(error: urllib.error.HTTPError) -> str | None:
-    """The "detail" text of an API error body, or None. The body is not kept."""
+def _error_detail(error: urllib.error.HTTPError) -> str | dict | None:
+    """The "detail" of an API error body: its text, or a structured object that has a status. None otherwise.
+
+    The body is not kept. Only the detail is returned.
+    """
     try:
         body = json.loads(error.read())
     except (OSError, ValueError):
         return None
     detail = body.get("detail") if isinstance(body, dict) else None
-    return detail if isinstance(detail, str) else None
+    if isinstance(detail, str):
+        return detail
+    if isinstance(detail, dict) and isinstance(detail.get("status"), str):
+        return detail
+    return None
 
 
 def _call(
@@ -746,6 +753,17 @@ def _review_record(base_url: str, args: argparse.Namespace) -> None:
     )
 
 
+def _classification_conflict_version(error: RequestFailed) -> int | None:
+    """The current classification version from a stale-save 409, or None for any other failure."""
+    detail = error.detail
+    if error.status != 409 or not isinstance(detail, dict) or detail.get("status") != CLASSIFICATION_VERSION_CONFLICT:
+        return None
+    version = detail.get("current_version")
+    if isinstance(version, int) and not isinstance(version, bool):
+        return version
+    return None
+
+
 def _classification_set(base_url: str, args: argparse.Namespace) -> None:
     case_id = _case_id_arg(args.case_id)
     if args.expected_version < 0:
@@ -774,11 +792,10 @@ def _classification_set(base_url: str, args: argparse.Namespace) -> None:
         try:
             raw = _call(base, "PUT", path, token=token, payload=payload, messages=CLASSIFICATION_MESSAGES)
         except RequestFailed as error:
-            match = CURRENT_VERSION.search(error.detail or "") if error.status == 409 else None
-            if match is None:
+            version = _classification_conflict_version(error)
+            if version is None:
                 raise
             # Nothing was saved. The command never retries: the user re-reads and runs it again.
-            version = match.group(1)
             raise RequestFailed(
                 f"the classification was changed by someone else, so nothing was saved. The current version is "
                 f"{version}. Re-read the classification in the web UI, then run this command again with "

@@ -521,6 +521,27 @@ describe("case and evidence endpoints", () => {
     await expect(api.getReporterContact("case-1")).rejects.toMatchObject({ status: 404, code: "case not found" });
   });
 
+  it("reads the stable code and the current version from a classification version conflict", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(409, { detail: { status: "classification_version_conflict", current_version: 3 } }),
+    );
+
+    await expect(api.updateClassification("case-1", { expected_version: 1 } as never)).rejects.toMatchObject({
+      status: 409,
+      code: "classification_version_conflict",
+      currentVersion: 3,
+    });
+  });
+
+  it("leaves the current version empty for a 409 whose detail is only text", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(409, { detail: "case is closed" }));
+
+    await expect(api.updateClassification("case-1", { expected_version: 1 } as never)).rejects.toMatchObject({
+      code: "case is closed",
+      currentVersion: null,
+    });
+  });
+
   it("lists every review of a case", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, []));
 

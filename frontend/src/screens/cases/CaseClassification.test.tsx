@@ -156,9 +156,7 @@ describe("CaseClassification", () => {
   });
 
   it("reloads the displayed version and asks for a retry when the version changed underneath", async () => {
-    save.mockRejectedValue(
-      new ApiError(409, "classification changed: the current version is 3; reload and retry"),
-    );
+    save.mockRejectedValue(new ApiError(409, "classification_version_conflict", 3));
     get.mockResolvedValueOnce(NONE).mockResolvedValueOnce({ ...NONE, version: 3 });
     const user = userEvent.setup();
     render(<CaseClassification {...BASE_PROPS} />);
@@ -168,7 +166,7 @@ describe("CaseClassification", () => {
     await user.click(within(dialog).getByRole("button", { name: "Save new version" }));
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "The classification was changed by someone else. Reload it, check the current version and save again.",
+      "The classification was changed by someone else. Reload it, check the current version and save again. The current version is 3.",
     );
     await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
     expect(save).toHaveBeenCalledWith("case-1", expect.objectContaining({ expected_version: 0 }));

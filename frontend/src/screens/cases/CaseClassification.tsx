@@ -54,7 +54,8 @@ const TEXT_FIELD_LABELS: Record<ClassificationTextField, string> = {
 
 const TEXT_MAX_LENGTH = 1000;
 const NOT_RECORDED = "none";
-const CONFLICT_CODE_PREFIX = "classification changed: ";
+// The stable code of a stale save. The 409 body also carries current_version, which ApiError exposes.
+const CONFLICT_CODE = "classification_version_conflict";
 
 export function CaseClassification({ caseId, closed, canWrite, canReadFullView, onRecorded }: Props) {
   const { timezone } = useSystemTimezone();
@@ -267,9 +268,18 @@ function EditClassificationForm({ caseId, current, zone, onSaved, onConflict }: 
     try {
       onSaved(await updateClassification(caseId, body));
     } catch (caught) {
-      setError(describeError(caught));
       setBusy(false);
-      if (caught instanceof ApiError && caught.code.startsWith(CONFLICT_CODE_PREFIX)) onConflict();
+      if (caught instanceof ApiError && caught.code === CONFLICT_CODE) {
+        const version = caught.currentVersion;
+        setError(
+          version === null
+            ? describeError(caught)
+            : `${describeError(caught)} The current version is ${version}.`,
+        );
+        onConflict();
+      } else {
+        setError(describeError(caught));
+      }
     }
   }
 

@@ -509,9 +509,10 @@ def update_case_classification(
         raise CASE_CLOSED
     if outcome is RecordOutcome.VERSION_CONFLICT:
         assert classification is not None
+        # A structured detail: clients read the stable status and the version without parsing text.
         raise HTTPException(
             status_code=409,
-            detail=f"classification changed: the current version is {classification.version}; reload and retry",
+            detail={"status": "classification_version_conflict", "current_version": classification.version},
         )
     assert classification is not None
     return _classification_response(str(case_id), classification, scope)
