@@ -6,14 +6,14 @@ Covered without a database:
 - a legal duty is never one of the five SAFE deadline tasks, and it does not change the report's SAFE deadlines.
 
 Covered with a database:
-- a case opened after its awareness time keeps that time, and its deadlines are computed from it;
+- a case opened after its awareness time keeps that time; with no operator event its deadlines run from it;
+- t0 is the earliest operator awareness event. An earlier operator event moves the SAFE due dates, and the audit row of
+  that event records the move. An affected party event or an external report never moves them;
 - an external report is recorded as an awareness event and leaves the case clock and the deadlines unchanged;
 - a legal duty due before a SAFE deadline does not move that deadline;
 - each change of the timeline writes exactly one audit row, and a repeated request writes none.
 
 Not testable yet, so not asserted here:
-- Whether an earlier awareness event should move t0. The rule is still open (see the F1 notes on t0). The test that
-  records an external report pins the current rule only, and must change when that decision is made.
 - The 72-hour, 4-business-day, DST and holiday cases, the 30-day publication limit, the 14-condition list, and the
   unresolved weekly update. They are tested in tests/test_deadlines.py, or they are F2 scope.
 - Legal due dates that the organization enters from a legal source. F1 only stores them with their source reference.
@@ -153,6 +153,59 @@ def test_a_case_opened_after_the_awareness_time_keeps_that_time_for_its_deadline
 
     assert datetime.fromisoformat(body["awareness_time"]) == t0
     assert due_times(body)["affected_customers"] == t0 + timedelta(hours=72)
+
+
+@requires_database
+def test_an_earlier_operator_event_moves_t0_and_the_deadlines(timeline_people):
+    reporter, triager = timeline_people["reporter"], timeline_people["triager"]
+    case_id = open_case(reporter, datetime.now(UTC) - timedelta(hours=2))
+    before = due_times(triager.get(f"/api/v1/cases/{case_id}").json())
+    earlier = datetime.now(UTC) - timedelta(hours=50)
+
+    recorded = triager.post(
+        f"/api/v1/cases/{case_id}/awareness-events",
+        json={
+            "awareness_kind": "operator",
+            "event_kind": "incident",
+            "occurred_at": earlier.isoformat(),
+            "basis": "monitoring alert",
+        },
+    )
+
+    assert recorded.status_code == 201, recorded.text
+    after = due_times(triager.get(f"/api/v1/cases/{case_id}").json())
+    assert after["affected_customers"] == earlier + timedelta(hours=72)
+    assert after["broader_advisory"] == earlier + timedelta(days=14)
+    assert after["preliminary_public_report"] == earlier + timedelta(days=30)
+    assert after["remediation_status"] == earlier + timedelta(days=90)
+    assert after["affected_customers"] < before["affected_customers"]
+    with connect() as conn:
+        details = conn.execute(
+            "SELECT details FROM audit_events WHERE action = %s AND target_id = %s AND NOT is_deleted "
+            "ORDER BY created_at DESC LIMIT 1",
+            (audit.CASE_AWARENESS_RECORDED, case_id),
+        ).fetchone()[0]
+    assert details["deadline_start"] == earlier.isoformat()
+    assert set(details["deadlines"]) == set(SAFE_KINDS)
+
+
+@requires_database
+def test_an_affected_party_event_does_not_move_t0_or_the_deadlines(timeline_people):
+    reporter, triager = timeline_people["reporter"], timeline_people["triager"]
+    case_id = open_case(reporter, datetime.now(UTC) - timedelta(hours=2))
+    before = triager.get(f"/api/v1/cases/{case_id}").json()["deadlines"]
+
+    triager.post(
+        f"/api/v1/cases/{case_id}/awareness-events",
+        json={
+            "awareness_kind": "affected_party",
+            "event_kind": "incident",
+            "occurred_at": (datetime.now(UTC) - timedelta(days=5)).isoformat(),
+            "basis": "customer told us",
+        },
+    )
+
+    assert triager.get(f"/api/v1/cases/{case_id}").json()["deadlines"] == before
 
 
 @requires_database

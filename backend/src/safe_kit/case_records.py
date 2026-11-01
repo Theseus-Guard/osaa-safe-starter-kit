@@ -334,19 +334,26 @@ def record_awareness_event(
             """,
             (case_id, awareness_kind, event_kind, occurred_at, basis, scope.user_id),
         ).fetchone()
+        details: dict[str, Any] = {
+            "awareness_event_id": row[0],
+            "awareness_kind": awareness_kind,
+            "event_kind": event_kind,
+            "occurred_at": occurred_at.isoformat(),
+            "basis": _marker(basis),
+        }
+        # Only an operator event can move t0. When it moves the SAFE due dates, the same audit row records the move.
+        if awareness_kind == "operator":
+            start, moved = cases.resync_deadlines(conn, case_id)
+            if moved:
+                details["deadline_start"] = start.isoformat()
+                details["deadlines"] = moved
         audit.record(
             conn,
             audit.CASE_AWARENESS_RECORDED,
             "case",
             case_id,
             actor_id=scope.user_id,
-            details={
-                "awareness_event_id": row[0],
-                "awareness_kind": awareness_kind,
-                "event_kind": event_kind,
-                "occurred_at": occurred_at.isoformat(),
-                "basis": _marker(basis),
-            },
+            details=details,
         )
     event = AwarenessEvent(
         id=row[0],
