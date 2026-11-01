@@ -39,6 +39,12 @@ Every release entry states the **SAFE compatibility baseline**: the SAFE version
 - Saving a case classification requires `cases:read_all` as well as `cases:triage`. Without it the save is refused, because it would clear the free-text fields the caller cannot see.
 - Rate limits at the gateway: login is limited to 10 requests per minute per client, with a burst of 5, and the API to 30 requests per second, with a burst of 60. Excess requests get `429`. The API also keeps login counters in PostgreSQL, per username and per client, over a 15-minute window.
 - Validation errors (`422`) no longer repeat the rejected input, so a submitted password is not echoed back.
+- Case record screens on the case detail page: awareness events, impacts, legal duties, classification with version checks, and the preliminary report.
+- Reporter contact: the contact is read on request only, and each read is audited. The button sits under the note that reading is recorded in the audit log.
+- Case assignments: a picker lists the users who may be assigned, from the new `GET /api/v1/cases/{case_id}/assignable-users`, which requires `cases:assign`.
+- CLI case updates: `case close`, `case reopen`, `case assign`, `case unassign`, `case review record`, `case classification set`, `case impact set`, `case legal-duty add` and `update`, `case awareness add`. Each command logs in with a password prompt (or stdin), keeps the tokens in memory for that command, and ends the session afterwards. Nothing is written to disk.
+- The inactivity watch signs out after 60 minutes without an API request and warns five minutes before. Mouse and keyboard use do not count as activity.
+- The admin role cannot hold case or reporter contact permissions. `PUT /api/v1/rbac/roles/admin/permissions` answers `409` for such a set.
 
 ### Not yet implemented
 - A production certificate, OIDC/SSO, encryption at rest for the database volume, and backup and restore procedures.
