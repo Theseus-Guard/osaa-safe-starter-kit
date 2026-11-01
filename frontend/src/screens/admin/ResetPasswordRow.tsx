@@ -2,6 +2,11 @@ import { FormEvent, useState } from "react";
 import { resetUserPassword } from "../../api";
 import { describeError } from "../../messages";
 import { MIN_PASSWORD_LENGTH } from "../ChangePassword";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { TableCell, TableRow } from "@/components/ui/table";
 
 interface Props {
   userId: string;
@@ -16,6 +21,7 @@ export function ResetPasswordRow({ userId, username, colSpan, onDone, onCancel }
   const [temporary, setTemporary] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const inputId = `reset-password-${userId}`;
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -35,27 +41,41 @@ export function ResetPasswordRow({ userId, username, colSpan, onDone, onCancel }
   }
 
   return (
-    <tr>
-      <td colSpan={colSpan}>
-        <form onSubmit={handleSubmit} aria-label={`Reset password for ${username}`}>
-          <label>
-            New temporary password for {username}
-            <input type="password" value={temporary} onChange={(e) => setTemporary(e.target.value)} autoComplete="new-password" required />
-          </label>
-          <p className="hint">
-            At least {MIN_PASSWORD_LENGTH} characters. All of the user's sessions end, and they must change the password at next login.
-          </p>
-          {error && <p className="error">{error}</p>}
-          <div className="row">
-            <button type="submit" disabled={busy}>
+    <TableRow className="hover:bg-transparent">
+      <TableCell colSpan={colSpan} className="whitespace-normal bg-muted/40">
+        <form onSubmit={handleSubmit} aria-label={`Reset password for ${username}`} className="flex max-w-md flex-col gap-4">
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor={inputId}>New temporary password for {username}</FieldLabel>
+              <Input
+                id={inputId}
+                type="password"
+                value={temporary}
+                onChange={(e) => setTemporary(e.target.value)}
+                autoComplete="new-password"
+                required
+              />
+              <FieldDescription>
+                At least {MIN_PASSWORD_LENGTH} characters. All of the user's sessions end, and they must change the password at next
+                login.
+              </FieldDescription>
+            </Field>
+          </FieldGroup>
+          {error && (
+            <Alert variant="destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+          <div className="flex gap-2">
+            <Button type="submit" disabled={busy}>
               Set temporary password
-            </button>
-            <button type="button" className="secondary" onClick={onCancel} disabled={busy}>
+            </Button>
+            <Button type="button" variant="outline" onClick={onCancel} disabled={busy}>
               Cancel
-            </button>
+            </Button>
           </div>
         </form>
-      </td>
-    </tr>
+      </TableCell>
+    </TableRow>
   );
 }

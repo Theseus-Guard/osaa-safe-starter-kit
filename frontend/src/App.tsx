@@ -45,21 +45,27 @@ export function App() {
     }
   }
 
+  if (phase === "signed-in" && profile) {
+    return <Home profile={profile} notice={notice} onLogout={handleLogout} onPasswordChanged={handlePasswordChanged} />;
+  }
+
+  // Login and the forced first-login password change stay outside the dashboard shell.
   return (
-    <main className="container">
-      <h1>SAFE-Starter-Kit</h1>
-      {phase === "anonymous" && <Login notice={notice} onLogin={handleLogin} />}
-      {phase === "password-change" && profile && (
-        <ChangePassword
-          heading="Choose a new password"
-          description="Your account was created or reset by an administrator. You must set your own password before continuing."
-          onChange={changePassword}
-          onDone={handlePasswordChanged}
-        />
-      )}
-      {phase === "signed-in" && profile && (
-        <Home profile={profile} notice={notice} onLogout={handleLogout} onPasswordChanged={handlePasswordChanged} />
-      )}
-    </main>
+    <div className="flex min-h-svh flex-col">
+      <header className="flex h-14 items-center border-b bg-background px-4">
+        <h1 className="text-base font-semibold tracking-tight">SAFE-Starter-Kit</h1>
+      </header>
+      <main className="mx-auto flex w-full max-w-md flex-1 flex-col gap-6 p-4 pt-8">
+        {phase === "anonymous" && <Login notice={notice} onLogin={handleLogin} />}
+        {phase === "password-change" && profile && (
+          <ChangePassword
+            heading="Choose a new password"
+            description="Your account was created or reset by an administrator. You must set your own password before continuing."
+            onChange={changePassword}
+            onDone={handlePasswordChanged}
+          />
+        )}
+      </main>
+    </div>
   );
 }

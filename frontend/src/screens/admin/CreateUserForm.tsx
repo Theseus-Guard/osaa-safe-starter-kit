@@ -2,6 +2,12 @@ import { FormEvent, useState } from "react";
 import { createUser, CreatedUser, Role, ROLES } from "../../api";
 import { describeError } from "../../messages";
 import { MIN_PASSWORD_LENGTH } from "../ChangePassword";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface Props {
   onCreated: () => void;
@@ -37,38 +43,67 @@ export function CreateUserForm({ onCreated }: Props) {
   }
 
   return (
-    <section className="card">
-      <h2>Create user</h2>
-      <form onSubmit={handleSubmit}>
-        <label>
-          Username
-          <input value={username} onChange={(e) => setUsername(e.target.value)} required />
-        </label>
-        <label>
-          Role
-          <select value={role} onChange={(e) => setRole(e.target.value as Role)}>
-            {ROLES.map((r) => (
-              <option key={r} value={r}>
-                {r}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Temporary password
-          <input type="password" value={temporary} onChange={(e) => setTemporary(e.target.value)} autoComplete="new-password" required />
-        </label>
-        {error && <p className="error">{error}</p>}
-        <button type="submit" disabled={busy}>
-          Create user
-        </button>
-      </form>
-      {created && (
-        <p className="notice">
-          Created {created.username} ({created.role}). User ID: <code>{created.id}</code>. Share the temporary password through a
-          secure channel. The user must change it at first login.
-        </p>
-      )}
-    </section>
+    <Card>
+      <CardHeader>
+        <CardTitle>Create user</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <FieldGroup className="grid gap-4 sm:grid-cols-3">
+            <Field>
+              <FieldLabel htmlFor="create-username">Username</FieldLabel>
+              <Input id="create-username" value={username} onChange={(e) => setUsername(e.target.value)} required />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="create-role">Role</FieldLabel>
+              <Select
+                value={role}
+                onValueChange={(value) => {
+                  if (value) setRole(value as Role);
+                }}
+              >
+                <SelectTrigger id="create-role" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ROLES.map((r) => (
+                    <SelectItem key={r} value={r}>
+                      {r}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="create-temporary">Temporary password</FieldLabel>
+              <Input
+                id="create-temporary"
+                type="password"
+                value={temporary}
+                onChange={(e) => setTemporary(e.target.value)}
+                autoComplete="new-password"
+                required
+              />
+            </Field>
+          </FieldGroup>
+          {error && (
+            <Alert variant="destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+          <Button type="submit" disabled={busy} className="self-start">
+            Create user
+          </Button>
+        </form>
+        {created && (
+          <Alert>
+            <AlertDescription>
+              Created {created.username} ({created.role}). User ID: <code className="font-mono text-xs">{created.id}</code>. Share the
+              temporary password through a secure channel. The user must change it at first login.
+            </AlertDescription>
+          </Alert>
+        )}
+      </CardContent>
+    </Card>
   );
 }

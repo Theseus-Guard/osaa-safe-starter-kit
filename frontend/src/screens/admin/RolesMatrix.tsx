@@ -1,10 +1,19 @@
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { listPermissions, listRoles, PermissionSummary, Role, RoleSummary, updateRolePermissions } from "../../api";
 import { describeError } from "../../messages";
+import { DisabledHint } from "@/components/disabled-hint";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 // The backend refuses to save the admin role without these, so they stay checked and locked in the grid.
 const ADMIN_REQUIRED = ["users:manage", "users:reset_password", "roles:manage"];
-const REQUIRED_TITLE = "The admin role must keep this permission, so admins cannot lock themselves out.";
+const REQUIRED_REASON = "The admin role must keep this permission, so admins cannot lock themselves out.";
+// A bounded height with a scroll container keeps the header sticky.
+const TABLE_SCROLL_CLASS = "max-h-[70vh] overflow-auto rounded-md border [&_[data-slot=table-container]]:overflow-visible";
 
 interface Props {
   editable: boolean;
@@ -21,7 +30,6 @@ export function RolesMatrix({ editable }: Props) {
   const [drafts, setDrafts] = useState<Record<string, Set<string>>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [savingRole, setSavingRole] = useState<Role | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
 
@@ -77,10 +85,9 @@ export function RolesMatrix({ editable }: Props) {
     const permissions = [...selectionFor(entry.role)].sort();
     setSavingRole(entry.role);
     setActionError(null);
-    setNotice(null);
     try {
       await updateRolePermissions(entry.role, permissions);
-      setNotice(`Permissions for ${entry.role} saved.`);
+      toast.success(`Permissions for ${entry.role} saved.`);
       setReloadToken((value) => value + 1);
     } catch (caught) {
       setActionError(describeError(caught));
@@ -90,97 +97,114 @@ export function RolesMatrix({ editable }: Props) {
   }
 
   return (
-    <section className="card">
-      <h2>Roles and permissions</h2>
-      {editable ? (
-        <p className="hint">Changes apply immediately to everyone with that role.</p>
-      ) : (
-        <p className="hint">Read-only. Only admins can change role permissions.</p>
-      )}
-      {notice && <p className="notice">{notice}</p>}
-      {actionError && <p className="error">{actionError}</p>}
-      {loadError && <p className="error">{loadError}</p>}
+    <Card>
+      <CardHeader>
+        <CardTitle>Permissions by role</CardTitle>
+        <CardDescription>
+          {editable ? "Changes apply immediately to everyone with that role." : "Read-only. Only admins can change role permissions."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {actionError && (
+          <Alert variant="destructive">
+            <AlertDescription>{actionError}</AlertDescription>
+          </Alert>
+        )}
+        {loadError && (
+          <Alert variant="destructive">
+            <AlertDescription>{loadError}</AlertDescription>
+          </Alert>
+        )}
 
-      {loaded && editable && (
-        <>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Role</th>
-                  {loaded.catalog.map((permission) => (
-                    <th key={permission.name} title={permission.description}>
-                      {permission.name}
-                    </th>
-                  ))}
-                  <th>Save</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loaded.roles.map((entry) => {
-                  const selected = selectionFor(entry.role);
-                  const isAdmin = entry.role === "admin";
-                  return (
-                    <tr key={entry.role}>
-                      <td>{entry.role}</td>
-                      {loaded.catalog.map((permission) => {
-                        const required = isAdmin && ADMIN_REQUIRED.includes(permission.name);
-                        return (
-                          <td key={permission.name} title={required ? REQUIRED_TITLE : undefined}>
-                            <input
-                              type="checkbox"
-                              aria-label={`${entry.role} ${permission.name}`}
-                              checked={selected.has(permission.name)}
-                              disabled={required || savingRole !== null}
-                              onChange={(e) => toggle(entry.role, permission.name, e.target.checked)}
-                            />
-                          </td>
-                        );
-                      })}
-                      <td>
-                        <button type="button" disabled={!isDirty(entry) || savingRole !== null} onClick={() => void save(entry)}>
-                          {savingRole === entry.role ? "Saving…" : "Save"}
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+        {loaded && editable && (
+          <>
+            <div className={TABLE_SCROLL_CLASS}>
+              <Table>
+                <TableHeader className="sticky top-0 z-10 bg-muted">
+                  <TableRow>
+                    <TableHead>Role</TableHead>
+                    {loaded.catalog.map((permission) => (
+                      <TableHead key={permission.name} title={permission.description} className="whitespace-normal">
+                        <span className="font-mono text-xs">{permission.name}</span>
+                      </TableHead>
+                    ))}
+                    <TableHead>Save</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {loaded.roles.map((entry) => {
+                    const selected = selectionFor(entry.role);
+                    const isAdmin = entry.role === "admin";
+                    return (
+                      <TableRow key={entry.role}>
+                        <TableCell className="font-medium">{entry.role}</TableCell>
+                        {loaded.catalog.map((permission) => {
+                          const required = isAdmin && ADMIN_REQUIRED.includes(permission.name);
+                          return (
+                            <TableCell key={permission.name}>
+                              <DisabledHint reason={required ? REQUIRED_REASON : undefined}>
+                                <Checkbox
+                                  aria-label={`${entry.role} ${permission.name}`}
+                                  checked={selected.has(permission.name)}
+                                  disabled={required || savingRole !== null}
+                                  onCheckedChange={(checked) => toggle(entry.role, permission.name, checked)}
+                                />
+                              </DisabledHint>
+                            </TableCell>
+                          );
+                        })}
+                        <TableCell>
+                          <Button
+                            size="sm"
+                            disabled={!isDirty(entry) || savingRole !== null}
+                            onClick={() => void save(entry)}
+                          >
+                            {savingRole === entry.role ? "Saving…" : "Save"}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+            <div className="flex flex-col gap-3">
+              <h3 className="text-sm font-medium">Permission descriptions</h3>
+              <dl className="grid gap-3 text-sm sm:grid-cols-2">
+                {loaded.catalog.map((permission) => (
+                  <div key={permission.name} className="grid gap-0.5">
+                    <dt className="font-mono text-xs font-medium">{permission.name}</dt>
+                    <dd className="text-muted-foreground">{permission.description}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          </>
+        )}
+
+        {loaded && !editable && (
+          <div className={TABLE_SCROLL_CLASS}>
+            <Table>
+              <TableHeader className="sticky top-0 z-10 bg-muted">
+                <TableRow>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Permissions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {loaded.roles.map((entry) => (
+                  <TableRow key={entry.role}>
+                    <TableCell className="font-medium">{entry.role}</TableCell>
+                    <TableCell className="whitespace-normal">
+                      {entry.permissions.length > 0 ? entry.permissions.join(", ") : "None"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </div>
-          <dl className="legend">
-            {loaded.catalog.map((permission) => (
-              <div key={permission.name}>
-                <dt>
-                  <code>{permission.name}</code>
-                </dt>
-                <dd>{permission.description}</dd>
-              </div>
-            ))}
-          </dl>
-        </>
-      )}
-
-      {loaded && !editable && (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Role</th>
-                <th>Permissions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loaded.roles.map((entry) => (
-                <tr key={entry.role}>
-                  <td>{entry.role}</td>
-                  <td>{entry.permissions.length > 0 ? entry.permissions.join(", ") : "None"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
+        )}
+      </CardContent>
+    </Card>
   );
 }

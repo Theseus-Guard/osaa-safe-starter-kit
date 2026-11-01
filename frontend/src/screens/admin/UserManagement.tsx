@@ -1,11 +1,22 @@
 import { Fragment, useEffect, useState } from "react";
+import { toast } from "sonner";
 import { deleteUser, listUsers, Role, ROLES, updateUser, UserPage, UserSummary, UserUpdate } from "../../api";
 import { describeError } from "../../messages";
+import { DisabledHint } from "@/components/disabled-hint";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ResetPasswordRow } from "./ResetPasswordRow";
 
 const PAGE_SIZE = 20;
 const COLUMN_COUNT = 6;
-const PROTECTED_TITLE = "The protected admin account cannot be changed";
+const PROTECTED_REASON = "The protected admin account cannot be changed.";
+const SELF_RESET_REASON = "Use Change password on the Account page to change your own password.";
+// A bounded height with a scroll container keeps the table header sticky.
+const TABLE_SCROLL_CLASS = "max-h-[70vh] overflow-auto rounded-md border [&_[data-slot=table-container]]:overflow-visible";
 
 interface Props {
   currentUserId: string;
@@ -20,7 +31,6 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [resettingId, setResettingId] = useState<string | null>(null);
 
@@ -47,17 +57,15 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
   function changePage(nextOffset: number) {
     setOffset(nextOffset);
     setResettingId(null);
-    setNotice(null);
     setActionError(null);
   }
 
   async function applyChange(user: UserSummary, changes: UserUpdate, success: string) {
     setBusy(true);
     setActionError(null);
-    setNotice(null);
     try {
       await updateUser(user.id, changes);
-      setNotice(success);
+      toast.success(success);
       onChanged();
     } catch (caught) {
       setActionError(describeError(caught));
@@ -73,14 +81,13 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
     if (!confirmed) return;
     setBusy(true);
     setActionError(null);
-    setNotice(null);
     setResettingId(null);
     try {
       await deleteUser(user.id);
       // Deleting the last row of a page (not the first page) would leave an empty page, so step back one page.
       const isLastRowOnPage = page !== null && page.items.length === 1 && offset > 0;
       if (isLastRowOnPage) setOffset(Math.max(0, offset - PAGE_SIZE));
-      setNotice(`${user.username} has been deleted.`);
+      toast.success(`${user.username} has been deleted.`);
       onChanged();
     } catch (caught) {
       setActionError(describeError(caught));
@@ -92,9 +99,9 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
   function handlePasswordReset(username: string) {
     setResettingId(null);
     setActionError(null);
-    setNotice(
-      `Password reset for ${username}. All of their sessions have ended. Share the temporary password through a secure channel.`,
-    );
+    toast.success(`Password reset for ${username}. All of their sessions have ended.`, {
+      description: "Share the temporary password through a secure channel.",
+    });
     onChanged();
   }
 
@@ -103,139 +110,159 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
   const shownTo = page ? page.offset + page.items.length : 0;
 
   return (
-    <section className="card">
-      <h2>Users</h2>
-      {notice && <p className="notice">{notice}</p>}
-      {actionError && <p className="error">{actionError}</p>}
-      {loadError && <p className="error">{loadError}</p>}
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Username</th>
-              <th>Role</th>
-              <th>Status</th>
-              <th>Must change password</th>
-              <th>Created</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {page?.items.map((user) => {
-              const isSelf = user.id === currentUserId;
-              // Protected accounts keep their role and status. Reset password stays available as the recovery path.
-              const isLocked = isSelf || user.is_protected;
-              const lockTitle = (selfMessage: string) => (isSelf ? selfMessage : user.is_protected ? PROTECTED_TITLE : undefined);
-              return (
-                <Fragment key={user.id}>
-                  <tr>
-                    <td>
-                      {user.username}
-                      {isSelf && <span className="hint"> (you)</span>}
-                      {user.is_protected && <span className="hint"> Protected</span>}
-                    </td>
-                    <td>
-                      <select
-                        aria-label={`Role of ${user.username}`}
-                        value={user.role}
-                        disabled={isLocked || busy}
-                        title={lockTitle("You cannot change your own role")}
-                        onChange={(e) => {
-                          const role = e.target.value as Role;
-                          void applyChange(user, { role }, `${user.username} is now ${role}.`);
-                        }}
-                      >
-                        {ROLES.map((r) => (
-                          <option key={r} value={r}>
-                            {r}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td>{user.is_active ? "Active" : "Disabled"}</td>
-                    <td>{user.password_change_required ? "Yes" : "No"}</td>
-                    <td>{formatDate(user.created_at)}</td>
-                    <td>
-                      <div className="actions">
-                        <button
-                          type="button"
-                          className="secondary"
-                          disabled={isLocked || busy}
-                          title={lockTitle("You cannot change your own status")}
-                          onClick={() =>
-                            void applyChange(
-                              user,
-                              { is_active: !user.is_active },
-                              `${user.username} has been ${user.is_active ? "disabled" : "enabled"}.`,
-                            )
-                          }
-                        >
-                          {user.is_active ? "Disable" : "Enable"}
-                        </button>
-                        <button
-                          type="button"
-                          className="secondary"
-                          disabled={isSelf || busy}
-                          title={isSelf ? "Use Change password to change your own password" : undefined}
-                          onClick={() => setResettingId(resettingId === user.id ? null : user.id)}
-                        >
-                          Reset password
-                        </button>
-                        <button
-                          type="button"
-                          className="danger"
-                          disabled={isLocked || busy}
-                          title={lockTitle("You cannot delete your own account")}
-                          onClick={() => void handleDelete(user)}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                  {resettingId === user.id && (
-                    <ResetPasswordRow
-                      userId={user.id}
-                      username={user.username}
-                      colSpan={COLUMN_COUNT}
-                      onDone={handlePasswordReset}
-                      onCancel={() => setResettingId(null)}
-                    />
-                  )}
-                </Fragment>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-      {page && page.items.length === 0 && <p className="hint">No users found on this page.</p>}
-      <div className="pager">
-        <span className="hint">
-          {loading ? "Loading…" : `Showing ${shownFrom}–${shownTo} of ${total}`}
-        </span>
-        <div className="row">
-          <button
-            type="button"
-            className="secondary"
-            disabled={loading || !page || page.offset === 0}
-            onClick={() => changePage(Math.max(0, offset - PAGE_SIZE))}
-          >
-            Previous
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            disabled={loading || !page || page.offset + page.limit >= page.total}
-            onClick={() => changePage(offset + PAGE_SIZE)}
-          >
-            Next
-          </button>
-          <button type="button" className="secondary" disabled={loading || busy} onClick={onChanged}>
+    <Card>
+      <CardHeader>
+        <CardTitle>User list</CardTitle>
+        <CardAction>
+          <Button variant="outline" size="sm" disabled={loading || busy} onClick={onChanged}>
             Refresh
-          </button>
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {actionError && (
+          <Alert variant="destructive">
+            <AlertDescription>{actionError}</AlertDescription>
+          </Alert>
+        )}
+        {loadError && (
+          <Alert variant="destructive">
+            <AlertDescription>{loadError}</AlertDescription>
+          </Alert>
+        )}
+        <div className={TABLE_SCROLL_CLASS}>
+          <Table>
+            <TableHeader className="sticky top-0 z-10 bg-muted">
+              <TableRow>
+                <TableHead>Username</TableHead>
+                <TableHead>Role</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Must change password</TableHead>
+                <TableHead>Created</TableHead>
+                <TableHead>Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {page?.items.map((user) => {
+                const isSelf = user.id === currentUserId;
+                // Protected accounts keep their role and status. Reset password stays available as the recovery path.
+                const isLocked = isSelf || user.is_protected;
+                const lockReason = (selfReason: string) => (isSelf ? selfReason : user.is_protected ? PROTECTED_REASON : undefined);
+                return (
+                  <Fragment key={user.id}>
+                    <TableRow>
+                      <TableCell>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-medium">{user.username}</span>
+                          {isSelf && <Badge variant="outline">You</Badge>}
+                          {user.is_protected && <Badge variant="secondary">Protected</Badge>}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <DisabledHint reason={isLocked ? lockReason("You cannot change your own role.") : undefined}>
+                          <Select
+                            value={user.role}
+                            disabled={isLocked || busy}
+                            onValueChange={(value) => {
+                              if (value) void applyChange(user, { role: value as Role }, `${user.username} is now ${value}.`);
+                            }}
+                          >
+                            <SelectTrigger size="sm" aria-label={`Role of ${user.username}`} className="w-36">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {ROLES.map((r) => (
+                                <SelectItem key={r} value={r}>
+                                  {r}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </DisabledHint>
+                      </TableCell>
+                      <TableCell>
+                        {user.is_active ? <Badge variant="secondary">Active</Badge> : <Badge variant="outline">Disabled</Badge>}
+                      </TableCell>
+                      <TableCell>{user.password_change_required ? "Yes" : "No"}</TableCell>
+                      <TableCell>{formatDate(user.created_at)}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap gap-1.5">
+                          <DisabledHint reason={isLocked ? lockReason("You cannot change your own status.") : undefined}>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={isLocked || busy}
+                              onClick={() =>
+                                void applyChange(
+                                  user,
+                                  { is_active: !user.is_active },
+                                  `${user.username} has been ${user.is_active ? "disabled" : "enabled"}.`,
+                                )
+                              }
+                            >
+                              {user.is_active ? "Disable" : "Enable"}
+                            </Button>
+                          </DisabledHint>
+                          <DisabledHint reason={isSelf ? SELF_RESET_REASON : undefined}>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={isSelf || busy}
+                              aria-expanded={resettingId === user.id}
+                              onClick={() => setResettingId(resettingId === user.id ? null : user.id)}
+                            >
+                              Reset password
+                            </Button>
+                          </DisabledHint>
+                          <DisabledHint reason={isLocked ? lockReason("You cannot delete your own account.") : undefined}>
+                            <Button variant="destructive" size="sm" disabled={isLocked || busy} onClick={() => void handleDelete(user)}>
+                              Delete
+                            </Button>
+                          </DisabledHint>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                    {resettingId === user.id && (
+                      <ResetPasswordRow
+                        userId={user.id}
+                        username={user.username}
+                        colSpan={COLUMN_COUNT}
+                        onDone={handlePasswordReset}
+                        onCancel={() => setResettingId(null)}
+                      />
+                    )}
+                  </Fragment>
+                );
+              })}
+            </TableBody>
+          </Table>
         </div>
-      </div>
-    </section>
+        {page && page.items.length === 0 && <p className="text-sm text-muted-foreground">No users found on this page.</p>}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm text-muted-foreground" aria-live="polite">
+            {loading ? "Loading…" : `Showing ${shownFrom}–${shownTo} of ${total}`}
+          </p>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={loading || !page || page.offset === 0}
+              onClick={() => changePage(Math.max(0, offset - PAGE_SIZE))}
+            >
+              Previous
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={loading || !page || page.offset + page.limit >= page.total}
+              onClick={() => changePage(offset + PAGE_SIZE)}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

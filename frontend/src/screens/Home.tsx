@@ -1,7 +1,10 @@
-import { useState } from "react";
 import { changePassword, Me } from "../api";
-import { AdminPanel } from "./AdminPanel";
+import { useHashPage } from "../routes";
+import { AppShell } from "./AppShell";
 import { ChangePassword } from "./ChangePassword";
+import { Overview } from "./Overview";
+import { RolesMatrix } from "./admin/RolesMatrix";
+import { UsersPage } from "./admin/UsersPage";
 
 interface Props {
   profile: Me;
@@ -11,29 +14,15 @@ interface Props {
 }
 
 export function Home({ profile, notice, onLogout, onPasswordChanged }: Props) {
-  const [changing, setChanging] = useState(false);
+  const isAdmin = profile.role === "admin";
+  const page = useHashPage(isAdmin);
 
   return (
-    <>
-      <section className="card">
-        <h2>Signed in</h2>
-        {notice && <p className="notice">{notice}</p>}
-        <dl>
-          <dt>Username</dt>
-          <dd>{profile.username}</dd>
-          <dt>Role</dt>
-          <dd>{profile.role}</dd>
-        </dl>
-        <div className="row">
-          <button type="button" onClick={() => setChanging((value) => !value)}>
-            {changing ? "Cancel" : "Change password"}
-          </button>
-          <button type="button" className="secondary" onClick={onLogout}>
-            Log out
-          </button>
-        </div>
-      </section>
-      {changing && (
+    <AppShell profile={profile} page={page} onLogout={onLogout}>
+      {page === "overview" && <Overview profile={profile} notice={notice} />}
+      {page === "users" && isAdmin && <UsersPage currentUserId={profile.id} />}
+      {page === "roles" && isAdmin && <RolesMatrix editable />}
+      {page === "account" && (
         <ChangePassword
           heading="Change your password"
           description="This ends all of your sessions. You will need to log in again."
@@ -41,7 +30,6 @@ export function Home({ profile, notice, onLogout, onPasswordChanged }: Props) {
           onDone={onPasswordChanged}
         />
       )}
-      {profile.role === "admin" && <AdminPanel currentUserId={profile.id} currentRole={profile.role} />}
-    </>
+    </AppShell>
   );
 }
