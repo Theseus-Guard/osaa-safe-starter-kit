@@ -13,7 +13,7 @@ Only the latest commit on the `main` branch and the active feature branch receiv
 Do not open a public issue for a security problem.
 
 - Preferred: use GitHub private vulnerability reporting in this repository (Security tab, "Report a vulnerability"), once it is enabled for the repository.
-- Alternative: contact the maintainers privately. Contact details: _to be published before the repository is made public_.
+- Alternative: email the maintainer privately at hakan.damar@linux.com with the subject line "SAFE-Starter-Kit security report".
 
 Please include:
 
