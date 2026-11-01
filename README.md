@@ -84,7 +84,7 @@ The backend `--db` mode starts a throwaway PostgreSQL container and removes it a
 - Every table has `created_at`, `updated_at`, `deleted_at`, and `is_deleted`.
 - Passwords are stored as Argon2id hashes. Login is rate limited in the gateway and in PostgreSQL, and the gateway also limits API request rates.
 - Passwords expire after 180 days. A new password may not match any of the account's last three passwords, nor any temporary password issued to the account.
-- Access tokens last 60 minutes and are kept in memory in the browser. Refresh tokens are rotated on every use and also last 60 minutes, so a session ends after 60 minutes without activity. The browser renews the token pair before the access token expires.
+- Access tokens last 60 minutes and are kept in memory in the browser. Refresh tokens are rotated on every use and also last 60 minutes, so a session ends after 60 minutes without activity. Whatever the activity, a session ends 12 hours after login. The browser renews the token pair before the access token expires.
 - The application roles cannot change the schema. The bootstrap superuser password is random and not stored.
 - Not yet implemented: a production certificate, OIDC/SSO, encryption at rest for the database volume, the disclosure workflow, a Vault Transit key provider, and backup/restore procedures.
 
