@@ -74,6 +74,13 @@ cd frontend && npm install && npm run build
 - The application roles cannot change the schema. The bootstrap superuser password is random and not stored.
 - Not yet implemented: TLS, OIDC/SSO, encryption at rest for the database volume, evidence storage, and backup/restore procedures.
 
+## Versioning and SAFE compatibility
+
+- Releases follow semantic versioning from v0.1.
+- Each release is listed in [CHANGELOG.md](CHANGELOG.md) with the SAFE version and commit it was checked against.
+- A new SAFE version (for example v1.1 or v1.2) does not make an existing release compatible with it. We state compatibility only for the baseline written in the release notes, and only after checking the release against that version.
+- Neither a release nor this project is certified or declared compliant with SAFE.
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
