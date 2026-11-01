@@ -16,8 +16,8 @@ ADMIN_REQUIRED_PERMISSIONS = frozenset({"users:manage", "users:reset_password", 
 
 ROLE_LOCK_KEY = 0x5AFE0004
 
-# The one role that may hold a reporter contact permission. Its grant is fixed: the matrix refuses to add or remove
-# any reporter_contact permission for this role, and the role row is read-only in the admin screen.
+# The one role that may hold a reporter contact permission. Its whole permission set is fixed in the backend: the
+# matrix refuses every change that names this role, changed or not, and the role row is read-only in the admin screen.
 REPORTING_OWNER_ROLE = "reporting_owner"
 FIXED_REPORTER_CONTACT_GRANT = frozenset({"reporter_contact:read"})
 
@@ -45,6 +45,7 @@ class RoleOutcome(Enum):
     ADMIN_GUARD = "admin_guard"
     ADMIN_CASE_CONTENT = "admin_case_content"
     REPORTER_CONTACT_NOT_GRANTABLE = "reporter_contact_not_grantable"
+    REPORTING_OWNER_FIXED = "reporting_owner_fixed"
     UNKNOWN_PERMISSION = "unknown_permission"
 
 
@@ -99,18 +100,18 @@ def set_role_permissions(role: str, permissions: frozenset[str], actor_id: str |
     """Replace the permission set of a role. Granting is an undelete; revoking is a soft delete.
 
     The audit row lists the granted and revoked permissions and commits with the change.
+
+    The reporting_owner role is refused whatever the request holds, including a request that repeats its current set.
+    The refusal is decided before any database access.
     """
+    if role == REPORTING_OWNER_ROLE:
+        return RoleOutcome.REPORTING_OWNER_FIXED
     if role == "admin":
         if not ADMIN_REQUIRED_PERMISSIONS <= permissions:
             return RoleOutcome.ADMIN_GUARD
         if any(name.startswith(CASE_CONTENT_PERMISSION_PREFIXES) for name in permissions):
             return RoleOutcome.ADMIN_CASE_CONTENT
-    requested_contact = {name for name in permissions if name.startswith(REPORTER_CONTACT_PREFIX)}
-    if role == REPORTING_OWNER_ROLE:
-        # The fixed grant is kept as it is. A request that drops it, or adds another contact permission, is refused.
-        if requested_contact != FIXED_REPORTER_CONTACT_GRANT:
-            return RoleOutcome.REPORTER_CONTACT_NOT_GRANTABLE
-    elif requested_contact:
+    if any(name.startswith(REPORTER_CONTACT_PREFIX) for name in permissions):
         return RoleOutcome.REPORTER_CONTACT_NOT_GRANTABLE
     with connect() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (ROLE_LOCK_KEY,))
@@ -130,12 +131,6 @@ def set_role_permissions(role: str, permissions: frozenset[str], actor_id: str |
                 (role,),
             ).fetchall()
         }
-        if role == REPORTING_OWNER_ROLE and {name for name in current if name.startswith(REPORTER_CONTACT_PREFIX)} != (
-            FIXED_REPORTER_CONTACT_GRANT
-        ):
-            # The stored grant is not the fixed one (changed by hand). Saving through the matrix would add it back,
-            # which the matrix does not do.
-            return RoleOutcome.REPORTER_CONTACT_NOT_GRANTABLE
         granted = permissions - current
         revoked = current - permissions
         for permission in sorted(granted):

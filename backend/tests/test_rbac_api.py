@@ -1,8 +1,9 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from safe_kit import api, auth
+from safe_kit import api, auth, rbac
 from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS, RoleOutcome
+from safe_kit.rbac import set_role_permissions as real_set_role_permissions
 from safe_kit.users import User
 from datetime import UTC, datetime
 
@@ -92,6 +93,25 @@ def test_caller_without_roles_manage_cannot_change_matrix(client, caller, matrix
     response = client.put("/api/v1/rbac/roles/auditor/permissions", json={"permissions": []})
     assert response.status_code == 403
     assert matrix["calls"] == []
+
+
+@pytest.mark.parametrize(
+    "permissions",
+    [
+        ["cases:read_all", "reporter_contact:read"],  # the current set, unchanged
+        ["cases:read_all"],  # drops the contact grant
+        ["cases:read_all", "cases:triage", "reporter_contact:read"],  # adds a permission
+    ],
+)
+def test_reporting_owner_is_refused_with_409_and_the_fixed_code(client, matrix, monkeypatch, permissions):
+    # The real rbac function runs here: it refuses before it touches the database, so no connection is opened.
+    monkeypatch.setattr(api, "set_role_permissions", real_set_role_permissions)
+    monkeypatch.setattr(rbac, "connect", lambda: pytest.fail("the refusal must happen before any database access"))
+
+    response = client.put("/api/v1/rbac/roles/reporting_owner/permissions", json={"permissions": permissions})
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {"status": "reporting_owner_fixed"}
 
 
 def test_permission_change_is_attributed_to_the_acting_admin(client, matrix, monkeypatch):

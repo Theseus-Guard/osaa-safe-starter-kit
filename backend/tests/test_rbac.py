@@ -2,6 +2,7 @@ import pathlib
 
 import pytest
 
+from safe_kit import rbac
 from safe_kit.rbac import (
     ADMIN_REQUIRED_PERMISSIONS,
     DEFAULT_ROLE_PERMISSIONS,
@@ -50,16 +51,58 @@ def test_other_roles_are_refused_the_contact_permission(role):
     assert outcome is RoleOutcome.REPORTER_CONTACT_NOT_GRANTABLE
 
 
-def test_matrix_refuses_removing_the_fixed_contact_grant_from_reporting_owner():
-    outcome = set_role_permissions(REPORTING_OWNER_ROLE, frozenset({"cases:read_all"}))
-    assert outcome is RoleOutcome.REPORTER_CONTACT_NOT_GRANTABLE
+class _ReachedDatabase(Exception):
+    """Raised by the fake connect below: the request got past validation and would have written."""
 
 
-def test_matrix_refuses_a_second_contact_permission_for_reporting_owner():
-    outcome = set_role_permissions(
-        REPORTING_OWNER_ROLE,
-        frozenset({"cases:read_all", "reporter_contact:read", "reporter_contact:write"}),
-    )
+@pytest.fixture
+def database_must_not_be_reached(monkeypatch):
+    def refuse_connect():
+        raise AssertionError("the refusal must happen before any database access")
+
+    monkeypatch.setattr(rbac, "connect", refuse_connect)
+
+
+@pytest.fixture
+def database_is_reached(monkeypatch):
+    def reached_connect():
+        raise _ReachedDatabase()
+
+    monkeypatch.setattr(rbac, "connect", reached_connect)
+
+
+@pytest.mark.parametrize(
+    "permissions",
+    [
+        frozenset({"cases:read_all"}),  # drops the contact grant
+        frozenset({"reporter_contact:read"}),  # drops cases:read_all
+        frozenset(),  # empties the role
+        frozenset({"cases:read_all", "reporter_contact:read", "reporter_contact:write"}),  # adds a contact permission
+        frozenset({"cases:read_all", "reporter_contact:read", "cases:triage"}),  # adds a non-contact permission
+        frozenset({"cases:read_all", "reporter_contact:read", "not:a_permission"}),  # names an unknown permission
+    ],
+)
+def test_any_change_to_reporting_owner_is_refused(permissions, database_must_not_be_reached):
+    assert set_role_permissions(REPORTING_OWNER_ROLE, permissions) is RoleOutcome.REPORTING_OWNER_FIXED
+
+
+def test_saving_the_unchanged_set_of_reporting_owner_is_refused_too(database_must_not_be_reached):
+    current = DEFAULT_ROLE_PERMISSIONS[REPORTING_OWNER_ROLE]
+    assert set_role_permissions(REPORTING_OWNER_ROLE, frozenset(current)) is RoleOutcome.REPORTING_OWNER_FIXED
+
+
+@pytest.mark.parametrize(
+    "role",
+    ["reporter", "triager", "investigator", "reviewer", "disclosure_approver", "auditor", "admin"],
+)
+def test_other_roles_with_a_valid_request_reach_the_database(role, database_is_reached):
+    # The fixed-role refusal does not touch other roles: a valid request proceeds to the write.
+    with pytest.raises(_ReachedDatabase):
+        set_role_permissions(role, DEFAULT_ROLE_PERMISSIONS[role])
+
+
+def test_other_roles_still_refuse_a_contact_permission_before_the_database(database_must_not_be_reached):
+    outcome = set_role_permissions("triager", frozenset({"cases:triage", "reporter_contact:read"}))
     assert outcome is RoleOutcome.REPORTER_CONTACT_NOT_GRANTABLE
 
 

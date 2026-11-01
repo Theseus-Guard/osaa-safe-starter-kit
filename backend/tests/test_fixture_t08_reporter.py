@@ -15,7 +15,8 @@ Asserted with a database:
 
 - No role other than reporting_owner can be granted reporter_contact:read through the role matrix, so an administrator
   cannot hand the contact to a triager account. The refusal is 409 with detail status reporter_contact_not_grantable.
-  reporting_owner holds the grant by a fixed seed, which the matrix keeps (see test_reporting_owner_db.py).
+  reporting_owner holds the grant by a fixed seed, and the matrix refuses every change to that role (see
+  test_reporting_owner_db.py).
 
 Not in this file: the manual emergency escalation runbook and the abuse rate limit are not application code in F1. The
 reporter account's username is visible to an administrator, who creates reporter accounts. The case link and the
