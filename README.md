@@ -72,9 +72,9 @@ Measured on 2026-11-01 with the commands below. Figures are statement coverage o
 
 | Part | Command | Tests | Coverage |
 |---|---|---|---|
-| Backend, without database | `scripts/test-backend.sh` | 475 passed, 89 skipped | 80% |
-| Backend, with database | `scripts/test-backend.sh --db` | 563 passed, 1 skipped | 93% |
-| Frontend | `cd frontend && npm run test:coverage` | 227 passed | 57% statements, 53% branches |
+| Backend, without database | `scripts/test-backend.sh` | 648 passed, 163 skipped | 80% |
+| Backend, with database | `scripts/test-backend.sh --db` | 810 passed, 1 skipped | 96% |
+| Frontend | `cd frontend && npm run test:coverage` | 297 passed | 66% statements |
 
 The backend `--db` mode starts a throwaway PostgreSQL container and removes it afterwards. Database-backed tests are skipped unless `SAFE_TEST_DATABASE=1` is set, which the script does for you.
 
@@ -82,9 +82,9 @@ The backend `--db` mode starts a throwaway PostgreSQL container and removes it a
 
 - The application never deletes rows; deletion is a soft delete. Physical removal is a manual database action.
 - Every table has `created_at`, `updated_at`, `deleted_at`, and `is_deleted`.
-- Passwords are stored as Argon2id hashes. Login is rate limited.
+- Passwords are stored as Argon2id hashes. Login is rate limited in the gateway and in PostgreSQL, and the gateway also limits API request rates.
 - Passwords expire after 180 days. A new password may not match any of the account's last three passwords, nor any temporary password issued to the account.
-- Access tokens are short-lived and kept in memory in the browser. Refresh tokens are rotated.
+- Access tokens last 60 minutes and are kept in memory in the browser. Refresh tokens are rotated on every use and also last 60 minutes, so a session ends after 60 minutes without activity. The browser renews the token pair before the access token expires.
 - The application roles cannot change the schema. The bootstrap superuser password is random and not stored.
 - Not yet implemented: a production certificate, OIDC/SSO, encryption at rest for the database volume, the disclosure workflow, a Vault Transit key provider, and backup/restore procedures.
 
