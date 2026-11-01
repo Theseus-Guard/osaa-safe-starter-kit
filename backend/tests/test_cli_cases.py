@@ -992,3 +992,96 @@ def test_review_record_permission_denied_names_the_assignment_requirement(api, c
     code, out, err = run(capsys, "case", "review", "record", CASE_ID, "--outcome", "fail", "--username", "alice")
     assert code == 1
     assert "assigned to the case" in err
+
+
+# --- case links -----------------------------------------------------------------------------------------------------
+
+LINKS_PATH = f"{CASE_PATH}/links"
+LINKED_ID = "dddddddd-eeee-4fff-8000-111111111111"
+LINK_BODY = {"linked_case_id": LINKED_ID, "linked_case_title": "Related case", "created_at": "2026-11-01T09:00:00Z"}
+HIDDEN_LINK_BODY = {"linked_case_id": None, "linked_case_title": None, "created_at": "2026-11-01T09:00:00Z"}
+
+
+def test_link_add_sends_the_linked_case_id_and_says_nothing_else_changes(api, capsys):
+    api.route("POST", LINKS_PATH, status=201, body=LINK_BODY)
+    code, out, err = run(capsys, "case", "link", "add", CASE_ID, LINKED_ID, "--username", "alice")
+    assert code == 0
+    assert api.calls[1]["method"] == "POST"
+    assert api.calls[1]["json"] == {"linked_case_id": LINKED_ID}
+    assert out.startswith("Cases linked. Linking changes no task, deadline or status.")
+    assert LINKED_ID in out and "Related case" in out
+    assert err == ""
+
+
+def test_link_add_json_prints_the_api_body_exactly(api, capsys):
+    api.route("POST", LINKS_PATH, status=201, body=LINK_BODY)
+    code, out, err = run(capsys, "case", "link", "add", CASE_ID, LINKED_ID, "--username", "alice", "--json")
+    assert code == 0
+    assert out == compact(LINK_BODY).decode("utf-8") + "\n"
+
+
+@pytest.mark.parametrize(
+    ("status", "detail", "message"),
+    [
+        pytest.param(404, {"detail": "case not found"}, "case not found, or the other case", id="not-found"),
+        pytest.param(409, {"detail": "cases are already linked"}, "already linked", id="duplicate-or-closed"),
+        pytest.param(422, {"detail": "a case cannot be linked to itself"}, "cannot be linked to itself", id="same-case"),
+    ],
+)
+def test_link_add_refusals_are_reported_as_messages(api, capsys, status, detail, message):
+    api.route("POST", LINKS_PATH, status=status, body=detail)
+    code, out, err = run(capsys, "case", "link", "add", CASE_ID, LINKED_ID, "--username", "alice")
+    assert code == 1
+    assert message in err
+
+
+def test_link_add_rejects_a_linked_case_id_that_is_not_a_uuid_without_a_request(api, capsys):
+    code, out, err = run(capsys, "case", "link", "add", CASE_ID, "not-a-uuid", "--username", "alice")
+    assert code == 2
+    assert "LINKED_CASE_ID must be a UUID" in err
+    assert api.calls == []
+
+
+def test_link_list_prints_the_links_and_marks_a_hidden_case(api, capsys):
+    api.route("GET", LINKS_PATH, body=[LINK_BODY, HIDDEN_LINK_BODY])
+    code, out, err = run(capsys, "case", "link", "list", CASE_ID, "--username", "alice")
+    assert code == 0
+    assert api.calls[1]["method"] == "GET"
+    assert LINKED_ID in out and "Related case" in out
+    assert "(not available to your account)" in out
+
+
+def test_link_list_empty_says_so(api, capsys):
+    api.route("GET", LINKS_PATH, body=[])
+    code, out, err = run(capsys, "case", "link", "list", CASE_ID, "--username", "alice")
+    assert code == 0
+    assert out == "No linked cases.\n"
+
+
+def test_link_list_json_prints_the_api_body_exactly(api, capsys):
+    api.route("GET", LINKS_PATH, body=[LINK_BODY])
+    code, out, err = run(capsys, "case", "link", "list", CASE_ID, "--username", "alice", "--json")
+    assert code == 0
+    assert out == compact([LINK_BODY]).decode("utf-8") + "\n"
+
+
+def test_link_remove_sends_a_delete_and_reports_the_removal(api, capsys):
+    api.route("DELETE", f"{LINKS_PATH}/{LINKED_ID}", status=204)
+    code, out, err = run(capsys, "case", "link", "remove", CASE_ID, LINKED_ID, "--username", "alice")
+    assert code == 0
+    assert api.calls[1]["method"] == "DELETE"
+    assert api.calls[1]["json"] is None
+    assert out.startswith("Link removed.")
+
+
+def test_link_remove_not_found_is_reported(api, capsys):
+    api.route("DELETE", f"{LINKS_PATH}/{LINKED_ID}", status=404, body={"detail": "link not found"})
+    code, out, err = run(capsys, "case", "link", "remove", CASE_ID, LINKED_ID, "--username", "alice")
+    assert code == 1
+    assert "no link between the two cases" in err
+
+
+def test_link_remove_has_no_json_flag(api, capsys):
+    code, out, err = run(capsys, "case", "link", "remove", CASE_ID, LINKED_ID, "--username", "alice", "--json")
+    assert code == 2
+    assert api.calls == []

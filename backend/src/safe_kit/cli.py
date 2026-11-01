@@ -668,6 +668,15 @@ ASSIGN_MESSAGES = {
     422: "the user must be an active investigator or reviewer",
 }
 UNASSIGN_MESSAGES = {404: "case or assignment not found", 409: "the case is closed, so its assignments cannot change"}
+LINK_ADD_MESSAGES = {
+    404: "case not found, or the other case is not available to your account",
+    409: "a case is closed, or the two cases are already linked",
+    422: "a case cannot be linked to itself",
+}
+LINK_REMOVE_MESSAGES = {
+    404: "case not found, or there is no link between the two cases",
+    409: "a case is closed, so its links cannot change",
+}
 REVIEW_MESSAGES = {
     403: "forbidden: recording a review needs reviews:write, and you must be assigned to the case",
     404: "case not found",
@@ -737,6 +746,63 @@ def _case_unassign(base_url: str, args: argparse.Namespace) -> None:
         f"/api/v1/cases/{case_id}/assignments/{user_id}",
         messages=UNASSIGN_MESSAGES,
         render=lambda raw: print("Assignment removed."),
+    )
+
+
+def _print_link(link: dict) -> None:
+    # The other case is shown only when the API gives its ID, which it does only for a case the caller can see.
+    print(f"  Linked case ID:   {link['linked_case_id'] or '(not available to your account)'}")
+    print(f"  Title:            {link['linked_case_title'] or '-'}")
+    print(f"  Linked (UTC):     {link['created_at']}")
+
+
+def _render_link_added(raw: bytes) -> None:
+    print("Cases linked. Linking changes no task, deadline or status.")
+    _print_link(_json_object(raw))
+
+
+def _case_link_add(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+    linked_case_id = _uuid_arg(args.linked_case_id, "LINKED_CASE_ID")
+    _write_case(
+        base_url,
+        args,
+        "POST",
+        f"/api/v1/cases/{case_id}/links",
+        payload={"linked_case_id": linked_case_id},
+        messages=LINK_ADD_MESSAGES,
+        render=_render_link_added,
+    )
+
+
+def _case_link_list(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+
+    def action(base: str, token: str) -> None:
+        raw = _call(base, "GET", f"/api/v1/cases/{case_id}/links", token=token)
+        if args.json:
+            _print_json(raw)
+            return
+        links = json.loads(raw)
+        if not links:
+            print("No linked cases.")
+        for link in links:
+            _print_link(link)
+            print()
+
+    _with_session(base_url, args, action)
+
+
+def _case_link_remove(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+    linked_case_id = _uuid_arg(args.linked_case_id, "LINKED_CASE_ID")
+    _write_case(
+        base_url,
+        args,
+        "DELETE",
+        f"/api/v1/cases/{case_id}/links/{linked_case_id}",
+        messages=LINK_REMOVE_MESSAGES,
+        render=lambda raw: print("Link removed. Linking changes no task, deadline or status."),
     )
 
 
@@ -989,6 +1055,23 @@ def _add_case_update_commands(case_commands) -> None:
     unassign.add_argument("--user-id", required=True, metavar="USER_ID", help="ID (UUID) of the user to remove")
     _add_auth_options(unassign, json_output=False)
     unassign.set_defaults(handler=_case_unassign)
+
+    link = case_commands.add_parser("link", help="Link two cases that concern the same incident. A link changes nothing else")
+    link_commands = link.add_subparsers(dest="link_command", required=True)
+    link_add = link_commands.add_parser("add", help="Link a case to another case you can see")
+    link_add.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    link_add.add_argument("linked_case_id", metavar="LINKED_CASE_ID", help="Case ID (UUID) of the other case")
+    _add_auth_options(link_add)
+    link_add.set_defaults(handler=_case_link_add)
+    link_list = link_commands.add_parser("list", help="List the cases linked to one of your cases")
+    link_list.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    _add_auth_options(link_list)
+    link_list.set_defaults(handler=_case_link_list)
+    link_remove = link_commands.add_parser("remove", help="Remove the link between two cases")
+    link_remove.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    link_remove.add_argument("linked_case_id", metavar="LINKED_CASE_ID", help="Case ID (UUID) of the linked case")
+    _add_auth_options(link_remove, json_output=False)
+    link_remove.set_defaults(handler=_case_link_remove)
 
     review = case_commands.add_parser("review", help="Record a review of a case")
     review_commands = review.add_subparsers(dest="review_command", required=True)
