@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { IDLE_LIMIT_MS, IDLE_WARNING_MS, watchIdle } from "./idle";
+import { IDLE_LIMIT_MS, IDLE_WARNING_MS, recordActivity, watchIdle } from "./idle";
 
 const MINUTE = 60 * 1000;
 
@@ -29,26 +29,40 @@ describe("inactivity watch", () => {
     expect(onExpired).toHaveBeenCalledTimes(1);
   });
 
-  it("clears the warning as soon as the user is active again", () => {
+  it("clears the warning when an API request is made", () => {
+    const onWarning = vi.fn();
+    watchIdle({ onWarning, onExpired: vi.fn() });
+
+    vi.advanceTimersByTime(IDLE_LIMIT_MS - IDLE_WARNING_MS + MINUTE);
+    expect(onWarning).toHaveBeenLastCalledWith(true);
+
+    recordActivity();
+    expect(onWarning).toHaveBeenLastCalledWith(false);
+    expect(onWarning).toHaveBeenCalledTimes(2);
+  });
+
+  it("is not reset by mouse, keyboard or scroll events", () => {
     const onWarning = vi.fn();
     const onExpired = vi.fn();
     watchIdle({ onWarning, onExpired });
 
     vi.advanceTimersByTime(IDLE_LIMIT_MS - IDLE_WARNING_MS + MINUTE);
+    for (const type of ["pointerdown", "keydown", "scroll", "mousemove"]) {
+      window.dispatchEvent(new Event(type));
+    }
     expect(onWarning).toHaveBeenLastCalledWith(true);
 
-    window.dispatchEvent(new Event("pointerdown"));
-    expect(onWarning).toHaveBeenLastCalledWith(false);
-    expect(onWarning).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(IDLE_WARNING_MS);
+    expect(onExpired).toHaveBeenCalledTimes(1);
   });
 
-  it("does not expire a session that keeps getting activity", () => {
+  it("does not expire a session that keeps making API requests", () => {
     const onExpired = vi.fn();
     watchIdle({ onWarning: vi.fn(), onExpired });
 
     for (let elapsed = 0; elapsed < 2 * IDLE_LIMIT_MS; elapsed += 10 * MINUTE) {
       vi.advanceTimersByTime(10 * MINUTE);
-      window.dispatchEvent(new Event("keydown"));
+      recordActivity();
     }
     expect(onExpired).not.toHaveBeenCalled();
   });
