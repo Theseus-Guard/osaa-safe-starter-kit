@@ -40,6 +40,9 @@ CASE_IMPACT_CHANGE = "case.impact_changed"
 CASE_LEGAL_DUTY_ADD = "case.legal_duty_added"
 CASE_LEGAL_DUTY_CHANGE = "case.legal_duty_changed"
 CASE_CLASSIFICATION_CHANGE = "case.classification_changed"
+# Case links: a record that two cases concern the same incident. The details hold the link and the other case's ID only.
+CASE_LINK_ADD = "case.link_added"
+CASE_LINK_REMOVE = "case.link_removed"
 # Written against the import record (target_type "case_import"), not the case, so it stays out of the case history.
 CASE_IMPORT = "case.import"
 # Written by safe_kit.evidence against the evidence item (target_type "evidence").

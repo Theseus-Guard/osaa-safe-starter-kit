@@ -1220,5 +1220,9 @@ from safe_kit.case_records_api import case_records_router  # noqa: E402
 
 app.include_router(case_records_router)
 
+# Case link endpoints: a record that two cases concern the same incident.
+from safe_kit.case_links_api import case_links_router  # noqa: E402
+
+app.include_router(case_links_router)
 
 app.include_router(profile_router)
