@@ -16,11 +16,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 // Amber marks a table whose retention period is not defined yet. The badge text states it too, so color is not the only cue.
 const AMBER_BADGE = "border-transparent bg-amber-100 text-amber-900 dark:bg-amber-500/20 dark:text-amber-200";
 
+// Table cards per page. The inventory is small and already loaded, so paging happens in the browser.
+const PAGE_SIZE = 5;
+
 export function PrivacyPage() {
   const [inventory, setInventory] = useState<PrivacyInventory | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exporting, setExporting] = useState<PrivacyExportFormat | null>(null);
+  const [pageIndex, setPageIndex] = useState(0);
 
   useEffect(() => {
     let stale = false;
@@ -51,6 +55,10 @@ export function PrivacyPage() {
   const items = inventory?.items ?? [];
   const withPersonalData = items.filter((item) => item.contains_personal_data).length;
   const withRetention = items.filter((item) => item.retention_defined).length;
+  const pageCount = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  const currentPage = Math.min(pageIndex, pageCount - 1);
+  const pageStart = currentPage * PAGE_SIZE;
+  const pageItems = items.slice(pageStart, pageStart + PAGE_SIZE);
 
   return (
     <>
@@ -100,9 +108,30 @@ export function PrivacyPage() {
           </Card>
 
           {items.length === 0 && <p className="text-sm text-muted-foreground">No tables are listed.</p>}
-          {items.map((item) => (
+          {pageItems.map((item) => (
             <InventoryCard key={item.table} item={item} />
           ))}
+
+          {items.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm text-muted-foreground" aria-live="polite">
+                Showing {pageStart + 1}–{pageStart + pageItems.length} of {items.length}
+              </p>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" disabled={currentPage === 0} onClick={() => setPageIndex(currentPage - 1)}>
+                  Previous
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={currentPage >= pageCount - 1}
+                  onClick={() => setPageIndex(currentPage + 1)}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          )}
         </>
       )}
     </>
