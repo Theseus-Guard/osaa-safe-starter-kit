@@ -24,6 +24,7 @@ from safe_kit.cases import (
     CaseScope,
     HistoryEntry,
     Outcome,
+    Review,
     closure_blockers,
     redact_history,
 )
@@ -337,7 +338,7 @@ def test_review_refusals_and_success(client, caller, monkeypatch):
 
     def fake_review(case_id, outcome, note, scope):
         seen["note"] = note
-        return Outcome.OK, "r1"
+        return Outcome.OK, Review(id="r1", case_id=case_id, outcome=outcome, note=note, created_at=NOW)
 
     monkeypatch.setattr(api, "record_review", fake_review)
     response = client.post(f"/api/v1/cases/{CASE_ID}/reviews", json={"outcome": "pass", "note": "   "})

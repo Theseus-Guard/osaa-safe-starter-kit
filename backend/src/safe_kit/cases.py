@@ -162,6 +162,16 @@ class HistoryEntry:
     details: dict[str, Any] | None
 
 
+@dataclass(frozen=True)
+class Review:
+    id: str
+    case_id: str
+    outcome: str
+    # The full note. The API layer decides who may see it (cases:read_all), as it does for the close and reopen reasons.
+    note: str | None
+    created_at: datetime
+
+
 def deadline_tasks_for(t0: datetime, calendar: BusinessCalendar) -> list[DeadlineTask]:
     """The tasks created with a case. weekly_update is not created here: it depends on risks still being open."""
     due = deadlines_for(t0, calendar)
@@ -483,7 +493,7 @@ def unassign_member(case_id: str, user_id: str, scope: CaseScope) -> Outcome:
     return Outcome.OK
 
 
-def record_review(case_id: str, outcome: str, note: str | None, scope: CaseScope) -> tuple[Outcome, str | None]:
+def record_review(case_id: str, outcome: str, note: str | None, scope: CaseScope) -> tuple[Outcome, Review | None]:
     """Record a review. Only an active assignee may review, and only while the case is open."""
     with connect() as conn:
         locked = _lock_visible_case(conn, case_id, scope)
@@ -493,13 +503,13 @@ def record_review(case_id: str, outcome: str, note: str | None, scope: CaseScope
             return Outcome.CLOSED, None
         if not _is_assigned(conn, case_id, scope.user_id):
             return Outcome.NOT_ASSIGNED, None
-        review_id = conn.execute(
+        row = conn.execute(
             """
             INSERT INTO case_reviews (case_id, reviewer_id, outcome, note) VALUES (%s, %s, %s, %s)
-            RETURNING id::text
+            RETURNING id::text, created_at
             """,
             (case_id, scope.user_id, outcome, note),
-        ).fetchone()[0]
+        ).fetchone()
         audit.record(
             conn,
             audit.CASE_REVIEW,
@@ -507,28 +517,32 @@ def record_review(case_id: str, outcome: str, note: str | None, scope: CaseScope
             case_id,
             actor_id=scope.user_id,
             details={
-                "review_id": _change(None, review_id),
+                "review_id": _change(None, row[0]),
                 "outcome": _change(None, outcome),
                 "note": _change(None, _text_marker(note)),
             },
         )
-    return Outcome.OK, review_id
+    return Outcome.OK, Review(id=row[0], case_id=case_id, outcome=outcome, note=note, created_at=row[1])
 
 
-def list_reviews(case_id: str, scope: CaseScope) -> list[dict[str, str | None]] | None:
-    """Active reviews of a case, newest first, or None when the scope may not see the case."""
+def list_reviews(case_id: str, scope: CaseScope) -> list[Review] | None:
+    """Active reviews of a case, newest first, or None when the scope may not see the case.
+
+    Every caller who can see the case gets every review, with its outcome and time. The note is returned as stored;
+    the API layer hides it from callers without the full view.
+    """
     with connect() as conn:
         if not is_visible_on(conn, case_id, scope):
             return None
         rows = conn.execute(
             """
-            SELECT id::text, outcome, note FROM case_reviews
+            SELECT id::text, outcome, note, created_at FROM case_reviews
             WHERE case_id = %s AND NOT is_deleted
             ORDER BY created_at DESC, id DESC
             """,
             (case_id,),
         ).fetchall()
-    return [{"id": row[0], "outcome": row[1], "note": row[2]} for row in rows]
+    return [Review(id=row[0], case_id=case_id, outcome=row[1], note=row[2], created_at=row[3]) for row in rows]
 
 
 def update_deadline(

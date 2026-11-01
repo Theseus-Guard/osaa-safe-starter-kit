@@ -13,14 +13,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from safe_kit import api, auth, system_timezone, users
-from safe_kit.cases import CaseScope
+from safe_kit.cases import CaseScope, Outcome, Review
 from safe_kit.db import connect
 from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS
 from safe_kit.users import User
 
 REPORTER_ID = "11111111-1111-1111-1111-111111111111"
+REVIEWER_ID = "44444444-4444-4444-4444-444444444444"
 CASE_ID = "99999999-9999-9999-9999-999999999999"
 NOW = datetime(2026, 11, 1, 9, 0, tzinfo=UTC)
+NOTE = "needs the export"
 
 requires_database = pytest.mark.skipif(
     os.environ.get("SAFE_TEST_DATABASE") != "1",
@@ -76,25 +78,72 @@ def test_unknown_or_invisible_case_is_404_with_the_case_not_found_detail(client,
     assert response.json()["detail"] == "case not found"
 
 
+def review(review_id: str, outcome: str, note: str | None) -> Review:
+    return Review(id=review_id, case_id=CASE_ID, outcome=outcome, note=note, created_at=NOW)
+
+
 def test_reviews_use_the_callers_scope_and_keep_the_review_shape(client, monkeypatch):
     seen = {}
 
     def fake_list(case_id, scope):
         seen["case_id"] = case_id
         seen["scope"] = scope
-        return [
-            {"id": "r2", "outcome": "pass", "note": None},
-            {"id": "r1", "outcome": "insufficient_evidence", "note": "needs the export"},
-        ]
+        return [review("r2", "pass", None), review("r1", "insufficient_evidence", NOTE)]
 
     monkeypatch.setattr(api, "list_reviews", fake_list)
     response = client.get(f"/api/v1/cases/{CASE_ID}/reviews")
     assert response.status_code == 200
     assert seen == {"case_id": CASE_ID, "scope": CaseScope(user_id=REPORTER_ID, read_own=True)}
+    # A reporter sees both reviews, with outcome and time, but no note.
     assert response.json() == [
-        {"id": "r2", "case_id": CASE_ID, "outcome": "pass", "note": None},
-        {"id": "r1", "case_id": CASE_ID, "outcome": "insufficient_evidence", "note": "needs the export"},
+        {"id": "r2", "case_id": CASE_ID, "outcome": "pass", "note": None, "created_at": "2026-11-01T09:00:00Z"},
+        {
+            "id": "r1",
+            "case_id": CASE_ID,
+            "outcome": "insufficient_evidence",
+            "note": None,
+            "created_at": "2026-11-01T09:00:00Z",
+        },
     ]
+
+
+@pytest.mark.parametrize(
+    ("role", "expected_note"),
+    [
+        ("triager", NOTE),  # holds cases:read_all, the full view
+        ("reporter", None),
+        ("investigator", None),
+        ("reviewer", None),
+    ],
+)
+def test_only_the_full_view_sees_the_note(client, caller, monkeypatch, role, expected_note):
+    monkeypatch.setattr(api, "list_reviews", lambda case_id, scope: [review("r1", "fail", NOTE)])
+    as_role(caller, REVIEWER_ID, role)
+    response = client.get(f"/api/v1/cases/{CASE_ID}/reviews")
+    assert response.status_code == 200
+    item = response.json()[0]
+    assert item["outcome"] == "fail"
+    assert item["created_at"] == "2026-11-01T09:00:00Z"
+    assert item["note"] == expected_note
+
+
+def test_the_submitter_gets_their_own_note_back(client, caller, monkeypatch):
+    as_role(caller, REVIEWER_ID, "reviewer")
+    monkeypatch.setattr(
+        api,
+        "record_review",
+        lambda case_id, outcome, note, scope: (Outcome.OK, review("r1", outcome, note)),
+    )
+    response = client.post(f"/api/v1/cases/{CASE_ID}/reviews", json={"outcome": "pass", "note": f"  {NOTE}  "})
+    assert response.status_code == 201
+    # The reviewer has no cases:read_all, but the note on their own submission is their input and stays.
+    assert response.json() == {
+        "id": "r1",
+        "case_id": CASE_ID,
+        "outcome": "pass",
+        "note": NOTE,
+        "created_at": "2026-11-01T09:00:00Z",
+    }
 
 
 def test_empty_review_list_is_an_empty_array(client, monkeypatch):
@@ -193,13 +242,46 @@ def test_reviews_are_listed_newest_first_and_skip_soft_deleted_rows(db_client, p
 
     listed = db_client(people["triager"]).get(f"/api/v1/cases/{case_id}/reviews").json()
     assert [item["id"] for item in listed] == [second, first]
-    assert listed[0] == {"id": second, "case_id": case_id, "outcome": "pass", "note": "second"}
+    assert listed[0]["case_id"] == case_id
+    assert listed[0]["outcome"] == "pass"
+    assert listed[0]["note"] == "second"
+    assert listed[0]["created_at"] is not None
 
     # Soft delete one review directly, as an administrator would. The listing must leave it out.
     with connect() as conn:
         conn.execute("UPDATE case_reviews SET is_deleted = true, deleted_at = now() WHERE id = %s", (second,))
     listed = db_client(people["triager"]).get(f"/api/v1/cases/{case_id}/reviews").json()
     assert [item["id"] for item in listed] == [first]
+
+
+@requires_database
+def test_note_is_shown_only_to_the_full_view(db_client, people):
+    case_id = create_case_via_api(db_client, people["reporter"])
+    db_client(people["triager"]).post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]})
+    db_client(people["triager"]).post(
+        f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["investigator"]}
+    )
+    submitted = db_client(people["reviewer"]).post(
+        f"/api/v1/cases/{case_id}/reviews", json={"outcome": "insufficient_evidence", "note": "sensitive note"}
+    )
+    assert submitted.status_code == 201, submitted.text
+    # The reviewer's own submission keeps its note; the reviewer has no full view, so the listing hides it.
+    assert submitted.json()["note"] == "sensitive note"
+    assert submitted.json()["created_at"] is not None
+
+    expected_notes = {
+        "triager": "sensitive note",  # cases:read_all
+        "reporter": None,
+        "investigator": None,
+        "reviewer": None,
+    }
+    for role, expected_note in expected_notes.items():
+        response = db_client(people[role]).get(f"/api/v1/cases/{case_id}/reviews")
+        assert response.status_code == 200, role
+        (item,) = response.json()
+        assert item["outcome"] == "insufficient_evidence", role
+        assert item["created_at"] is not None, role
+        assert item["note"] == expected_note, role
 
 
 @requires_database

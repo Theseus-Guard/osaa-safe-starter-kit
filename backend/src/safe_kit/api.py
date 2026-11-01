@@ -33,6 +33,7 @@ from safe_kit.cases import (
     Case,
     CaseScope,
     Outcome,
+    Review,
     assign_member,
     case_history,
     close_case,
@@ -648,7 +649,9 @@ class ReviewResponse(BaseModel):
     id: str
     case_id: str
     outcome: str
+    # Null for callers without the full view (cases:read_all). The reviewer's own submission returns its note.
     note: str | None
+    created_at: datetime
 
 
 class ReasonRequest(BaseModel):
@@ -986,15 +989,33 @@ def add_case_review(
     body: ReviewRequest,
     actor: User = Depends(require_permission("reviews:write")),
 ) -> ReviewResponse:
-    outcome, review_id = record_review(str(case_id), body.outcome, body.note, _scope(actor))
+    # The response carries the note the caller just wrote, whatever the caller's read permissions: it is their own input.
+    outcome, review = record_review(str(case_id), body.outcome, body.note, _scope(actor))
     if outcome is Outcome.NOT_FOUND:
         raise CASE_NOT_FOUND
     if outcome is Outcome.CLOSED:
         raise CASE_CLOSED
     if outcome is Outcome.NOT_ASSIGNED:
         raise HTTPException(status_code=403, detail="only an assigned reviewer can record a review")
-    assert review_id is not None
-    return ReviewResponse(id=review_id, case_id=str(case_id), outcome=body.outcome, note=body.note)
+    assert review is not None
+    return ReviewResponse(
+        id=review.id,
+        case_id=str(case_id),
+        outcome=review.outcome,
+        note=review.note,
+        created_at=review.created_at,
+    )
+
+
+def _review_response(review: Review, scope: CaseScope) -> ReviewResponse:
+    # The note is shown only to callers with the full view, the same rule as the close and reopen reasons.
+    return ReviewResponse(
+        id=review.id,
+        case_id=review.case_id,
+        outcome=review.outcome,
+        note=review.note if scope.read_all else None,
+        created_at=review.created_at,
+    )
 
 
 @app.get("/api/v1/cases/{case_id}/reviews", response_model=list[ReviewResponse])
@@ -1003,13 +1024,11 @@ def list_case_reviews(
     actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS)),
 ) -> list[ReviewResponse]:
     # Same visibility as the case itself: a case the caller may not see is 404, as for every case read.
-    reviews = list_reviews(str(case_id), _scope(actor))
+    scope = _scope(actor)
+    reviews = list_reviews(str(case_id), scope)
     if reviews is None:
         raise CASE_NOT_FOUND
-    return [
-        ReviewResponse(id=review["id"], case_id=str(case_id), outcome=review["outcome"], note=review["note"])
-        for review in reviews
-    ]
+    return [_review_response(review, scope) for review in reviews]
 
 
 @app.post("/api/v1/cases/{case_id}/close", response_model=CaseResponse)
