@@ -3,10 +3,15 @@ import { CaseDetail, getCase } from "../../api";
 import { describeError } from "../../messages";
 import { caseAbilities } from "../../permissions";
 import { CaseAssignments } from "./CaseAssignments";
+import { CaseAwarenessEvents } from "./CaseAwarenessEvents";
+import { CaseClassification } from "./CaseClassification";
 import { CaseClosure } from "./CaseClosure";
 import { CaseDeadlines } from "./CaseDeadlines";
 import { CaseEvidence } from "./CaseEvidence";
 import { CaseHistory } from "./CaseHistory";
+import { CaseImpacts } from "./CaseImpacts";
+import { CaseLegalDuties } from "./CaseLegalDuties";
+import { CasePreliminaryReport } from "./CasePreliminaryReport";
 import { CaseReview } from "./CaseReview";
 import { Timestamp } from "@/components/timestamp";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -45,6 +50,11 @@ export function CaseDetailPage({ caseId, permissions }: Props) {
 
   function applyChange(updated: CaseDetail) {
     setDetail(updated);
+    setHistoryRevision((value) => value + 1);
+  }
+
+  // A change to the case record is audited, so the history reloads, and the preliminary report reloads with it.
+  function recordChanged() {
     setHistoryRevision((value) => value + 1);
   }
 
@@ -115,6 +125,42 @@ export function CaseDetailPage({ caseId, permissions }: Props) {
           />
 
           <CaseAssignments caseId={detail.id} closed={closed} canAssign={abilities.canAssign} />
+
+          {abilities.canReadRecords && (
+            <>
+              <CaseAwarenessEvents
+                caseId={detail.id}
+                closed={closed}
+                canWrite={abilities.canWriteRecords}
+                canReadFullView={abilities.canReadFullView}
+                onRecorded={recordChanged}
+              />
+              <CaseImpacts
+                caseId={detail.id}
+                closed={closed}
+                canWrite={abilities.canWriteRecords}
+                canReadFullView={abilities.canReadFullView}
+                onRecorded={recordChanged}
+              />
+              <CaseLegalDuties
+                caseId={detail.id}
+                closed={closed}
+                canWrite={abilities.canWriteRecords}
+                canReadFullView={abilities.canReadFullView}
+                onRecorded={recordChanged}
+              />
+              <CaseClassification
+                caseId={detail.id}
+                closed={closed}
+                canWrite={abilities.canWriteRecords}
+                canReadFullView={abilities.canReadFullView}
+                onRecorded={recordChanged}
+              />
+            </>
+          )}
+
+          {/* The preliminary report gathers the free text of every record, so it needs the full view. */}
+          {abilities.canReadFullView && <CasePreliminaryReport caseId={detail.id} refreshKey={historyRevision} />}
 
           {(abilities.canReadEvidence || abilities.canWriteEvidence) && (
             <CaseEvidence

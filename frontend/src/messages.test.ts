@@ -12,6 +12,13 @@ describe("describeCode", () => {
     expect(describeCode("something_new")).toBe("Request failed (something_new).");
   });
 
+  it("explains a classification version conflict without the version number in the code", () => {
+    expect(describeCode("classification changed: the current version is 3; reload and retry")).toBe(
+      "The classification was changed by someone else. Reload it, check the current version and save again.",
+    );
+    expect(describeCode("legal duty not found")).toBe("That legal duty does not exist on this case.");
+  });
+
   // Known bug in messages.ts: MESSAGES is a plain object, so inherited keys such as "constructor" are found
   // by the lookup and returned as a function instead of the fallback sentence. Remove ".fails" once fixed.
   it("does not match inherited object keys", () => {

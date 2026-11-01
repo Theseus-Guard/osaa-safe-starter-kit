@@ -6,7 +6,34 @@ import {
   formatBytes,
   historyActionLabel,
   humanize,
+  missingFieldLabel,
+  recordText,
+  triggerLabel,
 } from "./case-format";
+
+describe("case record labels", () => {
+  it("labels each R01 trigger in plain words", () => {
+    expect(triggerLabel("harm_inaction_near_miss")).toBe("Harm, inaction or near miss");
+    expect(triggerLabel("boundary_escape")).toBe("Boundary escape");
+  });
+
+  it("shows a null record text as not recorded for the full view and as hidden otherwise", () => {
+    expect(recordText(null, true)).toBe("Not recorded.");
+    expect(recordText(null, false)).toBe("Not shown for your role.");
+    expect(recordText("Contained", false)).toBe("Contained");
+  });
+
+  it("turns each missing field of the preliminary report into a label", () => {
+    expect(missingFieldLabel({ field: "contact", state: "missing" })).toBe("Reporter contact");
+    expect(missingFieldLabel({ field: "awareness_events", state: "missing" })).toBe("Awareness events");
+    expect(missingFieldLabel({ field: "impacts.disproportionate_effect", state: "missing" })).toBe(
+      "Impact: Disproportionate effect",
+    );
+    expect(missingFieldLabel({ field: "classification.evidence_gap_plan", state: "unknown" })).toBe(
+      "Classification: Evidence gap plan (unknown)",
+    );
+  });
+});
 
 describe("humanize", () => {
   it("turns a snake_case value into a sentence", () => {

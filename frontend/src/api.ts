@@ -509,6 +509,234 @@ export function listCustodyEvents(evidenceId: string): Promise<CustodyEvent[]> {
   return request<CustodyEvent[]>(`/evidence/${encodeURIComponent(evidenceId)}/custody`);
 }
 
+// Case record: awareness events, impacts, legal duties, classification and the preliminary report.
+// Reads need a case-read permission and a visible case. Writes need cases:triage and an open case (409 when closed).
+// Free text is null for callers without cases:read_all. The preliminary report needs cases:read_all.
+export const AWARENESS_KINDS = ["operator", "affected_party", "external_report"] as const;
+export type AwarenessKind = (typeof AWARENESS_KINDS)[number];
+
+// An incident, a near miss and a blocked attempt are kept apart. The same values apply to the classification.
+export const RECORD_EVENT_KINDS = ["incident", "near_miss", "blocked_attempt"] as const;
+export type RecordEventKind = (typeof RECORD_EVENT_KINDS)[number];
+
+export interface AwarenessEvent {
+  id: string;
+  case_id: string;
+  awareness_kind: AwarenessKind;
+  event_kind: RecordEventKind;
+  occurred_at: string;
+  // Null for callers without cases:read_all.
+  basis: string | null;
+  recorded_by: string;
+  created_at: string;
+}
+
+export interface AwarenessEventCreateBody {
+  awareness_kind: AwarenessKind;
+  event_kind: RecordEventKind;
+  // Timezone-aware UTC ISO string. The backend rejects a time in the future.
+  occurred_at: string;
+  basis: string;
+}
+
+export function listAwarenessEvents(caseId: string): Promise<AwarenessEvent[]> {
+  return request<AwarenessEvent[]>(`/cases/${encodeURIComponent(caseId)}/awareness-events`);
+}
+
+// Awareness events are append-only. Each call adds one event.
+export function addAwarenessEvent(caseId: string, body: AwarenessEventCreateBody): Promise<AwarenessEvent> {
+  return request<AwarenessEvent>(`/cases/${encodeURIComponent(caseId)}/awareness-events`, {
+    method: "POST",
+    json: body,
+  });
+}
+
+export const IMPACT_AREAS = [
+  "affected_people_groups",
+  "severity",
+  "scale",
+  "duration",
+  "reversibility",
+  "disproportionate_effect",
+] as const;
+export type ImpactArea = (typeof IMPACT_AREAS)[number];
+
+export const IMPACT_SEVERITIES = ["none", "low", "medium", "high", "critical", "unknown"] as const;
+export type ImpactSeverity = (typeof IMPACT_SEVERITIES)[number];
+
+export interface ImpactAssessment {
+  area: ImpactArea;
+  // False when the area has no assessment yet. That is not the same as severity "none".
+  assessed: boolean;
+  severity: ImpactSeverity | null;
+  // Null for callers without cases:read_all, and for an area that is not assessed.
+  scope: string | null;
+  updated_at: string | null;
+}
+
+// Always the six impact areas, in order. An area without an assessment comes back with assessed false.
+export function listImpacts(caseId: string): Promise<ImpactAssessment[]> {
+  return request<ImpactAssessment[]>(`/cases/${encodeURIComponent(caseId)}/impacts`);
+}
+
+export function setImpact(
+  caseId: string,
+  area: ImpactArea,
+  body: { severity: ImpactSeverity; scope: string },
+): Promise<ImpactAssessment> {
+  return request<ImpactAssessment>(`/cases/${encodeURIComponent(caseId)}/impacts/${encodeURIComponent(area)}`, {
+    method: "PUT",
+    json: body,
+  });
+}
+
+export const DUTY_KINDS = ["statutory", "contractual"] as const;
+export type DutyKind = (typeof DUTY_KINDS)[number];
+export type DutyStatus = "open" | "done";
+
+// A legal duty has its own due time. It never changes a SAFE deadline task of the case.
+export interface LegalDuty {
+  id: string;
+  case_id: string;
+  kind: DutyKind;
+  // Null for callers without cases:read_all.
+  description: string | null;
+  source_reference: string | null;
+  jurisdiction: string | null;
+  due_at: string;
+  status: DutyStatus;
+  created_by: string;
+  created_at: string;
+}
+
+export interface LegalDutyCreateBody {
+  kind: DutyKind;
+  description: string;
+  // The statute or the contract clause that creates the duty.
+  source_reference: string;
+  jurisdiction?: string | null;
+  due_at: string;
+}
+
+// Only the sent fields change. A field sent as null is refused, except jurisdiction, which may be cleared.
+export type LegalDutyChanges = Partial<{
+  description: string;
+  source_reference: string;
+  jurisdiction: string | null;
+  due_at: string;
+  status: DutyStatus;
+}>;
+
+export function listLegalDuties(caseId: string): Promise<LegalDuty[]> {
+  return request<LegalDuty[]>(`/cases/${encodeURIComponent(caseId)}/legal-duties`);
+}
+
+export function addLegalDuty(caseId: string, body: LegalDutyCreateBody): Promise<LegalDuty> {
+  return request<LegalDuty>(`/cases/${encodeURIComponent(caseId)}/legal-duties`, { method: "POST", json: body });
+}
+
+export function updateLegalDuty(caseId: string, dutyId: string, changes: LegalDutyChanges): Promise<LegalDuty> {
+  return request<LegalDuty>(
+    `/cases/${encodeURIComponent(caseId)}/legal-duties/${encodeURIComponent(dutyId)}`,
+    { method: "PATCH", json: changes },
+  );
+}
+
+// The five compact trigger values of R01.
+export const TRIGGERS = [
+  "unauthorized_access_or_change",
+  "boundary_escape",
+  "confidential_data_exposure",
+  "out_of_scope_continuation",
+  "harm_inaction_near_miss",
+] as const;
+export type Trigger = (typeof TRIGGERS)[number];
+
+export const CLASSIFICATION_TEXT_FIELDS = [
+  "classification_rationale",
+  "responsible_operator",
+  "affected_versions",
+  "approved_scope",
+  "scope_permission_source",
+  "containment",
+  "evidence_gap_plan",
+] as const;
+export type ClassificationTextField = (typeof CLASSIFICATION_TEXT_FIELDS)[number];
+export type ClassificationText = Record<ClassificationTextField, string | null>;
+
+// Version 0 means no classification is recorded yet. Null text is "not recorded", or hidden when the caller lacks cases:read_all.
+export interface Classification extends ClassificationText {
+  case_id: string;
+  version: number;
+  triggers: Trigger[];
+  event_kind: RecordEventKind | null;
+  internal_incident_option: boolean;
+  next_update_due_at: string | null;
+  created_by: string | null;
+  created_at: string | null;
+}
+
+// Every field is sent. The backend stores the body as the next version, and a field not sent is cleared.
+export type ClassificationUpdateBody = ClassificationText & {
+  // The version the editor read. A different current version is refused with 409.
+  expected_version: number;
+  triggers: Trigger[];
+  event_kind: RecordEventKind | null;
+  internal_incident_option: boolean;
+  next_update_due_at: string | null;
+};
+
+export function getClassification(caseId: string): Promise<Classification> {
+  return request<Classification>(`/cases/${encodeURIComponent(caseId)}/classification`);
+}
+
+export function updateClassification(caseId: string, body: ClassificationUpdateBody): Promise<Classification> {
+  return request<Classification>(`/cases/${encodeURIComponent(caseId)}/classification`, { method: "PUT", json: body });
+}
+
+// The report lists what is still missing and never refuses for it. The contact is reported as recorded or missing only.
+export interface PreliminaryReport {
+  case_id: string;
+  reference: string;
+  case_status: string;
+  generated_at: string;
+  awareness_time: string;
+  complete: boolean;
+  // Each entry names a field, such as "contact", "awareness_events", "impacts.severity" or "classification.containment".
+  missing_fields: { field: string; state: "missing" | "unknown" }[];
+  contact: { status: "recorded" | "missing" };
+  classification: ClassificationText & {
+    version: number;
+    triggers: Trigger[];
+    event_kind: RecordEventKind | null;
+    internal_incident_option: boolean;
+    next_update_due_at: string | null;
+  };
+  awareness_events: {
+    id: string;
+    awareness_kind: AwarenessKind;
+    event_kind: RecordEventKind;
+    occurred_at: string;
+    basis: string;
+  }[];
+  impacts: { area: ImpactArea; assessed: boolean; severity: ImpactSeverity | null; scope: string | null }[];
+  legal_duties: {
+    id: string;
+    kind: DutyKind;
+    description: string;
+    source_reference: string;
+    jurisdiction: string | null;
+    due_at: string;
+    status: DutyStatus;
+  }[];
+  // The SAFE deadline tasks of the case, kept apart from the legal duties.
+  safe_deadlines: { kind: string; due_at: string; status: string }[];
+}
+
+export function getPreliminaryReport(caseId: string): Promise<PreliminaryReport> {
+  return request<PreliminaryReport>(`/cases/${encodeURIComponent(caseId)}/preliminary-report`);
+}
+
 // System timezone. Storage is always UTC; this only changes how times are displayed.
 export interface SystemTimezone {
   timezone: string | null;

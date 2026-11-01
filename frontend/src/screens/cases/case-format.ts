@@ -77,3 +77,33 @@ export function describeDetails(details: Record<string, unknown> | null): string
     return `${label}: ${showValue(value)}`;
   });
 }
+
+const TRIGGER_LABELS: Record<string, string> = {
+  unauthorized_access_or_change: "Unauthorized access or change",
+  boundary_escape: "Boundary escape",
+  confidential_data_exposure: "Confidential data exposure",
+  out_of_scope_continuation: "Continuation outside the approved scope",
+  harm_inaction_near_miss: "Harm, inaction or near miss",
+};
+
+export function triggerLabel(trigger: string): string {
+  return Object.hasOwn(TRIGGER_LABELS, trigger) ? TRIGGER_LABELS[trigger] : humanize(trigger);
+}
+
+// Text of a case record field. A null value is either not recorded, or hidden from a caller without the full view.
+export function recordText(value: string | null, fullView: boolean): string {
+  if (value !== null) return value;
+  return fullView ? "Not recorded." : "Not shown for your role.";
+}
+
+// Lists one entry of the preliminary report's missing_fields as a sentence fragment.
+export function missingFieldLabel(entry: { field: string; state: string }): string {
+  const { field, state } = entry;
+  let label: string;
+  if (field === "contact") label = "Reporter contact";
+  else if (field === "awareness_events") label = "Awareness events";
+  else if (field.startsWith("impacts.")) label = `Impact: ${humanize(field.slice("impacts.".length))}`;
+  else if (field.startsWith("classification.")) label = `Classification: ${humanize(field.slice("classification.".length))}`;
+  else label = humanize(field);
+  return state === "unknown" ? `${label} (unknown)` : label;
+}
