@@ -34,6 +34,12 @@ CASE_ASSIGNMENT_ADD = "case.assignment_added"
 CASE_ASSIGNMENT_REMOVE = "case.assignment_removed"
 CASE_REVIEW = "case.review_recorded"
 CASE_DEADLINE_UPDATE = "case.deadline_updated"
+# Case record (safe_kit.case_records). Free text is never written here, only its length.
+CASE_AWARENESS_RECORDED = "case.awareness_recorded"
+CASE_IMPACT_CHANGE = "case.impact_changed"
+CASE_LEGAL_DUTY_ADD = "case.legal_duty_added"
+CASE_LEGAL_DUTY_CHANGE = "case.legal_duty_changed"
+CASE_CLASSIFICATION_CHANGE = "case.classification_changed"
 # Written against the import record (target_type "case_import"), not the case, so it stays out of the case history.
 CASE_IMPORT = "case.import"
 # Written by safe_kit.evidence against the evidence item (target_type "evidence").
