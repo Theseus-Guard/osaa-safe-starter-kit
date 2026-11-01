@@ -27,8 +27,9 @@ from safe_kit.system_timezone import TimezoneNotConfigured
 CALENDAR_VERSION = "provisional-1"
 CALENDAR_HOLIDAYS: frozenset = frozenset()
 
-# Roles that may hold an assignment on a case. Reporters and triagers are never assignees.
-ASSIGNABLE_ROLES = frozenset({"investigator", "reviewer"})
+# A user may be assigned to a case only when its role holds the cases:assignable permission (role_permissions).
+# The reporter role is refused in code as well, so the rule does not depend on how the matrix is edited.
+ASSIGNABLE_PERMISSION = "cases:assignable"
 REVIEW_OUTCOMES = frozenset({"pass", "fail", "insufficient_evidence", "not_applicable"})
 DEADLINE_STATUSES = frozenset({"open", "done", "not_applicable"})
 # A deadline task blocks closure unless it is done or explicitly not applicable.
@@ -431,10 +432,10 @@ class AssignableUser:
 def list_assignable_users(case_id: str, scope: CaseScope) -> list[AssignableUser] | None:
     """Users the caller may pick for an assignment on the case, or None when the scope may not see the case.
 
-    A user is listed only when the account is active and not deleted, its role is in ASSIGNABLE_ROLES (the rule
-    assign_member enforces, so every listed user can be assigned), and the role currently holds cases:assign in
-    role_permissions. The reporter role is excluded explicitly: reporters are not assignees, and the exclusion
-    holds even if the reporter role were granted cases:assign. Read-only: it writes no audit row.
+    A user is listed only when the account is active and not deleted and its role currently holds cases:assignable
+    in role_permissions. That is the rule assign_member enforces, so every listed user can be assigned. The reporter
+    role is excluded explicitly: reporters are never assignees, even if the matrix grants them cases:assignable.
+    Read-only: it writes no audit row.
     """
     with connect() as conn:
         if not is_visible_on(conn, case_id, scope):
@@ -444,22 +445,37 @@ def list_assignable_users(case_id: str, scope: CaseScope) -> list[AssignableUser
             SELECT u.id::text, u.username, u.first_name, u.last_name, u.role
             FROM users u
             WHERE NOT u.is_deleted AND u.is_active
-              AND u.role = ANY(%s::text[])
+              -- Explicit guard: reporters are never assignees, whatever the permission matrix says.
               AND u.role <> 'reporter'
               AND EXISTS (
                   SELECT 1 FROM role_permissions rp
                   JOIN permissions p ON p.name = rp.permission AND NOT p.is_deleted
-                  WHERE rp.role = u.role AND rp.permission = 'cases:assign' AND NOT rp.is_deleted
+                  WHERE rp.role = u.role AND rp.permission = %s AND NOT rp.is_deleted
               )
             ORDER BY u.username
             """,
-            (sorted(ASSIGNABLE_ROLES),),
+            (ASSIGNABLE_PERMISSION,),
         ).fetchall()
     return [AssignableUser(*row) for row in rows]
 
 
+def _role_holds_assignable(conn, role: str) -> bool:
+    """Whether the role currently holds cases:assignable. Runs on the caller's connection, so it is in the same transaction."""
+    row = conn.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM role_permissions rp
+            JOIN permissions p ON p.name = rp.permission AND NOT p.is_deleted
+            WHERE rp.role = %s AND rp.permission = %s AND NOT rp.is_deleted
+        )
+        """,
+        (role, ASSIGNABLE_PERMISSION),
+    ).fetchone()
+    return bool(row[0])
+
+
 def assign_member(case_id: str, user_id: str, scope: CaseScope) -> tuple[Outcome, Assignment | None]:
-    """Give an investigator or reviewer an active assignment on the case."""
+    """Give an active user whose role holds cases:assignable an assignment on the case."""
     with connect() as conn:
         locked = _lock_visible_case(conn, case_id, scope)
         if locked is None:
@@ -472,7 +488,8 @@ def assign_member(case_id: str, user_id: str, scope: CaseScope) -> tuple[Outcome
         ).fetchone()
         if user is None or not user[2]:
             return Outcome.ASSIGNEE_INACTIVE, None
-        if user[1] not in ASSIGNABLE_ROLES:
+        # Reporters are never assignees, whatever the permission matrix says (same guard as list_assignable_users).
+        if user[1] == "reporter" or not _role_holds_assignable(conn, user[1]):
             return Outcome.ROLE_NOT_ASSIGNABLE, None
         if _is_assigned(conn, case_id, user_id):
             return Outcome.DUPLICATE, None

@@ -147,6 +147,11 @@ def test_case_roles_in_the_default_seed():
     assert "cases:read_all" not in DEFAULT_ROLE_PERMISSIONS["investigator"]
     assert not {"cases:assign", "cases:close"} & DEFAULT_ROLE_PERMISSIONS["investigator"]
     assert not {"cases:assign", "cases:close"} & DEFAULT_ROLE_PERMISSIONS["reviewer"]
+    # Assignability is its own permission: investigator and reviewer hold it, the triager (who assigns) does not.
+    assert "cases:assignable" in DEFAULT_ROLE_PERMISSIONS["investigator"]
+    assert "cases:assignable" in DEFAULT_ROLE_PERMISSIONS["reviewer"]
+    assert "cases:assignable" not in triager
+    assert "cases:assignable" not in DEFAULT_ROLE_PERMISSIONS["reporter"]
 
 
 def test_admin_still_has_no_case_permissions_and_keeps_its_required_ones():
@@ -622,7 +627,8 @@ def test_assignment_rules_roles_duplicates_and_soft_delete(db_client, people):
     triager = db_client(people["triager"])
     url = f"/api/v1/cases/{case_id}/assignments"
 
-    for wrong in ("reporter", "auditor", "admin"):
+    # The triager holds cases:assign (it makes assignments) but not cases:assignable, so it is refused as an assignee.
+    for wrong in ("reporter", "auditor", "admin", "triager"):
         response = triager.post(url, json={"user_id": people[wrong]})
         assert response.status_code == 422
         assert response.json() == {"detail": "assignee must be an investigator or reviewer"}
