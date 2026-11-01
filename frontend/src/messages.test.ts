@@ -35,3 +35,29 @@ describe("describeError", () => {
     expect(describeError(undefined)).toBe("Something went wrong.");
   });
 });
+
+describe("case and evidence messages", () => {
+  it("maps the evidence codes to sentences", () => {
+    expect(describeCode("evidence is not available")).toBe("This evidence is not available for download yet.");
+    expect(describeCode("media type is not allowed")).toMatch(/Allowed types are PDF/);
+  });
+
+  it("shows the closure blockers the server lists", () => {
+    expect(describeCode("case cannot be closed: no review is recorded; deadline task weekly_update is open")).toBe(
+      "The case cannot be closed yet: no review is recorded; deadline task weekly_update is open.",
+    );
+  });
+
+  it("explains the size limit without the raw code", () => {
+    expect(describeCode("file exceeds the limit of 52428800 bytes")).toBe(
+      "The file is larger than the limit of 52428800 bytes.",
+    );
+    expect(describeCode("request exceeds the limit of 52494144 bytes")).toBe(
+      "The upload is larger than the limit of 52494144 bytes.",
+    );
+  });
+
+  it("keeps the fallback for an unknown code that only resembles a prefix", () => {
+    expect(describeCode("case cannot be reopened")).toBe("Request failed (case cannot be reopened).");
+  });
+});

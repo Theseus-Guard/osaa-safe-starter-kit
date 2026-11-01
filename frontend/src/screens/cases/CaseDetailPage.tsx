@@ -1,12 +1,16 @@
 import { ReactNode, useEffect, useState } from "react";
 import { CaseDetail, getCase } from "../../api";
 import { describeError } from "../../messages";
+import { CaseAssignments } from "./CaseAssignments";
+import { CaseClosure } from "./CaseClosure";
+import { CaseDeadlines } from "./CaseDeadlines";
+import { CaseEvidence } from "./CaseEvidence";
+import { CaseHistory } from "./CaseHistory";
 import { Timestamp } from "@/components/timestamp";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 interface Props {
   caseId: string;
@@ -15,6 +19,8 @@ interface Props {
 export function CaseDetailPage({ caseId }: Props) {
   const [detail, setDetail] = useState<CaseDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Every action on the case changes the history, so the history view reloads after each one.
+  const [historyRevision, setHistoryRevision] = useState(0);
 
   useEffect(() => {
     let stale = false;
@@ -31,6 +37,13 @@ export function CaseDetailPage({ caseId }: Props) {
       stale = true;
     };
   }, [caseId]);
+
+  function applyChange(updated: CaseDetail) {
+    setDetail(updated);
+    setHistoryRevision((value) => value + 1);
+  }
+
+  const closed = detail?.status === "closed";
 
   return (
     <>
@@ -68,52 +81,25 @@ export function CaseDetailPage({ caseId }: Props) {
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Deadline tasks</CardTitle>
-              <CardDescription>Due times are shown in the system timezone.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {detail.deadlines.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No deadline tasks.</p>
-              ) : (
-                <div className="overflow-auto rounded-md border [&_[data-slot=table-container]]:overflow-visible">
-                  <Table>
-                    <TableHeader className="bg-muted">
-                      <TableRow>
-                        <TableHead>Task</TableHead>
-                        <TableHead>Due</TableHead>
-                        <TableHead>Status</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {detail.deadlines.map((task) => (
-                        <TableRow key={`${task.kind}-${task.due_at}`}>
-                          <TableCell>{kindLabel(task.kind)}</TableCell>
-                          <TableCell>
-                            <Timestamp value={task.due_at} />
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="secondary">{task.status}</Badge>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          <CaseClosure
+            caseId={detail.id}
+            status={detail.status}
+            closedAt={detail.closed_at}
+            closeReason={detail.close_reason}
+            onChanged={applyChange}
+          />
+
+          <CaseDeadlines caseId={detail.id} deadlines={detail.deadlines} closed={closed} onChanged={applyChange} />
+
+          <CaseAssignments caseId={detail.id} closed={closed} />
+
+          <CaseEvidence caseId={detail.id} />
+
+          <CaseHistory caseId={detail.id} refreshKey={historyRevision} />
         </>
       )}
     </>
   );
-}
-
-// "preliminary_safe_report" -> "Preliminary safe report"
-function kindLabel(kind: string): string {
-  const words = kind.replace(/_/g, " ");
-  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 interface DetailProps {

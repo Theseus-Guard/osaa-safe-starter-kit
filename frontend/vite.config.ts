@@ -10,6 +10,7 @@ export default defineConfig({
   },
   server: {
     // In development the gateway from docker compose serves /api, same as in production.
-    proxy: { "/api": "http://127.0.0.1:8080" },
+    // The gateway serves HTTPS with a self-signed development CA, so the certificate is not verified here.
+    proxy: { "/api": { target: "https://127.0.0.1:8443", secure: false } },
   },
 });

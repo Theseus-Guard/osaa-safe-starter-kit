@@ -104,6 +104,8 @@ interface RequestOptions {
   auth?: boolean;
   // "blob" returns the raw body for file downloads. It goes through the same auth and refresh path.
   responseType?: "json" | "blob";
+  // Multipart body for file uploads. The browser sets the Content-Type with the boundary.
+  form?: FormData;
 }
 
 let session: Session | null = null;
@@ -131,10 +133,13 @@ async function send(path: string, options: RequestOptions): Promise<Response> {
   const headers = new Headers();
   if (options.json !== undefined) headers.set("Content-Type", "application/json");
   if (options.auth !== false && session) headers.set("Authorization", `Bearer ${session.access}`);
+  let body: BodyInit | undefined;
+  if (options.form !== undefined) body = options.form;
+  else if (options.json !== undefined) body = JSON.stringify(options.json);
   return fetch(`/api/v1${path}`, {
     method: options.method ?? "GET",
     headers,
-    body: options.json === undefined ? undefined : JSON.stringify(options.json),
+    body,
   });
 }
 
@@ -294,10 +299,15 @@ export function updateRolePermissions(role: Role, permissions: string[]): Promis
 
 // Cases. The caller sees only the cases they created. Times are UTC ISO strings.
 export interface DeadlineTask {
+  // Null only for a task that is not stored yet. Such a task cannot be updated.
+  id: string | null;
   kind: string;
   due_at: string;
   status: string;
+  not_applicable_reason: string | null;
 }
+
+export type DeadlineStatus = "open" | "done" | "not_applicable";
 
 export interface CaseSummary {
   id: string;
@@ -316,6 +326,8 @@ export interface CaseDetail {
   status: string;
   calendar_version: string;
   created_at: string;
+  closed_at: string | null;
+  close_reason: string | null;
   deadlines: DeadlineTask[];
 }
 
@@ -342,6 +354,111 @@ export function getCase(caseId: string): Promise<CaseDetail> {
 
 export function createCase(body: CaseCreateBody): Promise<CaseDetail> {
   return request<CaseDetail>("/cases", { method: "POST", json: body });
+}
+
+// The reason is stored on the case and shown after closure.
+export function closeCase(caseId: string, reason: string): Promise<CaseDetail> {
+  return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}/close`, { method: "POST", json: { reason } });
+}
+
+// The reason is required for not_applicable and rejected for every other status.
+export function updateDeadline(
+  caseId: string,
+  taskId: string,
+  status: DeadlineStatus,
+  reason?: string,
+): Promise<CaseDetail> {
+  return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}/deadlines/${encodeURIComponent(taskId)}`, {
+    method: "PATCH",
+    json: { status, reason },
+  });
+}
+
+export interface Assignment {
+  id: string;
+  case_id: string;
+  user_id: string;
+  username: string;
+  role: Role;
+  assigned_by: string;
+  assigned_at: string;
+}
+
+export function listAssignments(caseId: string): Promise<Assignment[]> {
+  return request<Assignment[]>(`/cases/${encodeURIComponent(caseId)}/assignments`);
+}
+
+export function removeAssignment(caseId: string, userId: string): Promise<void> {
+  return request(`/cases/${encodeURIComponent(caseId)}/assignments/${encodeURIComponent(userId)}`, {
+    method: "DELETE",
+  });
+}
+
+// One audit entry. Actor and details are null for a caller without full case access.
+export interface HistoryEntry {
+  id: string;
+  action: string;
+  created_at: string;
+  actor_id: string | null;
+  details: Record<string, unknown> | null;
+}
+
+export interface HistoryPage {
+  items: HistoryEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export function getCaseHistory(caseId: string, limit: number, offset: number): Promise<HistoryPage> {
+  return request<HistoryPage>(`/cases/${encodeURIComponent(caseId)}/history?limit=${limit}&offset=${offset}`);
+}
+
+// Evidence. The list and download need the case to be visible to the caller. Upload needs evidence:write.
+export interface EvidenceItem {
+  id: string;
+  case_id: string;
+  uploaded_by: string;
+  original_filename: string;
+  media_type: string;
+  size_bytes: number;
+  sha256_plaintext: string | null;
+  status: string;
+  created_at: string;
+}
+
+export interface EvidencePage {
+  items: EvidenceItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface CustodyEvent {
+  id: string;
+  action: string;
+  actor_id: string | null;
+  details: Record<string, unknown>;
+  created_at: string;
+}
+
+export function listEvidence(caseId: string, limit: number, offset: number): Promise<EvidencePage> {
+  return request<EvidencePage>(`/cases/${encodeURIComponent(caseId)}/evidence?limit=${limit}&offset=${offset}`);
+}
+
+export function uploadEvidence(caseId: string, file: File): Promise<EvidenceItem> {
+  const form = new FormData();
+  form.append("file", file);
+  return request<EvidenceItem>(`/cases/${encodeURIComponent(caseId)}/evidence`, { method: "POST", form });
+}
+
+// Each successful download is recorded in the custody log before the bytes are returned.
+export function downloadEvidence(evidenceId: string): Promise<Blob> {
+  return request<Blob>(`/evidence/${encodeURIComponent(evidenceId)}/download`, { responseType: "blob" });
+}
+
+export function listCustodyEvents(evidenceId: string): Promise<CustodyEvent[]> {
+  return request<CustodyEvent[]>(`/evidence/${encodeURIComponent(evidenceId)}/custody`);
 }
 
 // System timezone. Storage is always UTC; this only changes how times are displayed.
@@ -399,10 +516,15 @@ export function getPrivacyInventory(): Promise<PrivacyInventory> {
 // Downloads the inventory as a file. The bytes come through request(), so bearer auth and refresh apply.
 export async function downloadPrivacyExport(format: PrivacyExportFormat): Promise<void> {
   const blob = await request<Blob>(`/privacy/inventory/export?format=${format}`, { responseType: "blob" });
+  saveBlob(blob, `privacy-inventory.${format}`);
+}
+
+// Hands a downloaded body to the browser as a file save.
+export function saveBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `privacy-inventory.${format}`;
+  link.download = filename;
   document.body.appendChild(link);
   link.click();
   link.remove();

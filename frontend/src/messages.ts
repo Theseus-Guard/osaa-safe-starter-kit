@@ -30,11 +30,36 @@ const MESSAGES: Record<string, string> = {
   "username is reserved": "That username is reserved. Choose another.",
   "username must be 3-64 characters: lowercase letters, digits, '.', '_' or '-'":
     "Usernames must be 3-64 characters: lowercase letters, digits, '.', '_' or '-'.",
+  "case is closed": "This case is closed.",
+  "deadline task not found": "That deadline task does not exist on this case.",
+  "only a triager may mark a deadline not applicable": "Only a triager can mark a deadline not applicable.",
+  "assignment not found": "That person is not assigned to this case.",
+  "evidence storage is not configured": "Evidence storage is not configured on this installation.",
+  "evidence not found": "No evidence with that ID is available to your account.",
+  "evidence is not available": "This evidence is not available for download yet.",
+  "evidence failed its integrity check": "The evidence failed its integrity check. Nothing was returned. The failure is in the custody log.",
+  "evidence could not be stored": "The evidence could not be stored. Try the upload again.",
+  "the upload expired before it finished; retry": "The upload timed out before it finished. Try again.",
+  "media type is not allowed": "This file type is not allowed. Allowed types are PDF, PNG, JPEG, plain text and JSON.",
+  "file is empty": "The file is empty.",
+  "malformed multipart body": "The upload could not be read. Try again.",
+  "multipart field 'file' is required": "Choose a file to upload.",
   http_422: "Check the values you entered.",
 };
 
+// Codes that carry a variable part after a fixed prefix.
+const PREFIXED_MESSAGES: [prefix: string, render: (rest: string) => string][] = [
+  ["case cannot be closed: ", (blockers) => `The case cannot be closed yet: ${blockers}.`],
+  ["file exceeds the limit of ", (limit) => `The file is larger than the limit of ${limit}.`],
+  ["request exceeds the limit of ", (limit) => `The upload is larger than the limit of ${limit}.`],
+];
+
 export function describeCode(code: string): string {
-  return Object.hasOwn(MESSAGES, code) ? MESSAGES[code] : `Request failed (${code}).`;
+  if (Object.hasOwn(MESSAGES, code)) return MESSAGES[code];
+  for (const [prefix, render] of PREFIXED_MESSAGES) {
+    if (code.startsWith(prefix)) return render(code.slice(prefix.length));
+  }
+  return `Request failed (${code}).`;
 }
 
 export function describeError(error: unknown): string {

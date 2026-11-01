@@ -332,3 +332,90 @@ describe("endpoints", () => {
     });
   });
 });
+
+describe("case and evidence endpoints", () => {
+  function bodyOf(call: number): unknown {
+    return JSON.parse((fetchMock.mock.calls[call][1] as RequestInit).body as string);
+  }
+
+  function methodOf(call: number): string {
+    return (fetchMock.mock.calls[call][1] as RequestInit | undefined)?.method ?? "GET";
+  }
+
+  it("closes a case with the reason", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+
+    await api.closeCase("case/1", "Handled");
+
+    expect(urlOf(0)).toBe("/api/v1/cases/case%2F1/close");
+    expect(methodOf(0)).toBe("POST");
+    expect(bodyOf(0)).toEqual({ reason: "Handled" });
+  });
+
+  it("sends the reason only for a not-applicable deadline", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {})).mockResolvedValueOnce(jsonResponse(200, {}));
+
+    await api.updateDeadline("case-1", "task-1", "done");
+    await api.updateDeadline("case-1", "task-1", "not_applicable", "Does not apply");
+
+    expect(urlOf(0)).toBe("/api/v1/cases/case-1/deadlines/task-1");
+    expect(methodOf(0)).toBe("PATCH");
+    expect(bodyOf(0)).toEqual({ status: "done" });
+    expect(bodyOf(1)).toEqual({ status: "not_applicable", reason: "Does not apply" });
+  });
+
+  it("lists and removes assignments", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, [])).mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    await api.listAssignments("case-1");
+    await api.removeAssignment("case-1", "user-2");
+
+    expect(urlOf(0)).toBe("/api/v1/cases/case-1/assignments");
+    expect(urlOf(1)).toBe("/api/v1/cases/case-1/assignments/user-2");
+    expect(methodOf(1)).toBe("DELETE");
+  });
+
+  it("requests one page of history", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { items: [], total: 0, limit: 20, offset: 40 }));
+
+    await api.getCaseHistory("case-1", 20, 40);
+
+    expect(urlOf(0)).toBe("/api/v1/cases/case-1/history?limit=20&offset=40");
+  });
+
+  it("requests one page of evidence and the custody log of one item", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { items: [], total: 0, limit: 20, offset: 0 })).mockResolvedValueOnce(
+      jsonResponse(200, []),
+    );
+
+    await api.listEvidence("case-1", 20, 0);
+    await api.listCustodyEvents("evidence-1");
+
+    expect(urlOf(0)).toBe("/api/v1/cases/case-1/evidence?limit=20&offset=0");
+    expect(urlOf(1)).toBe("/api/v1/evidence/evidence-1/custody");
+  });
+
+  it("uploads the file as multipart without a JSON content type", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(201, {}));
+    const file = new File(["example text"], "notes.txt", { type: "text/plain" });
+
+    await api.uploadEvidence("case-1", file);
+
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(urlOf(0)).toBe("/api/v1/cases/case-1/evidence");
+    expect(methodOf(0)).toBe("POST");
+    expect(init.body).toBeInstanceOf(FormData);
+    expect((init.body as FormData).get("file")).toBeInstanceOf(File);
+    expect(new Headers(init.headers).get("Content-Type")).toBeNull();
+  });
+
+  it("returns the evidence bytes as a blob", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("example bytes", { status: 200 }));
+
+    const blob = await api.downloadEvidence("evidence-1");
+
+    expect(urlOf(0)).toBe("/api/v1/evidence/evidence-1/download");
+    expect(blob).toBeInstanceOf(Blob);
+    expect(await blob.text()).toBe("example bytes");
+  });
+});
