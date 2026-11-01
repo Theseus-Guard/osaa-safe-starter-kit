@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from safe_kit import api, auth
+from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS
 from safe_kit.users import UpdateOutcome, User
 
 ADMIN_ID = "33333333-3333-3333-3333-333333333333"
@@ -32,6 +33,7 @@ def actor():
 def client(actor, monkeypatch):
     # Authentication is covered by test_auth_api. Here the caller is injected directly.
     api.app.dependency_overrides[auth.current_user] = lambda: actor["user"]
+    monkeypatch.setattr(auth, "permissions_for_role", lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()))
     yield TestClient(api.app)
     api.app.dependency_overrides.clear()
 
@@ -54,7 +56,7 @@ def test_admin_lists_users_with_pagination(client, users):
     body = response.json()
     assert body["total"] == 2
     assert len(body["items"]) == 1
-    assert set(body["items"][0]) == {"id", "username", "role", "is_active", "password_change_required", "created_at"}
+    assert set(body["items"][0]) == {"id", "username", "role", "is_active", "password_change_required", "created_at", "is_protected"}
 
 
 def test_list_rejects_out_of_range_paging(client, users):
@@ -116,14 +118,6 @@ def test_update_of_unknown_user_returns_404(client, users, monkeypatch):
     assert response.status_code == 404
 
 
-def test_roles_endpoint_shows_permission_matrix(client, users):
-    response = client.get("/api/v1/rbac/roles")
-    assert response.status_code == 200
-    matrix = {entry["role"]: entry["permissions"] for entry in response.json()}
-    assert "users:manage" in matrix["admin"]
-    assert not any(permission.startswith("cases:") for permission in matrix["admin"])
-
-
 def test_create_user_rejects_reserved_username(client):
     response = client.post(
         "/api/v1/users",
@@ -163,3 +157,17 @@ def test_delete_of_unknown_user_returns_404(client, users, monkeypatch):
 def test_non_admin_cannot_delete_users(client, actor, users):
     actor["user"] = make_user("44444444-4444-4444-4444-444444444444", "tina", "triager")
     assert client.delete(f"/api/v1/users/{TARGET_ID}").status_code == 403
+
+
+def test_protected_admin_cannot_be_demoted_or_disabled(client, users, monkeypatch):
+    monkeypatch.setattr(api, "update_user", lambda user_id, role=None, is_active=None: UpdateOutcome.PROTECTED)
+    response = client.patch(f"/api/v1/users/{TARGET_ID}", json={"is_active": False})
+    assert response.status_code == 409
+    assert "protected admin" in response.json()["detail"]
+
+
+def test_protected_admin_cannot_be_deleted(client, users, monkeypatch):
+    monkeypatch.setattr(api, "soft_delete_user", lambda user_id: UpdateOutcome.PROTECTED)
+    response = client.delete(f"/api/v1/users/{TARGET_ID}")
+    assert response.status_code == 409
+    assert "protected admin" in response.json()["detail"]

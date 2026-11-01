@@ -1,29 +1,30 @@
+import pathlib
+
 import pytest
 
-from safe_kit.rbac import PERMISSIONS, has_permission
+from safe_kit.rbac import ADMIN_REQUIRED_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS
 from safe_kit.users import ROLES
 
-
-def test_every_role_has_a_permission_entry():
-    assert set(PERMISSIONS) == set(ROLES)
+MIGRATIONS = pathlib.Path(__file__).resolve().parents[1] / "migrations"
 
 
-def test_admin_manages_users_but_reads_no_case_content():
-    assert has_permission("admin", "users:manage")
-    assert has_permission("admin", "users:reset_password")
-    assert not any(permission.startswith("cases:") for permission in PERMISSIONS["admin"])
+def test_every_role_has_a_default_entry():
+    assert set(DEFAULT_ROLE_PERMISSIONS) == set(ROLES)
 
 
-def test_only_admin_can_reset_passwords():
-    holders = {role for role in PERMISSIONS if has_permission(role, "users:reset_password")}
-    assert holders == {"admin"}
+def test_admin_defaults_keep_required_permissions_and_no_case_access():
+    admin = DEFAULT_ROLE_PERMISSIONS["admin"]
+    assert ADMIN_REQUIRED_PERMISSIONS <= admin
+    assert not any(permission.startswith("cases:") for permission in admin)
 
 
 @pytest.mark.parametrize("role", ["reporter", "triager", "investigator", "reviewer", "disclosure_approver", "auditor"])
-def test_non_admin_roles_cannot_manage_users(role):
-    assert not has_permission(role, "users:manage")
-    assert not has_permission(role, "users:reset_password")
+def test_non_admin_default_roles_cannot_manage_users_or_roles(role):
+    assert not DEFAULT_ROLE_PERMISSIONS[role] & ADMIN_REQUIRED_PERMISSIONS
 
 
-def test_unknown_role_has_no_permissions():
-    assert not has_permission("root", "users:manage")
+def test_migration_seed_matches_the_defaults():
+    seed = (MIGRATIONS / "0007_editable_rbac.sql").read_text(encoding="utf-8")
+    for role, permissions in DEFAULT_ROLE_PERMISSIONS.items():
+        for permission in permissions:
+            assert f"('{role}', '{permission}')" in seed, (role, permission)

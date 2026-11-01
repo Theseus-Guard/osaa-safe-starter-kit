@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from safe_kit import api, auth
+from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS
 from safe_kit.security import hash_password
 from safe_kit.sessions import InvalidRefreshToken
 from safe_kit.users import User
@@ -129,6 +130,7 @@ def store(tmp_path, monkeypatch):
     fake.add_user(CAROL, "carol", "admin")
 
     monkeypatch.setattr(api, "admin_exists", lambda: True)
+    monkeypatch.setattr(auth, "permissions_for_role", lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()))
     monkeypatch.setattr(auth, "find_user_by_id", fake.find_user_by_id)
     monkeypatch.setattr(auth, "is_access_token_revoked", fake.is_access_token_revoked)
     monkeypatch.setattr(api, "find_user", fake.find_user)

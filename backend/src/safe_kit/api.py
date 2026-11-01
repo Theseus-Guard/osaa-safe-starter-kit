@@ -21,7 +21,7 @@ from safe_kit.rate_limit import (
 )
 from safe_kit.rate_limit import clear as clear_rate_limit
 from safe_kit.rate_limit import hit as hit_rate_limit
-from safe_kit.rbac import PERMISSIONS
+from safe_kit.rbac import RoleOutcome, list_catalog, list_role_permissions, set_role_permissions
 from safe_kit.security import (
     MIN_PASSWORD_LENGTH,
     access_token_ttl,
@@ -132,6 +132,7 @@ class UserSummary(BaseModel):
     is_active: bool
     password_change_required: bool
     created_at: datetime
+    is_protected: bool
 
 
 class UserPage(BaseModel):
@@ -144,6 +145,15 @@ class UserPage(BaseModel):
 class RoleSummary(BaseModel):
     role: str
     permissions: list[str]
+
+
+class PermissionSummary(BaseModel):
+    name: str
+    description: str
+
+
+class RolePermissionsRequest(BaseModel):
+    permissions: list[str] = Field(max_length=100)
 
 
 def _client_ip(request: Request) -> str:
@@ -164,6 +174,9 @@ def _issue_tokens(user: User, refresh_token: str) -> TokenResponse:
     )
 
 
+PROTECTED_DETAIL = "the protected admin account cannot be disabled, deleted, or demoted"
+
+
 def _summary(user: User) -> UserSummary:
     return UserSummary(
         id=user.id,
@@ -172,6 +185,7 @@ def _summary(user: User) -> UserSummary:
         is_active=user.is_active,
         password_change_required=user.must_change_password,
         created_at=user.created_at,
+        is_protected=user.is_protected,
     )
 
 
@@ -315,6 +329,8 @@ def admin_update_user(
     outcome = update_user(str(user_id), role=body.role, is_active=body.is_active)
     if outcome is UpdateOutcome.NOT_FOUND:
         raise HTTPException(status_code=404, detail="user not found")
+    if outcome is UpdateOutcome.PROTECTED:
+        raise HTTPException(status_code=409, detail=PROTECTED_DETAIL)
     if outcome is UpdateOutcome.LAST_ADMIN:
         raise HTTPException(status_code=409, detail="the last active admin cannot be removed")
     updated = find_user_by_id(str(user_id))
@@ -334,6 +350,8 @@ def admin_delete_user(
     outcome = soft_delete_user(str(user_id))
     if outcome is UpdateOutcome.NOT_FOUND:
         raise HTTPException(status_code=404, detail="user not found")
+    if outcome is UpdateOutcome.PROTECTED:
+        raise HTTPException(status_code=409, detail=PROTECTED_DETAIL)
     if outcome is UpdateOutcome.LAST_ADMIN:
         raise HTTPException(status_code=409, detail="the last active admin cannot be removed")
     return Response(status_code=204)
@@ -354,8 +372,31 @@ def admin_reset_password(
 
 @app.get("/api/v1/rbac/roles", response_model=list[RoleSummary])
 def admin_list_roles(actor: User = Depends(require_permission("users:manage"))) -> list[RoleSummary]:
-    # Read-only: permissions are defined in code (rbac.py) and changed through review, not at runtime.
     return [
-        RoleSummary(role=role, permissions=sorted(permissions))
-        for role, permissions in sorted(PERMISSIONS.items())
+        RoleSummary(role=role, permissions=permissions)
+        for role, permissions in list_role_permissions().items()
     ]
+
+
+@app.get("/api/v1/rbac/permissions", response_model=list[PermissionSummary])
+def admin_list_permissions(actor: User = Depends(require_permission("users:manage"))) -> list[PermissionSummary]:
+    return [PermissionSummary(name=name, description=description) for name, description in list_catalog()]
+
+
+@app.put("/api/v1/rbac/roles/{role}/permissions", response_model=RoleSummary)
+def admin_set_role_permissions(
+    role: str,
+    body: RolePermissionsRequest,
+    actor: User = Depends(require_permission("roles:manage")),
+) -> RoleSummary:
+    if role not in ROLES:
+        raise HTTPException(status_code=404, detail="role not found")
+    outcome = set_role_permissions(role, frozenset(body.permissions))
+    if outcome is RoleOutcome.UNKNOWN_PERMISSION:
+        raise HTTPException(status_code=422, detail="unknown permission")
+    if outcome is RoleOutcome.ADMIN_GUARD:
+        raise HTTPException(
+            status_code=409,
+            detail="the admin role must keep users:manage, users:reset_password and roles:manage",
+        )
+    return RoleSummary(role=role, permissions=list_role_permissions()[role])

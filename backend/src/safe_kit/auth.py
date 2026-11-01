@@ -7,7 +7,7 @@ import jwt
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from safe_kit.rbac import has_permission
+from safe_kit.rbac import permissions_for_role
 from safe_kit.security import decode_access_token
 from safe_kit.sessions import is_access_token_revoked
 from safe_kit.users import User, find_user_by_id
@@ -60,7 +60,7 @@ def current_user_pending_change(credentials: HTTPAuthorizationCredentials | None
 
 def require_permission(permission: str) -> Callable[[User], User]:
     def dependency(user: User = Depends(current_user)) -> User:
-        if not has_permission(user.role, permission):
+        if permission not in permissions_for_role(user.role):
             raise HTTPException(status_code=403, detail="forbidden")
         return user
 

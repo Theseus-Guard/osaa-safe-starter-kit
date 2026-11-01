@@ -47,10 +47,13 @@ class User:
     sessions_valid_after: datetime
     must_change_password: bool
     created_at: datetime
+    # The first admin created by the bootstrap. It can never be disabled, deleted, or demoted.
+    is_protected: bool = False
 
 
 _COLUMNS = (
-    "id::text, username, role, is_active, password_hash, sessions_valid_after, must_change_password, created_at"
+    "id::text, username, role, is_active, password_hash, sessions_valid_after, must_change_password, created_at, "
+    "is_protected"
 )
 
 
@@ -64,6 +67,7 @@ def _to_user(row: tuple) -> User:
         sessions_valid_after=row[5],
         must_change_password=row[6],
         created_at=row[7],
+        is_protected=row[8],
     )
 
 
@@ -104,7 +108,8 @@ def bootstrap_admin(username: str, password: str) -> str:
         if conn.execute("SELECT EXISTS (SELECT 1 FROM users WHERE role = 'admin' AND NOT is_deleted)").fetchone()[0]:
             raise AdminAlreadyExists
         row = conn.execute(
-            "INSERT INTO users (username, password_hash, role) VALUES (%s, %s, 'admin') RETURNING id::text",
+            "INSERT INTO users (username, password_hash, role, is_protected) "
+            "VALUES (%s, %s, 'admin', true) RETURNING id::text",
             (username, hash_password(password)),
         ).fetchone()
     return row[0]
@@ -151,6 +156,7 @@ class UpdateOutcome(Enum):
     OK = "ok"
     NOT_FOUND = "not_found"
     LAST_ADMIN = "last_admin"
+    PROTECTED = "protected"
 
 
 def update_user(user_id: str, role: str | None = None, is_active: bool | None = None) -> UpdateOutcome:
@@ -158,14 +164,16 @@ def update_user(user_id: str, role: str | None = None, is_active: bool | None = 
     with connect() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (ADMIN_SET_LOCK_KEY,))
         current = conn.execute(
-            "SELECT role, is_active FROM users WHERE id = %s AND NOT is_deleted",
+            "SELECT role, is_active, is_protected FROM users WHERE id = %s AND NOT is_deleted",
             (user_id,),
         ).fetchone()
         if current is None:
             return UpdateOutcome.NOT_FOUND
-        current_role, current_active = current
+        current_role, current_active, protected = current
         new_role = role if role is not None else current_role
         new_active = is_active if is_active is not None else current_active
+        if protected and (new_role != "admin" or not new_active):
+            return UpdateOutcome.PROTECTED
 
         was_active_admin = current_role == "admin" and current_active
         stays_active_admin = new_role == "admin" and new_active
@@ -188,12 +196,14 @@ def soft_delete_user(user_id: str) -> UpdateOutcome:
     with connect() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (ADMIN_SET_LOCK_KEY,))
         current = conn.execute(
-            "SELECT role, is_active FROM users WHERE id = %s AND NOT is_deleted",
+            "SELECT role, is_active, is_protected FROM users WHERE id = %s AND NOT is_deleted",
             (user_id,),
         ).fetchone()
         if current is None:
             return UpdateOutcome.NOT_FOUND
-        current_role, current_active = current
+        current_role, current_active, protected = current
+        if protected:
+            return UpdateOutcome.PROTECTED
         if current_role == "admin" and current_active:
             others = conn.execute(
                 "SELECT count(*) FROM users WHERE role = 'admin' AND is_active AND NOT is_deleted AND id <> %s",
