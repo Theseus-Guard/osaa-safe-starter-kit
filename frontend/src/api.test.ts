@@ -481,6 +481,19 @@ describe("case and evidence endpoints", () => {
     expect(methodOf(1)).toBe("DELETE");
   });
 
+  it("adds an assignment and lists the users it may be given to", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, [])).mockResolvedValueOnce(jsonResponse(201, {}));
+
+    await api.listAssignableUsers("case-1");
+    await api.addAssignment("case-1", "user-2");
+
+    expect(urlOf(0)).toBe("/api/v1/cases/case-1/assignable-users");
+    expect(methodOf(0)).toBe("GET");
+    expect(urlOf(1)).toBe("/api/v1/cases/case-1/assignments");
+    expect(methodOf(1)).toBe("POST");
+    expect(bodyOf(1)).toEqual({ user_id: "user-2" });
+  });
+
   it("reads the reporter contact of a case", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { case_id: "case/1", contact: "example@example.com" }));
 

@@ -452,6 +452,26 @@ export function listAssignments(caseId: string): Promise<Assignment[]> {
   return request<Assignment[]>(`/cases/${encodeURIComponent(caseId)}/assignments`);
 }
 
+export function addAssignment(caseId: string, userId: string): Promise<Assignment> {
+  return request<Assignment>(`/cases/${encodeURIComponent(caseId)}/assignments`, {
+    method: "POST",
+    json: { user_id: userId },
+  });
+}
+
+// Needs cases:assign. The users the caller may pick for an assignment on this case: active users in an assignable role.
+export interface AssignableUser {
+  id: string;
+  username: string;
+  first_name: string | null;
+  last_name: string | null;
+  role: Role;
+}
+
+export function listAssignableUsers(caseId: string): Promise<AssignableUser[]> {
+  return request<AssignableUser[]>(`/cases/${encodeURIComponent(caseId)}/assignable-users`);
+}
+
 export function removeAssignment(caseId: string, userId: string): Promise<void> {
   return request(`/cases/${encodeURIComponent(caseId)}/assignments/${encodeURIComponent(userId)}`, {
     method: "DELETE",
