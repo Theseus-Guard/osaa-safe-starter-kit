@@ -18,6 +18,22 @@ describe("permissions", () => {
     expect(hasPermission(["cases:close"], "cases:close_all")).toBe(false);
   });
 
+  it("maps the case record permissions: read with any case-read permission, write with triage, full view with read_all", () => {
+    const reporter = caseAbilities(["cases:read_own"]);
+    expect(reporter.canReadRecords).toBe(true);
+    expect(reporter.canWriteRecords).toBe(false);
+    expect(reporter.canReadFullView).toBe(false);
+
+    const triager = caseAbilities(["cases:read_all", "cases:triage"]);
+    expect(triager.canReadRecords).toBe(true);
+    expect(triager.canWriteRecords).toBe(true);
+    expect(triager.canReadFullView).toBe(true);
+
+    const reviewer = caseAbilities(["cases:read_assigned", "reviews:write"]);
+    expect(reviewer.canReadRecords).toBe(true);
+    expect(reviewer.canWriteRecords).toBe(false);
+  });
+
   it("grants no case ability without permissions", () => {
     expect(Object.values(caseAbilities([])).every((allowed) => allowed === false)).toBe(true);
   });
@@ -32,6 +48,9 @@ describe("permissions", () => {
       canReadEvidence: false,
       canWriteEvidence: false,
       canReview: false,
+      canReadRecords: true,
+      canWriteRecords: true,
+      canReadFullView: true,
     });
   });
 

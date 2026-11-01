@@ -18,6 +18,12 @@ export interface CaseAbilities {
   canWriteEvidence: boolean;
   // reviews:write. Record a review. The backend also requires an assignment to the case.
   canReview: boolean;
+  // Any case-read permission. Shows the case record sections: awareness events, impacts, legal duties and classification.
+  canReadRecords: boolean;
+  // cases:triage. Write the case record: awareness events, impacts, legal duties and the classification.
+  canWriteRecords: boolean;
+  // cases:read_all. The full view: free text of the case record, and the preliminary report.
+  canReadFullView: boolean;
 }
 
 export function hasPermission(permissions: readonly string[], name: string): boolean {
@@ -42,5 +48,8 @@ export function caseAbilities(permissions: readonly string[]): CaseAbilities {
     canReadEvidence: hasPermission(permissions, "evidence:read"),
     canWriteEvidence: hasPermission(permissions, "evidence:write"),
     canReview: hasPermission(permissions, "reviews:write"),
+    canReadRecords: canReadCases(permissions),
+    canWriteRecords: hasPermission(permissions, "cases:triage"),
+    canReadFullView: hasPermission(permissions, "cases:read_all"),
   };
 }

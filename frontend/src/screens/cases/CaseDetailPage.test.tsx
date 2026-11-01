@@ -3,12 +3,19 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CaseDetail,
+  Classification,
+  PreliminaryReport,
   closeCase,
   createReview,
   getCase,
   getCaseHistory,
+  getClassification,
+  getPreliminaryReport,
   listAssignments,
+  listAwarenessEvents,
   listEvidence,
+  listImpacts,
+  listLegalDuties,
   listReviews,
 } from "../../api";
 import { CaseDetailPage } from "./CaseDetailPage";
@@ -24,6 +31,11 @@ vi.mock("../../api", async (importOriginal) => {
     listEvidence: vi.fn(),
     listReviews: vi.fn(),
     getCaseHistory: vi.fn(),
+    listAwarenessEvents: vi.fn(),
+    listImpacts: vi.fn(),
+    listLegalDuties: vi.fn(),
+    getClassification: vi.fn(),
+    getPreliminaryReport: vi.fn(),
   };
 });
 
@@ -40,6 +52,58 @@ const assignments = vi.mocked(listAssignments);
 const evidence = vi.mocked(listEvidence);
 const reviews = vi.mocked(listReviews);
 const history = vi.mocked(getCaseHistory);
+const awarenessEvents = vi.mocked(listAwarenessEvents);
+const impacts = vi.mocked(listImpacts);
+const legalDuties = vi.mocked(listLegalDuties);
+const classification = vi.mocked(getClassification);
+const report = vi.mocked(getPreliminaryReport);
+
+const NO_CLASSIFICATION: Classification = {
+  case_id: "case-1",
+  version: 0,
+  triggers: [],
+  event_kind: null,
+  internal_incident_option: false,
+  classification_rationale: null,
+  responsible_operator: null,
+  affected_versions: null,
+  approved_scope: null,
+  scope_permission_source: null,
+  containment: null,
+  evidence_gap_plan: null,
+  next_update_due_at: null,
+  created_by: null,
+  created_at: null,
+};
+
+const EMPTY_REPORT: PreliminaryReport = {
+  case_id: "case-1",
+  reference: "CASE-1",
+  case_status: "open",
+  generated_at: "2026-11-01T06:00:00Z",
+  awareness_time: "2026-11-01T05:00:00Z",
+  complete: false,
+  missing_fields: [{ field: "contact", state: "missing" }],
+  contact: { status: "missing" },
+  classification: {
+    version: 0,
+    triggers: [],
+    event_kind: null,
+    internal_incident_option: false,
+    classification_rationale: null,
+    responsible_operator: null,
+    affected_versions: null,
+    approved_scope: null,
+    scope_permission_source: null,
+    containment: null,
+    evidence_gap_plan: null,
+    next_update_due_at: null,
+  },
+  awareness_events: [],
+  impacts: [],
+  legal_duties: [],
+  safe_deadlines: [],
+};
 
 // A triager with full case access and evidence access.
 const FULL_ACCESS = [
@@ -84,6 +148,11 @@ beforeEach(() => {
   evidence.mockReset().mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
   reviews.mockReset().mockResolvedValue([]);
   history.mockReset().mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
+  awarenessEvents.mockReset().mockResolvedValue([]);
+  impacts.mockReset().mockResolvedValue([]);
+  legalDuties.mockReset().mockResolvedValue([]);
+  classification.mockReset().mockResolvedValue(NO_CLASSIFICATION);
+  report.mockReset().mockResolvedValue(EMPTY_REPORT);
 });
 
 describe("CaseDetailPage", () => {
@@ -211,5 +280,45 @@ describe("CaseDetailPage", () => {
 
     await waitFor(() => expect(history).toHaveBeenCalledTimes(2));
     expect(review).toHaveBeenCalledWith("case-1", { outcome: "pass", note: null });
+  });
+
+  it("shows the case record sections to a reporter who can read the case, without the report", async () => {
+    render(<CaseDetailPage caseId="case-1" permissions={REPORTER} />);
+
+    expect(await screen.findByText("Example incident")).toBeInTheDocument();
+    expect(awarenessEvents).toHaveBeenCalledWith("case-1");
+    expect(impacts).toHaveBeenCalledWith("case-1");
+    expect(legalDuties).toHaveBeenCalledWith("case-1");
+    expect(classification).toHaveBeenCalledWith("case-1");
+    expect(screen.queryByText("Preliminary report")).not.toBeInTheDocument();
+    expect(report).not.toHaveBeenCalled();
+  });
+
+  it("shows the preliminary report only to a caller with cases:read_all", async () => {
+    render(<CaseDetailPage caseId="case-1" permissions={FULL_ACCESS} />);
+
+    expect(await screen.findByText("Preliminary report")).toBeInTheDocument();
+    expect(report).toHaveBeenCalledWith("case-1");
+  });
+
+  it("offers no case record write control to a read-only caller", async () => {
+    render(<CaseDetailPage caseId="case-1" permissions={["cases:read_all"]} />);
+
+    expect(await screen.findByText("Example incident")).toBeInTheDocument();
+    expect(await screen.findByText("No awareness event has been recorded for this case yet.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add awareness event" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add legal duty" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit classification" })).not.toBeInTheDocument();
+  });
+
+  it("hides the case record write controls once the case is closed", async () => {
+    get.mockResolvedValue({ ...OPEN_CASE, status: "closed", closed_at: "2026-11-01T07:00:00Z", close_reason: "Done" });
+    render(<CaseDetailPage caseId="case-1" permissions={FULL_ACCESS} />);
+
+    expect(await screen.findByText("Closed")).toBeInTheDocument();
+    expect(await screen.findByText("No awareness event has been recorded for this case yet.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add awareness event" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add legal duty" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit classification" })).not.toBeInTheDocument();
   });
 });

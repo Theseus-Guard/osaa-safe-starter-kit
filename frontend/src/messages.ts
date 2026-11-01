@@ -36,6 +36,7 @@ const MESSAGES: Record<string, string> = {
   "case is not closed": "This case is not closed, so it cannot be reopened.",
   "only an assigned reviewer can record a review": "Only an assigned reviewer can record a review on this case.",
   "deadline task not found": "That deadline task does not exist on this case.",
+  "legal duty not found": "That legal duty does not exist on this case.",
   "only a triager may mark a deadline not applicable": "Only a triager can mark a deadline not applicable.",
   "assignment not found": "That person is not assigned to this case.",
   "evidence storage is not configured": "Evidence storage is not configured on this installation.",
@@ -56,6 +57,11 @@ const PREFIXED_MESSAGES: [prefix: string, render: (rest: string) => string][] = 
   ["case cannot be closed: ", (blockers) => `The case cannot be closed yet: ${blockers}.`],
   ["file exceeds the limit of ", (limit) => `The file is larger than the limit of ${limit}.`],
   ["request exceeds the limit of ", (limit) => `The upload is larger than the limit of ${limit}.`],
+  // The 409 detail names the current version, so it is matched by prefix.
+  [
+    "classification changed: ",
+    () => "The classification was changed by someone else. Reload it, check the current version and save again.",
+  ],
 ];
 
 export function describeCode(code: string): string {
