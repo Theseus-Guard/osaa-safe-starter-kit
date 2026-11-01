@@ -43,10 +43,10 @@ def test_the_users_role_check_accepts_reporting_owner():
 
 
 @requires_database
-def test_saving_the_fixed_grant_again_is_allowed_and_changes_nothing():
+def test_saving_the_fixed_set_again_is_refused_and_changes_nothing():
     migrate()
     before = list_role_permissions()["reporting_owner"]
-    assert set_role_permissions("reporting_owner", frozenset(before)) is RoleOutcome.OK
+    assert set_role_permissions("reporting_owner", frozenset(before)) is RoleOutcome.REPORTING_OWNER_FIXED
     assert list_role_permissions()["reporting_owner"] == before
 
 
@@ -54,8 +54,17 @@ def test_saving_the_fixed_grant_again_is_allowed_and_changes_nothing():
 def test_the_matrix_refuses_to_remove_the_grant_and_keeps_it():
     migrate()
     outcome = set_role_permissions("reporting_owner", frozenset({"cases:read_all"}))
-    assert outcome is RoleOutcome.REPORTER_CONTACT_NOT_GRANTABLE
+    assert outcome is RoleOutcome.REPORTING_OWNER_FIXED
     assert "reporter_contact:read" in list_role_permissions()["reporting_owner"]
+
+
+@requires_database
+def test_the_matrix_refuses_to_change_the_role_at_all():
+    migrate()
+    before = list_role_permissions()["reporting_owner"]
+    outcome = set_role_permissions("reporting_owner", frozenset({"cases:read_all", "cases:triage"}))
+    assert outcome is RoleOutcome.REPORTING_OWNER_FIXED
+    assert list_role_permissions()["reporting_owner"] == before
 
 
 @requires_database
@@ -68,7 +77,7 @@ def test_the_matrix_does_not_add_back_a_grant_removed_by_hand():
         )
     try:
         outcome = set_role_permissions("reporting_owner", frozenset({"cases:read_all", "reporter_contact:read"}))
-        assert outcome is RoleOutcome.REPORTER_CONTACT_NOT_GRANTABLE
+        assert outcome is RoleOutcome.REPORTING_OWNER_FIXED
         assert "reporter_contact:read" not in list_role_permissions()["reporting_owner"]
     finally:
         with connect() as conn:
