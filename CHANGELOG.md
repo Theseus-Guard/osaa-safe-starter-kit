@@ -49,7 +49,9 @@ Every release entry states the **SAFE compatibility baseline**: the SAFE version
 - Reporter contact can be read while the case is open, or within 72 hours after it was closed. Later reads are refused with `409` `reporter_contact_window_closed`, and the refused read is not audited.
 - Assignees are chosen by the `cases:assignable` permission, granted to investigator and reviewer by migration 0026. `GET /api/v1/cases/{case_id}/assignable-users` lists them for users with `cases:assign`.
 - Classification version conflicts answer `409` with `classification_version_conflict` and the current version, so clients do not parse text.
-- SAFE deadlines start from the earliest operator awareness event, or from the case awareness time when there is none.
+- SAFE deadlines start from the earlier of the case awareness time and any operator awareness event. A later operator event never delays them.
+- A `reporting_owner` role holds `reporter_contact:read` and `cases:read_all` (migration 0029). It is the only role that can hold the contact grant; the role matrix refuses changes to that grant. Admin can assign the role, and each assignment is audited. The role reads the content of every case, not only the contact, because the contact route needs `cases:read_all` to reach a case without an assignee.
+- CLI read commands for case records: `case classification show`, `case impact list`, `case legal-duty list`, `case awareness list`, and `case report show` (needs `cases:read_all`).
 - Classification has an explicit `none_applies` trigger (migration 0027). It cannot be combined with other triggers.
 - Choosing the internal incident option marks the external notice tasks as not applicable, with the rationale recorded. Due dates do not change, and turning the option off restores the previous statuses.
 - Linked cases: two cases can be linked as a record only (migration 0028). Links change no task, deadline or status. Links are added, listed and removed from the case detail page and the CLI.
