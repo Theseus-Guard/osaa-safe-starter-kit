@@ -14,10 +14,13 @@ from safe_kit.security import MIN_PASSWORD_LENGTH
 from safe_kit.users import (
     ROLES,
     AdminAlreadyExists,
+    EmailAlreadyInUse,
+    InvalidEmail,
     InvalidUsername,
     admin_exists,
     bootstrap_admin,
     find_user,
+    normalize_email,
     reset_password,
     validate_username,
 )
@@ -37,7 +40,22 @@ def _read_valid_password() -> str | None:
     return password
 
 
-def _bootstrap(username: str, role: str) -> int:
+def _read_email() -> str:
+    # A terminal is prompted. Otherwise the email is the second line of stdin, after the password.
+    if sys.stdin.isatty():
+        return input("Email: ")
+    return sys.stdin.readline().rstrip("\n")
+
+
+def _checked_email(value: str) -> str | None:
+    try:
+        return normalize_email(value)
+    except InvalidEmail as error:
+        print(str(error), file=sys.stderr)
+        return None
+
+
+def _bootstrap(username: str, role: str, email_option: str | None) -> int:
     if role != "admin":
         print("before the first admin exists, only --role admin can be created", file=sys.stderr)
         return 2
@@ -49,13 +67,26 @@ def _bootstrap(username: str, role: str) -> int:
     except InvalidUsername as error:
         print(str(error), file=sys.stderr)
         return 2
+    # An email given as an option is checked before anything is read or written.
+    email = None
+    if email_option is not None:
+        email = _checked_email(email_option)
+        if email is None:
+            return 2
     password = _read_valid_password()
     if password is None:
         return 2
+    if email is None:
+        email = _checked_email(_read_email())
+        if email is None:
+            return 2
     try:
-        user_id = bootstrap_admin(username, password)
+        user_id = bootstrap_admin(username, password, email)
     except AdminAlreadyExists:
         print("an admin already exists; create further users through the API", file=sys.stderr)
+        return 1
+    except EmailAlreadyInUse:
+        print("email already in use", file=sys.stderr)
         return 1
     except psycopg.errors.UniqueViolation:
         print(f"username already exists: {username}", file=sys.stderr)
@@ -73,6 +104,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     create.add_argument("--username", required=True)
     create.add_argument("--role", required=True, choices=sorted(ROLES))
+    create.add_argument(
+        "--email",
+        default=None,
+        help="Email of the first admin. Prompted (or read from the second line of stdin) when omitted.",
+    )
     reset = subcommands.add_parser(
         "reset-password",
         help="Reset a user's password and end all of their sessions. The password is read from stdin or prompted.",
@@ -81,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "create-user":
-        return _bootstrap(args.username, args.role)
+        return _bootstrap(args.username, args.role, args.email)
 
     password = _read_valid_password()
     if password is None:

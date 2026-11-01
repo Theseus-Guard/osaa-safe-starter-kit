@@ -1,3 +1,4 @@
+import uuid
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -76,8 +77,10 @@ def store(monkeypatch):
     state = {"cases": {}, "created": []}
 
     def fake_create(title, awareness_time, created_by):
+        # The first case gets CASE_ID, the others their own id, so several users can each have a case.
+        case_id = CASE_ID if not state["cases"] else str(uuid.uuid4())
         case = Case(
-            id=CASE_ID,
+            id=case_id,
             reference="SAFE-2026-000001",
             title=title,
             awareness_time=awareness_time,
@@ -89,23 +92,27 @@ def store(monkeypatch):
             deadlines=deadline_tasks_for(awareness_time, calendar_for("Europe/Istanbul")),
         )
         state["created"].append((title, awareness_time, created_by))
-        state["cases"][(CASE_ID, created_by)] = case
+        state["cases"][case_id] = case
         return case
 
-    def fake_find(case_id, owner_id):
-        return state["cases"].get((case_id, owner_id))
+    def visible(case, scope):
+        return scope.read_all or (scope.read_own and case.created_by == scope.user_id)
 
-    def fake_list(owner_id, limit, offset):
-        mine = [case for (cid, owner), case in state["cases"].items() if owner == owner_id]
+    def fake_find(case_id, scope):
+        case = state["cases"].get(case_id)
+        return case if case is not None and visible(case, scope) else None
+
+    def fake_list(scope, limit, offset):
+        mine = [case for case in state["cases"].values() if visible(case, scope)]
         return mine[offset : offset + limit]
 
-    def fake_count(owner_id):
-        return sum(1 for (_, owner) in state["cases"] if owner == owner_id)
+    def fake_count(scope):
+        return sum(1 for case in state["cases"].values() if visible(case, scope))
 
     monkeypatch.setattr(api, "create_case", fake_create)
-    monkeypatch.setattr(api, "find_own_case", fake_find)
-    monkeypatch.setattr(api, "list_own_cases", fake_list)
-    monkeypatch.setattr(api, "count_own_cases", fake_count)
+    monkeypatch.setattr(api, "find_visible_case", fake_find)
+    monkeypatch.setattr(api, "list_visible_cases", fake_list)
+    monkeypatch.setattr(api, "count_visible_cases", fake_count)
     return state
 
 

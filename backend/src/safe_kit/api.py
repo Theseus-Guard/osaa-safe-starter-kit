@@ -2,22 +2,43 @@ import csv
 import io
 import uuid
 from datetime import UTC, datetime
+from typing import Any, Literal
 
 import psycopg
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import AwareDatetime, BaseModel, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
 
 from safe_kit.auth import (
     INVALID_CREDENTIALS,
     bearer,
     current_user,
     current_user_pending_change,
+    permissions_of,
+    require_any_permission,
     require_permission,
 )
 from safe_kit.audit import record_login_failure
-from safe_kit.cases import Case, count_own_cases, create_case, find_own_case, list_own_cases
+from safe_kit.cases import (
+    Assignment,
+    Case,
+    CaseScope,
+    Outcome,
+    assign_member,
+    case_history,
+    close_case,
+    count_visible_cases,
+    create_case,
+    find_visible_case,
+    list_assignments,
+    list_visible_cases,
+    record_review,
+    redact_history,
+    reopen_case,
+    unassign_member,
+    update_deadline,
+)
 from safe_kit.db import connect
 from safe_kit.system_timezone import (
     SETUP_ROLE,
@@ -53,15 +74,19 @@ from safe_kit.sessions import (
     revoke_refresh_token,
     rotate_session,
 )
+from safe_kit.profile_api import profile_fields, router as profile_router
 from safe_kit.users import (
     ROLES,
+    EmailAlreadyInUse,
+    InvalidEmail,
+    InvalidProfile,
     InvalidUsername,
     UpdateOutcome,
     User,
     admin_exists,
     change_own_password,
     count_users,
-    create_user,
+    create_user_with_profile,
     find_user,
     find_user_by_id,
     list_users,
@@ -99,6 +124,10 @@ class UserCreateRequest(BaseModel):
     username: str = Field(min_length=1, max_length=150)
     role: str
     temporary_password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=1024)
+    email: str | None = Field(default=None, max_length=1024)
+    first_name: str | None = Field(default=None, max_length=1024)
+    last_name: str | None = Field(default=None, max_length=1024)
+    title: str | None = Field(default=None, max_length=1024)
 
     @field_validator("role")
     @classmethod
@@ -169,6 +198,10 @@ class UserSummary(BaseModel):
     password_change_required: bool
     created_at: datetime
     is_protected: bool
+    email: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    title: str | None = None
 
 
 class UserPage(BaseModel):
@@ -222,6 +255,7 @@ def _summary(user: User) -> UserSummary:
         password_change_required=user.must_change_password,
         created_at=user.created_at,
         is_protected=user.is_protected,
+        **profile_fields(user),
     )
 
 
@@ -377,9 +411,22 @@ def admin_create_user(
     actor: User = Depends(require_permission("users:manage")),
 ) -> UserCreatedResponse:
     try:
-        user_id = create_user(body.username, body.temporary_password, body.role, actor_id=actor.id)
+        user_id = create_user_with_profile(
+            body.username,
+            body.temporary_password,
+            body.role,
+            body.email,
+            body.first_name,
+            body.last_name,
+            body.title,
+            actor_id=actor.id,
+        )
     except InvalidUsername as error:
         raise HTTPException(status_code=422, detail=str(error))
+    except (InvalidEmail, InvalidProfile) as error:
+        raise HTTPException(status_code=422, detail=str(error))
+    except EmailAlreadyInUse:
+        raise HTTPException(status_code=409, detail="email already in use")
     except psycopg.errors.UniqueViolation:
         raise HTTPException(status_code=409, detail="username already exists")
     return UserCreatedResponse(
@@ -479,9 +526,11 @@ def admin_set_role_permissions(
 
 
 class DeadlineTaskResponse(BaseModel):
+    id: str | None
     kind: str
     due_at: datetime
     status: str
+    not_applicable_reason: str | None
 
 
 class CaseCreateRequest(BaseModel):
@@ -513,6 +562,9 @@ class CaseResponse(BaseModel):
     status: str
     calendar_version: str
     created_at: datetime
+    closed_at: datetime | None
+    closed_by: str | None
+    close_reason: str | None
     deadlines: list[DeadlineTaskResponse]
 
 
@@ -532,6 +584,106 @@ class CasePage(BaseModel):
     offset: int
 
 
+class AssignmentRequest(BaseModel):
+    user_id: uuid.UUID
+
+
+class AssignmentResponse(BaseModel):
+    id: str
+    case_id: str
+    user_id: str
+    username: str
+    role: str
+    assigned_by: str
+    assigned_at: datetime
+
+
+class ReviewRequest(BaseModel):
+    outcome: Literal["pass", "fail", "insufficient_evidence", "not_applicable"]
+    note: str | None = None
+
+    @field_validator("note")
+    @classmethod
+    def note_length(cls, value: str | None) -> str | None:
+        return _clean_text(value)
+
+
+class ReviewResponse(BaseModel):
+    id: str
+    case_id: str
+    outcome: str
+    note: str | None
+
+
+class ReasonRequest(BaseModel):
+    reason: str
+
+    @field_validator("reason")
+    @classmethod
+    def reason_length(cls, value: str) -> str:
+        cleaned = _clean_text(value)
+        if cleaned is None:
+            raise ValueError("reason must not be blank")
+        return cleaned
+
+
+class DeadlineUpdateRequest(BaseModel):
+    status: Literal["open", "done", "not_applicable"]
+    reason: str | None = None
+
+    @field_validator("reason")
+    @classmethod
+    def reason_length(cls, value: str | None) -> str | None:
+        return _clean_text(value)
+
+    @model_validator(mode="after")
+    def reason_matches_status(self) -> "DeadlineUpdateRequest":
+        if self.status == "not_applicable" and self.reason is None:
+            raise ValueError("reason is required when status is not_applicable")
+        if self.status != "not_applicable" and self.reason is not None:
+            raise ValueError("reason is only allowed when status is not_applicable")
+        return self
+
+
+class HistoryEntryResponse(BaseModel):
+    id: str
+    action: str
+    created_at: datetime
+    # Null for callers without full case access: they see only the action and the timestamp.
+    actor_id: str | None
+    details: dict[str, Any] | None
+
+
+class HistoryPage(BaseModel):
+    items: list[HistoryEntryResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+# Any role that may open a case: the reporter (own), the triager (all), or an assignee.
+CASE_READ_PERMISSIONS = ("cases:read_own", "cases:read_all", "cases:read_assigned")
+CASE_NOT_FOUND = HTTPException(status_code=404, detail="case not found")
+CASE_CLOSED = HTTPException(status_code=409, detail="case is closed")
+TEXT_LIMIT = 1000
+
+
+def _clean_text(value: str | None) -> str | None:
+    """Strip the text. Blank becomes None, and text longer than TEXT_LIMIT is refused."""
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    if len(value) > TEXT_LIMIT:
+        raise ValueError(f"must be at most {TEXT_LIMIT} characters")
+    return value
+
+
+def _scope(actor: User) -> CaseScope:
+    return CaseScope.from_permissions(actor.id, permissions_of(actor))
+
+
 def _case_response(case: Case) -> CaseResponse:
     return CaseResponse(
         id=case.id,
@@ -541,8 +693,17 @@ def _case_response(case: Case) -> CaseResponse:
         status=case.status,
         calendar_version=case.calendar_version,
         created_at=case.created_at,
+        closed_at=case.closed_at,
+        closed_by=case.closed_by,
+        close_reason=case.close_reason,
         deadlines=[
-            DeadlineTaskResponse(kind=task.kind, due_at=task.due_at, status=task.status)
+            DeadlineTaskResponse(
+                id=task.id,
+                kind=task.kind,
+                due_at=task.due_at,
+                status=task.status,
+                not_applicable_reason=task.not_applicable_reason,
+            )
             for task in case.deadlines
         ],
     )
@@ -559,6 +720,25 @@ def _case_summary(case: Case) -> CaseSummary:
     )
 
 
+def _assignment_response(assignment: Assignment) -> AssignmentResponse:
+    return AssignmentResponse(
+        id=assignment.id,
+        case_id=assignment.case_id,
+        user_id=assignment.user_id,
+        username=assignment.username,
+        role=assignment.role,
+        assigned_by=assignment.assigned_by,
+        assigned_at=assignment.assigned_at,
+    )
+
+
+def _visible_case_or_404(case_id: uuid.UUID, scope: CaseScope) -> Case:
+    case = find_visible_case(str(case_id), scope)
+    if case is None:
+        raise CASE_NOT_FOUND
+    return case
+
+
 @app.post("/api/v1/cases", status_code=201, response_model=CaseResponse)
 def submit_case(
     body: CaseCreateRequest,
@@ -572,29 +752,182 @@ def submit_case(
 
 
 @app.get("/api/v1/cases", response_model=CasePage)
-def list_my_cases(
+def list_cases(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    actor: User = Depends(require_permission("cases:read_own")),
+    actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS)),
 ) -> CasePage:
+    scope = _scope(actor)
     return CasePage(
-        items=[_case_summary(case) for case in list_own_cases(actor.id, limit, offset)],
-        total=count_own_cases(actor.id),
+        items=[_case_summary(case) for case in list_visible_cases(scope, limit, offset)],
+        total=count_visible_cases(scope),
         limit=limit,
         offset=offset,
     )
 
 
 @app.get("/api/v1/cases/{case_id}", response_model=CaseResponse)
-def get_my_case(
+def get_case(
     case_id: uuid.UUID,
-    actor: User = Depends(require_permission("cases:read_own")),
+    actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS)),
 ) -> CaseResponse:
-    # Another user's case gets the same 404 as a missing one, so existence is not revealed.
-    case = find_own_case(str(case_id), actor.id)
-    if case is None:
-        raise HTTPException(status_code=404, detail="case not found")
-    return _case_response(case)
+    # A case the caller may not see gets the same 404 as a missing one, so existence is not revealed.
+    return _case_response(_visible_case_or_404(case_id, _scope(actor)))
+
+
+@app.get("/api/v1/cases/{case_id}/assignments", response_model=list[AssignmentResponse])
+def get_case_assignments(
+    case_id: uuid.UUID,
+    actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS)),
+) -> list[AssignmentResponse]:
+    assignments = list_assignments(str(case_id), _scope(actor))
+    if assignments is None:
+        raise CASE_NOT_FOUND
+    return [_assignment_response(assignment) for assignment in assignments]
+
+
+@app.post("/api/v1/cases/{case_id}/assignments", status_code=201, response_model=AssignmentResponse)
+def add_case_assignment(
+    case_id: uuid.UUID,
+    body: AssignmentRequest,
+    actor: User = Depends(require_permission("cases:assign")),
+) -> AssignmentResponse:
+    outcome, assignment = assign_member(str(case_id), str(body.user_id), _scope(actor))
+    if outcome is Outcome.NOT_FOUND:
+        raise CASE_NOT_FOUND
+    if outcome is Outcome.CLOSED:
+        raise CASE_CLOSED
+    if outcome is Outcome.ASSIGNEE_INACTIVE:
+        raise HTTPException(status_code=422, detail="assignee is not an active user")
+    if outcome is Outcome.ROLE_NOT_ASSIGNABLE:
+        raise HTTPException(status_code=422, detail="assignee must be an investigator or reviewer")
+    if outcome is Outcome.DUPLICATE:
+        raise HTTPException(status_code=409, detail="user is already assigned to this case")
+    assert assignment is not None
+    return _assignment_response(assignment)
+
+
+@app.delete("/api/v1/cases/{case_id}/assignments/{user_id}", status_code=204)
+def remove_case_assignment(
+    case_id: uuid.UUID,
+    user_id: uuid.UUID,
+    actor: User = Depends(require_permission("cases:assign")),
+) -> Response:
+    outcome = unassign_member(str(case_id), str(user_id), _scope(actor))
+    if outcome is Outcome.NOT_FOUND:
+        raise CASE_NOT_FOUND
+    if outcome is Outcome.CLOSED:
+        raise CASE_CLOSED
+    if outcome is Outcome.ASSIGNMENT_NOT_FOUND:
+        raise HTTPException(status_code=404, detail="assignment not found")
+    return Response(status_code=204)
+
+
+@app.post("/api/v1/cases/{case_id}/reviews", status_code=201, response_model=ReviewResponse)
+def add_case_review(
+    case_id: uuid.UUID,
+    body: ReviewRequest,
+    actor: User = Depends(require_permission("reviews:write")),
+) -> ReviewResponse:
+    outcome, review_id = record_review(str(case_id), body.outcome, body.note, _scope(actor))
+    if outcome is Outcome.NOT_FOUND:
+        raise CASE_NOT_FOUND
+    if outcome is Outcome.CLOSED:
+        raise CASE_CLOSED
+    if outcome is Outcome.NOT_ASSIGNED:
+        raise HTTPException(status_code=403, detail="only an assigned reviewer can record a review")
+    assert review_id is not None
+    return ReviewResponse(id=review_id, case_id=str(case_id), outcome=body.outcome, note=body.note)
+
+
+@app.post("/api/v1/cases/{case_id}/close", response_model=CaseResponse)
+def close_case_endpoint(
+    case_id: uuid.UUID,
+    body: ReasonRequest,
+    actor: User = Depends(require_permission("cases:close")),
+) -> CaseResponse:
+    scope = _scope(actor)
+    outcome, blockers = close_case(str(case_id), body.reason, scope)
+    if outcome is Outcome.NOT_FOUND:
+        raise CASE_NOT_FOUND
+    if outcome is Outcome.CLOSED:
+        raise CASE_CLOSED
+    if outcome is Outcome.BLOCKED:
+        raise HTTPException(status_code=409, detail="case cannot be closed: " + "; ".join(blockers))
+    return _case_response(_visible_case_or_404(case_id, scope))
+
+
+@app.post("/api/v1/cases/{case_id}/reopen", response_model=CaseResponse)
+def reopen_case_endpoint(
+    case_id: uuid.UUID,
+    body: ReasonRequest,
+    actor: User = Depends(require_permission("cases:close")),
+) -> CaseResponse:
+    scope = _scope(actor)
+    outcome = reopen_case(str(case_id), body.reason, scope)
+    if outcome is Outcome.NOT_FOUND:
+        raise CASE_NOT_FOUND
+    if outcome is Outcome.NOT_CLOSED:
+        raise HTTPException(status_code=409, detail="case is not closed")
+    return _case_response(_visible_case_or_404(case_id, scope))
+
+
+@app.patch("/api/v1/cases/{case_id}/deadlines/{task_id}", response_model=CaseResponse)
+def update_case_deadline(
+    case_id: uuid.UUID,
+    task_id: uuid.UUID,
+    body: DeadlineUpdateRequest,
+    actor: User = Depends(require_any_permission("cases:read_all", "cases:read_assigned")),
+) -> CaseResponse:
+    scope = _scope(actor)
+    outcome = update_deadline(
+        str(case_id),
+        str(task_id),
+        body.status,
+        body.reason,
+        scope,
+        may_mark_not_applicable="cases:triage" in permissions_of(actor),
+    )
+    if outcome is Outcome.NOT_FOUND:
+        raise CASE_NOT_FOUND
+    if outcome is Outcome.CLOSED:
+        raise CASE_CLOSED
+    if outcome is Outcome.TASK_NOT_FOUND:
+        raise HTTPException(status_code=404, detail="deadline task not found")
+    if outcome is Outcome.NOT_APPLICABLE_FORBIDDEN:
+        raise HTTPException(status_code=403, detail="only a triager may mark a deadline not applicable")
+    return _case_response(_visible_case_or_404(case_id, scope))
+
+
+@app.get("/api/v1/cases/{case_id}/history", response_model=HistoryPage)
+def get_case_history(
+    case_id: uuid.UUID,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS)),
+) -> HistoryPage:
+    result = case_history(str(case_id), _scope(actor), limit, offset)
+    if result is None:
+        raise CASE_NOT_FOUND
+    entries, total = result
+    # Full details go to callers who can read every case (the triager). Everyone else sees action and time only.
+    if "cases:read_all" not in permissions_of(actor):
+        entries = redact_history(entries)
+    return HistoryPage(
+        items=[
+            HistoryEntryResponse(
+                id=entry.id,
+                action=entry.action,
+                created_at=entry.created_at,
+                actor_id=entry.actor_id,
+                details=entry.details,
+            )
+            for entry in entries
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @app.get("/api/v1/privacy/inventory")
@@ -624,3 +957,12 @@ def privacy_inventory_export(
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="data-inventory.csv"'},
     )
+
+
+# Evidence endpoints (see safe_kit.evidence_api).
+from safe_kit.evidence_api import evidence_router  # noqa: E402
+
+app.include_router(evidence_router)
+
+
+app.include_router(profile_router)

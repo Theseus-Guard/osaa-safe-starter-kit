@@ -18,7 +18,7 @@ ROLE_LOCK_KEY = 0x5AFE0004
 
 DEFAULT_ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "reporter": frozenset({"cases:submit", "cases:read_own"}),
-    "triager": frozenset({"cases:read_assigned", "cases:triage"}),
+    "triager": frozenset({"cases:read_assigned", "cases:read_all", "cases:triage", "cases:assign", "cases:close"}),
     "investigator": frozenset({"cases:read_assigned", "evidence:write"}),
     "reviewer": frozenset({"cases:read_assigned", "reviews:write"}),
     "disclosure_approver": frozenset({"disclosures:approve"}),

@@ -53,7 +53,7 @@ class FakeStore:
     def find_user_by_id(self, user_id):
         return self.users.get(user_id)
 
-    def create_user(self, username, password, role, actor_id=None):
+    def create_user_with_profile(self, username, password, role, email=None, first_name=None, last_name=None, title=None, actor_id=None):
         if self.find_user(username):
             raise psycopg.errors.UniqueViolation("duplicate username")
         user_id = f"00000000-0000-0000-0000-{len(self.users) + 1:012d}"
@@ -151,7 +151,7 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setattr(auth, "is_access_token_revoked", fake.is_access_token_revoked)
     monkeypatch.setattr(api, "find_user", fake.find_user)
     monkeypatch.setattr(api, "find_user_by_id", fake.find_user_by_id)
-    monkeypatch.setattr(api, "create_user", fake.create_user)
+    monkeypatch.setattr(api, "create_user_with_profile", fake.create_user_with_profile)
     monkeypatch.setattr(api, "reset_password", fake.reset_password)
     monkeypatch.setattr(api, "record_login_failure", fake.record_login_failure)
     monkeypatch.setattr(api, "change_own_password", fake.change_own_password)

@@ -15,4 +15,6 @@ RUN uv sync --frozen --no-dev
 COPY src ./src
 COPY migrations ./migrations
 
+RUN mkdir -p /var/lib/safe/evidence && chown 10001:10001 /var/lib/safe/evidence
+
 USER 10001:10001

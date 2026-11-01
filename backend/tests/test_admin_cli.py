@@ -8,6 +8,7 @@ from safe_kit import admin
 from safe_kit.users import AdminAlreadyExists
 
 PASSWORD = "bootstrap passphrase"
+EMAIL = "first.admin@example.com"
 
 
 @pytest.fixture
@@ -18,8 +19,8 @@ def calls(monkeypatch):
 
     monkeypatch.setattr(admin, "admin_exists", lambda: state["admin_exists"])
 
-    def fake_bootstrap(username, password):
-        recorded["bootstrap"].append((username, password))
+    def fake_bootstrap(username, password, email):
+        recorded["bootstrap"].append((username, password, email))
         if state["bootstrap_error"]:
             raise state["bootstrap_error"]
         return "00000000-0000-0000-0000-000000000001"
@@ -30,15 +31,16 @@ def calls(monkeypatch):
     return recorded, state
 
 
-def feed_password(monkeypatch, password):
-    monkeypatch.setattr(sys, "stdin", io.StringIO(password + "\n"))
+def feed_password(monkeypatch, password, email=EMAIL):
+    # Bootstrap reads the password as the first line of stdin and the email as the second.
+    monkeypatch.setattr(sys, "stdin", io.StringIO(password + "\n" + email + "\n"))
 
 
 def test_first_admin_is_created_when_none_exists(calls, monkeypatch, capsys):
     recorded, _ = calls
     feed_password(monkeypatch, PASSWORD)
     assert admin.main(["create-user", "--username", "root-op", "--role", "admin"]) == 0
-    assert recorded["bootstrap"] == [("root-op", PASSWORD)]
+    assert recorded["bootstrap"] == [("root-op", PASSWORD, EMAIL)]
     assert "password change required" in capsys.readouterr().out
 
 

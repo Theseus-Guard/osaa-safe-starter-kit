@@ -56,7 +56,7 @@ def test_admin_lists_users_with_pagination(client, users):
     body = response.json()
     assert body["total"] == 2
     assert len(body["items"]) == 1
-    assert set(body["items"][0]) == {"id", "username", "role", "is_active", "password_change_required", "created_at", "is_protected"}
+    assert set(body["items"][0]) == {"id", "username", "role", "is_active", "password_change_required", "created_at", "is_protected", "email", "first_name", "last_name", "title"}
 
 
 def test_list_rejects_out_of_range_paging(client, users):

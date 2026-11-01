@@ -65,9 +65,24 @@ def current_user_pending_change(credentials: HTTPAuthorizationCredentials | None
     return _authenticated_user(credentials)
 
 
+def permissions_of(user: User) -> frozenset[str]:
+    return permissions_for_role(user.role)
+
+
 def require_permission(permission: str) -> Callable[[User], User]:
     def dependency(user: User = Depends(current_user)) -> User:
         if permission not in permissions_for_role(user.role):
+            raise HTTPException(status_code=403, detail="forbidden")
+        return user
+
+    return dependency
+
+
+def require_any_permission(*permissions: str) -> Callable[[User], User]:
+    """Passes when the caller holds at least one of the permissions. Used where several roles may enter an endpoint."""
+
+    def dependency(user: User = Depends(current_user)) -> User:
+        if not set(permissions) & permissions_for_role(user.role):
             raise HTTPException(status_code=403, detail="forbidden")
         return user
 

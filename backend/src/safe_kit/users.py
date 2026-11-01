@@ -1,9 +1,14 @@
 """User records, lookups, and administrative changes."""
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+
+import psycopg
+from email_validator import EmailNotValidError, validate_email
+from psycopg import sql
 
 from safe_kit import audit
 from safe_kit.db import connect
@@ -38,6 +43,70 @@ def validate_username(username: str) -> None:
         raise InvalidUsername("username must be 3-64 characters: lowercase letters, digits, '.', '_' or '-'")
 
 
+# Profile rules. The database checks the same limits (migration 0016) as a backstop.
+TEXT_MAX_LENGTH = 100
+EMAIL_MAX_LENGTH = 254
+PROFILE_TEXT_FIELDS = ("first_name", "last_name", "title")
+PROFILE_FIELDS = (*PROFILE_TEXT_FIELDS, "email")
+# Name of the partial unique index on lower(email). Migration 0016 creates it.
+EMAIL_INDEX = "users_email_unique"
+
+
+class InvalidEmail(Exception):
+    pass
+
+
+class InvalidProfile(Exception):
+    pass
+
+
+class EmailAlreadyInUse(Exception):
+    pass
+
+
+def normalize_email(value: str | None) -> str:
+    """The one email rule, used by the API, the profile endpoints, and the CLI.
+
+    Surrounding whitespace is removed and the rest is stored as entered. The address must pass email-validator
+    (syntax only, no deliverability check) and fit in EMAIL_MAX_LENGTH. Empty input is reported as required.
+    """
+    candidate = (value or "").strip()
+    if not candidate:
+        raise InvalidEmail("email is required")
+    if len(candidate) > EMAIL_MAX_LENGTH:
+        raise InvalidEmail("invalid email address")
+    try:
+        validate_email(candidate, check_deliverability=False)
+    except EmailNotValidError:
+        raise InvalidEmail("invalid email address") from None
+    return candidate
+
+
+def normalize_profile_text(field: str, value: str | None) -> str | None:
+    """Trim a name or title. Empty input becomes None (NULL), so a caller can clear the field."""
+    if value is None:
+        return None
+    trimmed = value.strip()
+    if not trimmed:
+        return None
+    if len(trimmed) > TEXT_MAX_LENGTH:
+        raise InvalidProfile(f"{field} must be at most {TEXT_MAX_LENGTH} characters")
+    return trimmed
+
+
+def normalize_profile(values: Mapping[str, str | None]) -> dict[str, str | None]:
+    """Normalize the profile fields a caller sent. Only the keys present in values are returned."""
+    normalized: dict[str, str | None] = {}
+    for field, value in values.items():
+        if field == "email":
+            normalized[field] = normalize_email(value)
+        elif field in PROFILE_TEXT_FIELDS:
+            normalized[field] = normalize_profile_text(field, value)
+        else:
+            raise ValueError(f"unknown profile field: {field}")
+    return normalized
+
+
 @dataclass(frozen=True)
 class User:
     id: str
@@ -50,11 +119,16 @@ class User:
     created_at: datetime
     # The first admin created by the bootstrap. It can never be disabled, deleted, or demoted.
     is_protected: bool = False
+    first_name: str | None = None
+    last_name: str | None = None
+    title: str | None = None
+    # NULL only for accounts created before the email requirement (migration 0016).
+    email: str | None = None
 
 
 _COLUMNS = (
     "id::text, username, role, is_active, password_hash, sessions_valid_after, must_change_password, created_at, "
-    "is_protected"
+    "is_protected, first_name, last_name, title, email"
 )
 
 
@@ -69,6 +143,10 @@ def _to_user(row: tuple) -> User:
         must_change_password=row[6],
         created_at=row[7],
         is_protected=row[8],
+        first_name=row[9],
+        last_name=row[10],
+        title=row[11],
+        email=row[12],
     )
 
 
@@ -82,6 +160,51 @@ def create_user(username: str, password: str, role: str, actor_id: str | None = 
             "INSERT INTO users (username, password_hash, role) VALUES (%s, %s, %s) RETURNING id::text",
             (username, hash_password(password), role),
         ).fetchone()
+        audit.record(conn, audit.USER_CREATE, "user", row[0], actor_id=actor_id, details={"role": role})
+    return row[0]
+
+
+def create_user_with_profile(
+    username: str,
+    password: str,
+    role: str,
+    email: str | None,
+    first_name: str | None = None,
+    last_name: str | None = None,
+    title: str | None = None,
+    actor_id: str | None = None,
+) -> str:
+    """Create an account with a temporary password and its profile. The email is required.
+
+    Raises InvalidUsername, InvalidEmail, InvalidProfile, or EmailAlreadyInUse before anything is written.
+    A duplicate username still raises psycopg.errors.UniqueViolation, as create_user does.
+    """
+    validate_username(username)
+    if role not in ROLES:
+        raise ValueError(f"unknown role: {role}")
+    email_value = normalize_email(email)
+    texts = normalize_profile(
+        {"first_name": first_name, "last_name": last_name, "title": title}
+    )
+    with connect() as conn:
+        try:
+            row = conn.execute(
+                "INSERT INTO users (username, password_hash, role, email, first_name, last_name, title) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id::text",
+                (
+                    username,
+                    hash_password(password),
+                    role,
+                    email_value,
+                    texts["first_name"],
+                    texts["last_name"],
+                    texts["title"],
+                ),
+            ).fetchone()
+        except psycopg.errors.UniqueViolation as error:
+            if error.diag.constraint_name == EMAIL_INDEX:
+                raise EmailAlreadyInUse from error
+            raise
         audit.record(conn, audit.USER_CREATE, "user", row[0], actor_id=actor_id, details={"role": role})
     return row[0]
 
@@ -101,19 +224,25 @@ def admin_exists() -> bool:
     return row[0]
 
 
-def bootstrap_admin(username: str, password: str) -> str:
-    """Create the first admin. The check and the insert run under one lock, so two concurrent
-    bootstraps cannot both succeed."""
+def bootstrap_admin(username: str, password: str, email: str | None) -> str:
+    """Create the first admin with its email. The check and the insert run under one lock, so two concurrent
+    bootstraps cannot both succeed. Raises InvalidEmail before anything is written if the email is not valid."""
     validate_username(username)
+    email_value = normalize_email(email)
     with connect() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (BOOTSTRAP_LOCK_KEY,))
         if conn.execute("SELECT EXISTS (SELECT 1 FROM users WHERE role = 'admin' AND NOT is_deleted)").fetchone()[0]:
             raise AdminAlreadyExists
-        row = conn.execute(
-            "INSERT INTO users (username, password_hash, role, is_protected) "
-            "VALUES (%s, %s, 'admin', true) RETURNING id::text",
-            (username, hash_password(password)),
-        ).fetchone()
+        try:
+            row = conn.execute(
+                "INSERT INTO users (username, password_hash, role, is_protected, email) "
+                "VALUES (%s, %s, 'admin', true, %s) RETURNING id::text",
+                (username, hash_password(password), email_value),
+            ).fetchone()
+        except psycopg.errors.UniqueViolation as error:
+            if error.diag.constraint_name == EMAIL_INDEX:
+                raise EmailAlreadyInUse from error
+            raise
         # No actor: the first admin is created by the operator at the command line.
         audit.record(
             conn, audit.USER_CREATE, "user", row[0], details={"role": "admin", "bootstrap": True}
@@ -299,3 +428,37 @@ def find_user_by_id(user_id: str) -> User | None:
             (user_id,),
         ).fetchone()
     return _to_user(row) if row else None
+
+
+def update_profile(user_id: str, changes: Mapping[str, str | None], actor_id: str | None = None) -> User | None:
+    """Apply profile changes that were already normalized by normalize_profile.
+
+    Only the fields whose value actually changes are written, and the audit row lists their names. It never
+    holds a value, so the new email and the names stay out of the log. Returns None if the user does not exist.
+    Raises EmailAlreadyInUse if another active account holds the email.
+    """
+    with connect() as conn:
+        current = conn.execute(
+            "SELECT first_name, last_name, title, email FROM users WHERE id = %s AND NOT is_deleted FOR UPDATE",
+            (user_id,),
+        ).fetchone()
+        if current is None:
+            return None
+        current_values = dict(zip(PROFILE_FIELDS, current, strict=True))
+        changed = [field for field in PROFILE_FIELDS if field in changes and changes[field] != current_values[field]]
+        if changed:
+            assignments = sql.SQL(", ").join(sql.SQL("{} = %s").format(sql.Identifier(field)) for field in changed)
+            try:
+                conn.execute(
+                    sql.SQL("UPDATE users SET {} WHERE id = %s").format(assignments),
+                    [changes[field] for field in changed] + [user_id],
+                )
+            except psycopg.errors.UniqueViolation as error:
+                if error.diag.constraint_name == EMAIL_INDEX:
+                    raise EmailAlreadyInUse from error
+                raise
+            audit.record(
+                conn, audit.USER_PROFILE_UPDATE, "user", user_id, actor_id=actor_id, details={"fields": changed}
+            )
+        row = conn.execute(f"SELECT {_COLUMNS} FROM users WHERE id = %s", (user_id,)).fetchone()
+    return _to_user(row)

@@ -76,13 +76,13 @@ class FakeTimezoneDatabase:
             reference, title, awareness_time, created_by, calendar_version, calendar_timezone = params
             row = (
                 str(uuid.uuid4()), reference, title, awareness_time, "open", calendar_version,
-                datetime.now(UTC), created_by, calendar_timezone,
+                datetime.now(UTC), created_by, calendar_timezone, None, None, None,
             )
             self.case_rows.append(row)
             return _Result([row])
         if sql.startswith("INSERT INTO deadline_tasks"):
             self.deadline_rows.append(params)
-            return _Result([])
+            return _Result([(str(uuid.uuid4()),)])
         raise AssertionError(f"unexpected SQL in a test: {sql[:100]}")
 
 
