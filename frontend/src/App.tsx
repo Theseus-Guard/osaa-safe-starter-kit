@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { changePassword, login, logout, me, Me, onSessionEnded } from "./api";
+import { watchIdle } from "./idle";
 import { ChangePassword } from "./screens/ChangePassword";
 import { Home } from "./screens/Home";
 import { Login } from "./screens/Login";
@@ -11,6 +13,7 @@ export function App() {
   const [phase, setPhase] = useState<Phase>("anonymous");
   const [profile, setProfile] = useState<Me | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [idleWarning, setIdleWarning] = useState(false);
 
   useEffect(() => {
     onSessionEnded(() => {
@@ -19,6 +22,24 @@ export function App() {
       setNotice("Your session has ended. Please log in again.");
     });
   }, []);
+
+  // Signs the user out after an hour without activity. The server-side session is ended too, through logout().
+  useEffect(() => {
+    if (phase !== "signed-in") return;
+    return watchIdle({
+      onWarning: setIdleWarning,
+      onExpired: () => {
+        logout()
+          .catch(() => undefined)
+          .then(() => {
+            setIdleWarning(false);
+            setProfile(null);
+            setPhase("anonymous");
+            setNotice("Your session ended after 60 minutes without activity. Please log in again.");
+          });
+      },
+    });
+  }, [phase]);
 
   async function handleLogin(username: string, password: string) {
     setNotice(null);
@@ -55,7 +76,16 @@ export function App() {
   }
 
   if (phase === "signed-in" && profile) {
-    return <Home profile={profile} notice={notice} onLogout={handleLogout} onPasswordChanged={handlePasswordChanged} />;
+    return (
+      <>
+        {idleWarning && (
+          <Alert className="fixed right-4 bottom-4 z-50 w-auto max-w-sm bg-background shadow-lg">
+            <AlertDescription>Your session will end within 5 minutes due to inactivity.</AlertDescription>
+          </Alert>
+        )}
+        <Home profile={profile} notice={notice} onLogout={handleLogout} onPasswordChanged={handlePasswordChanged} />
+      </>
+    );
   }
 
   // The login page has its own full-page layout, with its own header and footer.
