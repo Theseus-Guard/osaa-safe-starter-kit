@@ -17,4 +17,5 @@ frontend/dist/
 !README.md
 !CHANGELOG.md
 !SECURITY.md
+!/gateway/README-TLS.md
 !ROADMAP.md

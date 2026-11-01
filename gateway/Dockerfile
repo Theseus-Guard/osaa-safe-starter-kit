@@ -8,3 +8,6 @@ RUN npm run build
 FROM nginx/nginx-unprivileged:1.31.8-alpine3.24@sha256:03df07e5931f8374d440bd62243a5ce9b24719715ef6fc4c9c626a5f1dbef417
 COPY gateway/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=frontend-build /build/dist/ /usr/share/nginx/html/
+# BusyBox wget (no curl in this image). --no-check-certificate: the probe checks that TLS answers, not who signed it.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=6 \
+  CMD ["wget", "-q", "-O", "/dev/null", "--no-check-certificate", "https://127.0.0.1:8443/"]
