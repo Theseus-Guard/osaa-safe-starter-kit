@@ -371,7 +371,7 @@ def test_classification_is_stored_as_versions_with_a_conflict_check(people):
 
     stale = triager.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(0, event_kind="incident"))
     assert stale.status_code == 409
-    assert "current version is 1" in stale.json()["detail"]
+    assert stale.json() == {"detail": {"status": "classification_version_conflict", "current_version": 1}}
 
     same = triager.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(1))
     assert same.status_code == 200 and same.json()["version"] == 1

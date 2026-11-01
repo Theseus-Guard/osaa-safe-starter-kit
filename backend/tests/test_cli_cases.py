@@ -953,7 +953,7 @@ def test_classification_stale_save_prints_the_current_version_and_does_not_retry
         "PUT",
         f"{CASE_PATH}/classification",
         status=409,
-        body={"detail": "classification changed: the current version is 3; reload and retry"},
+        body={"detail": {"status": "classification_version_conflict", "current_version": 3}},
     )
     code, out, err = run(
         capsys, "case", "classification", "set", CASE_ID, "--expected-version", "2", "--username", "alice"

@@ -509,7 +509,9 @@ def test_classification_put_answers_409_with_the_current_version(client, caller,
     as_role(caller, TRIAGER_ID, "triager")
     response = client.put(f"/api/v1/cases/{CASE_ID}/classification", json={"expected_version": 1})
     assert response.status_code == 409
-    assert "current version is 3" in response.json()["detail"]
+    assert response.json() == {
+        "detail": {"status": "classification_version_conflict", "current_version": 3},
+    }
 
 
 def test_investigator_cannot_store_a_classification(client, caller):

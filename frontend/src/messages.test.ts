@@ -12,8 +12,8 @@ describe("describeCode", () => {
     expect(describeCode("something_new")).toBe("Request failed (something_new).");
   });
 
-  it("explains a classification version conflict without the version number in the code", () => {
-    expect(describeCode("classification changed: the current version is 3; reload and retry")).toBe(
+  it("explains a classification version conflict by its stable code", () => {
+    expect(describeCode("classification_version_conflict")).toBe(
       "The classification was changed by someone else. Reload it, check the current version and save again.",
     );
     expect(describeCode("legal duty not found")).toBe("That legal duty does not exist on this case.");

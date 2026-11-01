@@ -88,11 +88,14 @@ export type Readiness = "ready" | "setup_required" | "unavailable";
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
+  // Set only on a classification_version_conflict (409): the version the server holds now.
+  readonly currentVersion: number | null;
 
-  constructor(status: number, code: string) {
+  constructor(status: number, code: string, currentVersion: number | null = null) {
     super(code);
     this.status = status;
     this.code = code;
+    this.currentVersion = currentVersion;
   }
 }
 
@@ -177,17 +180,20 @@ function refreshOnce(): Promise<boolean> {
 
 async function toApiError(response: Response): Promise<ApiError> {
   let code = `http_${response.status}`;
+  let currentVersion: number | null = null;
   try {
     const body = (await response.json()) as { detail?: unknown };
     if (typeof body.detail === "string") {
       code = body.detail;
     } else if (typeof body.detail === "object" && body.detail !== null && "status" in body.detail) {
-      code = String((body.detail as { status: unknown }).status);
+      const detail = body.detail as { status: unknown; current_version?: unknown };
+      code = String(detail.status);
+      if (typeof detail.current_version === "number") currentVersion = detail.current_version;
     }
   } catch {
     // Empty or non-JSON error body: keep the HTTP status code.
   }
-  return new ApiError(response.status, code);
+  return new ApiError(response.status, code, currentVersion);
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
