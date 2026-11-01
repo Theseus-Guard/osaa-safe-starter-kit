@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react";
-import { createUser, CreatedUser, Role, ROLES } from "../../api";
+import { createUser, CreatedUser, NewUser, Role, ROLES } from "../../api";
 import { describeError } from "../../messages";
+import { EMAIL_REQUIRED_MESSAGE } from "../../profile";
 import { MIN_PASSWORD_LENGTH } from "../ChangePassword";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,10 @@ interface Props {
 
 export function CreateUserForm({ onCreated }: Props) {
   const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [title, setTitle] = useState("");
   const [role, setRole] = useState<Role>("reporter");
   const [temporary, setTemporary] = useState("");
   const [created, setCreated] = useState<CreatedUser | null>(null);
@@ -25,14 +30,27 @@ export function CreateUserForm({ onCreated }: Props) {
     event.preventDefault();
     setError(null);
     setCreated(null);
+    if (email.trim() === "") {
+      setError(EMAIL_REQUIRED_MESSAGE);
+      return;
+    }
     if (temporary.length < MIN_PASSWORD_LENGTH) {
       setError(`The temporary password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
       return;
     }
+    // Optional fields are sent only when filled in.
+    const body: NewUser = { username, role, temporary_password: temporary, email: email.trim() };
+    if (firstName.trim() !== "") body.first_name = firstName.trim();
+    if (lastName.trim() !== "") body.last_name = lastName.trim();
+    if (title.trim() !== "") body.title = title.trim();
     setBusy(true);
     try {
-      setCreated(await createUser(username, role, temporary));
+      setCreated(await createUser(body));
       setUsername("");
+      setEmail("");
+      setFirstName("");
+      setLastName("");
+      setTitle("");
       setTemporary("");
       onCreated();
     } catch (caught) {
@@ -49,10 +67,35 @@ export function CreateUserForm({ onCreated }: Props) {
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <FieldGroup className="grid gap-4 sm:grid-cols-3">
+          <FieldGroup className="grid gap-4 sm:grid-cols-2">
             <Field>
               <FieldLabel htmlFor="create-username">Username</FieldLabel>
               <Input id="create-username" value={username} onChange={(e) => setUsername(e.target.value)} required />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="create-email">
+                Email <span className="font-normal text-muted-foreground">(required)</span>
+              </FieldLabel>
+              <Input
+                id="create-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                autoComplete="off"
+                required
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="create-first-name">First name</FieldLabel>
+              <Input id="create-first-name" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="create-last-name">Last name</FieldLabel>
+              <Input id="create-last-name" value={lastName} onChange={(e) => setLastName(e.target.value)} />
+            </Field>
+            <Field className="sm:col-span-2">
+              <FieldLabel htmlFor="create-title">Title</FieldLabel>
+              <Input id="create-title" value={title} onChange={(e) => setTitle(e.target.value)} />
             </Field>
             <Field>
               <FieldLabel htmlFor="create-role">Role</FieldLabel>

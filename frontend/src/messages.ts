@@ -22,6 +22,10 @@ const MESSAGES: Record<string, string> = {
   "confirmation required": "Confirm the change before saving.",
   "system timezone is not configured": "The system timezone is not set yet. An administrator must set it before cases can be created.",
   "case not found": "No case with that ID is available to your account.",
+  "email is required": "Enter an email address.",
+  "invalid email address": "Enter a valid email address.",
+  "email already in use": "That email address is already used by another account.",
+  "use your own profile endpoint": "Edit your own profile on the Account page.",
   "nothing to change": "Choose a role or status change first.",
   "username is reserved": "That username is reserved. Choose another.",
   "username must be 3-64 characters: lowercase letters, digits, '.', '_' or '-'":

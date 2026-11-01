@@ -4,6 +4,7 @@ import { useHashRoute } from "../routes";
 import { SystemTimezoneProvider, useSystemTimezone } from "../system-timezone";
 import { AppShell } from "./AppShell";
 import { ChangePassword } from "./ChangePassword";
+import { ProfileCard } from "./ProfileCard";
 import { Overview } from "./Overview";
 import { PrivacyPage } from "./admin/PrivacyPage";
 import { RolesMatrix } from "./admin/RolesMatrix";
@@ -50,12 +51,15 @@ function HomeView({ profile, notice, onLogout, onPasswordChanged }: Props) {
       {page === "roles" && isAdmin && <RolesMatrix editable />}
       {page === "settings" && isAdmin && <SettingsPage />}
       {page === "account" && (
-        <ChangePassword
-          heading="Change your password"
-          description="This ends all of your sessions. You will need to log in again."
-          onChange={changePassword}
-          onDone={onPasswordChanged}
-        />
+        <>
+          <ProfileCard />
+          <ChangePassword
+            heading="Change your password"
+            description="This ends all of your sessions. You will need to log in again."
+            onChange={changePassword}
+            onDone={onPasswordChanged}
+          />
+        </>
       )}
     </AppShell>
   );

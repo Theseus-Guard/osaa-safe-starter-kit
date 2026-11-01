@@ -10,10 +10,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { EditProfileDialog } from "./EditProfileDialog";
 import { ResetPasswordRow } from "./ResetPasswordRow";
 
 const PAGE_SIZE = 20;
-const COLUMN_COUNT = 6;
+const COLUMN_COUNT = 7;
 const PROTECTED_REASON = "The protected admin account cannot be changed.";
 const SELF_RESET_REASON = "Use Change password on the Account page to change your own password.";
 // A bounded height with a scroll container keeps the table header sticky.
@@ -34,6 +35,7 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [resettingId, setResettingId] = useState<string | null>(null);
+  const [editing, setEditing] = useState<UserSummary | null>(null);
 
   useEffect(() => {
     let stale = false;
@@ -136,6 +138,7 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
             <TableHeader className="sticky top-0 z-10 bg-muted">
               <TableRow>
                 <TableHead>Username</TableHead>
+                <TableHead>Email</TableHead>
                 <TableHead>Role</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Must change password</TableHead>
@@ -158,6 +161,15 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
                           {isSelf && <Badge variant="outline">You</Badge>}
                           {user.is_protected && <Badge variant="secondary">Protected</Badge>}
                         </div>
+                      </TableCell>
+                      <TableCell>
+                        {user.email ? (
+                          <span className="break-all">{user.email}</span>
+                        ) : (
+                          <Badge variant="outline" className="text-muted-foreground">
+                            Missing
+                          </Badge>
+                        )}
                       </TableCell>
                       <TableCell>
                         <DisabledHint reason={isLocked ? lockReason("You cannot change your own role.") : undefined}>
@@ -190,6 +202,11 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-wrap gap-1.5">
+                          <DisabledHint reason={isSelf ? "Edit your own profile on the Account page." : undefined}>
+                            <Button variant="outline" size="sm" disabled={isSelf || busy} onClick={() => setEditing(user)}>
+                              Edit
+                            </Button>
+                          </DisabledHint>
                           <DisabledHint reason={isLocked ? lockReason("You cannot change your own status.") : undefined}>
                             <Button
                               variant="outline"
@@ -265,6 +282,14 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
           </div>
         </div>
       </CardContent>
+      <EditProfileDialog
+        user={editing}
+        onClose={() => setEditing(null)}
+        onSaved={() => {
+          setEditing(null);
+          onChanged();
+        }}
+      />
     </Card>
   );
 }

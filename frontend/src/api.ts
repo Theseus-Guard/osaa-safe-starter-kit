@@ -13,7 +13,18 @@ export const ROLES = [
 
 export type Role = (typeof ROLES)[number];
 
-export interface Me {
+// Contact and display details of an account. Optional names and title may be null. Email is required on new accounts.
+export interface UserProfile {
+  first_name: string | null;
+  last_name: string | null;
+  title: string | null;
+  email: string | null;
+}
+
+// Only the fields to change. An empty string clears an optional name or title. Email cannot be cleared.
+export type ProfileUpdate = Partial<{ first_name: string; last_name: string; title: string; email: string }>;
+
+export interface Me extends UserProfile {
   id: string;
   username: string;
   role: Role;
@@ -29,7 +40,7 @@ export interface CreatedUser {
   password_change_required: boolean;
 }
 
-export interface UserSummary {
+export interface UserSummary extends UserProfile {
   id: string;
   username: string;
   role: Role;
@@ -213,11 +224,33 @@ export async function changePassword(currentPassword: string, newPassword: strin
   clearSession();
 }
 
-export function createUser(username: string, role: Role, temporaryPassword: string): Promise<CreatedUser> {
-  return request<CreatedUser>("/users", {
-    method: "POST",
-    json: { username, role, temporary_password: temporaryPassword },
-  });
+export interface NewUser {
+  username: string;
+  role: Role;
+  temporary_password: string;
+  // Required by the backend.
+  email: string;
+  first_name?: string;
+  last_name?: string;
+  title?: string;
+}
+
+export function createUser(body: NewUser): Promise<CreatedUser> {
+  return request<CreatedUser>("/users", { method: "POST", json: body });
+}
+
+// The caller's own contact details.
+export function getProfile(): Promise<UserProfile> {
+  return request<UserProfile>("/auth/profile");
+}
+
+export function updateProfile(body: ProfileUpdate): Promise<void> {
+  return request("/auth/profile", { method: "PATCH", json: body });
+}
+
+// Admin edit of another account's contact details. The backend refuses the caller's own id (use updateProfile).
+export function updateUserProfile(userId: string, body: ProfileUpdate): Promise<void> {
+  return request(`/users/${encodeURIComponent(userId)}/profile`, { method: "PATCH", json: body });
 }
 
 export function listUsers(limit: number, offset: number): Promise<UserPage> {

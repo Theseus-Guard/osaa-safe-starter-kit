@@ -58,14 +58,16 @@ export function App() {
     return <Home profile={profile} notice={notice} onLogout={handleLogout} onPasswordChanged={handlePasswordChanged} />;
   }
 
-  // Login and the first-login steps stay outside the dashboard shell (no clock and no user menu here).
+  // The login page has its own full-page layout, with its own header and footer.
+  if (phase === "anonymous") return <Login notice={notice} onLogin={handleLogin} />;
+
+  // The first-login steps stay outside the dashboard shell (no clock and no user menu here).
   return (
     <div className="flex min-h-svh flex-col">
       <header className="flex h-14 items-center border-b bg-background px-4">
         <h1 className="text-base font-semibold tracking-tight">SAFE-Starter-Kit</h1>
       </header>
       <main className="mx-auto flex w-full max-w-md flex-1 flex-col gap-6 p-4 pt-8">
-        {phase === "anonymous" && <Login notice={notice} onLogin={handleLogin} />}
         {phase === "password-change" && profile && (
           <ChangePassword
             heading="Choose a new password"
