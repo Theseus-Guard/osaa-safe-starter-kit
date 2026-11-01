@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CaseDetail, createCase } from "../../api";
+import { CaseDetail, createCase, createReport } from "../../api";
 import { NewCaseDialog } from "./NewCaseDialog";
 
 // The system timezone is a per-test value. The dialog reads it on open.
@@ -9,7 +9,7 @@ const system = vi.hoisted(() => ({ timezone: "Europe/Istanbul" as string | null 
 
 vi.mock("../../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../api")>();
-  return { ...actual, createCase: vi.fn() };
+  return { ...actual, createCase: vi.fn(), createReport: vi.fn() };
 });
 
 vi.mock("../../system-timezone", () => ({
@@ -22,7 +22,8 @@ vi.mock("../../system-timezone", () => ({
   }),
 }));
 
-const create = vi.mocked(createCase);
+const report = vi.mocked(createReport);
+const legacyCreate = vi.mocked(createCase);
 
 // Istanbul is UTC+03:00 with no DST. The clock is fixed at 2026-11-01 06:00 UTC, which is 09:00 in Istanbul.
 const NOW = new Date("2026-11-01T06:00:00Z");
@@ -39,7 +40,8 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
   system.timezone = "Europe/Istanbul";
-  create.mockReset();
+  report.mockReset();
+  legacyCreate.mockReset();
 });
 
 afterEach(() => {
@@ -55,6 +57,15 @@ describe("NewCaseDialog", () => {
     expect(screen.getByText(/Times are in Europe\/Istanbul \(UTC\+03:00\)/)).toBeInTheDocument();
   });
 
+  it("explains the optional contact field", () => {
+    renderDialog();
+
+    expect(screen.getByLabelText("Contact for follow-up")).toHaveAttribute("maxLength", "200");
+    expect(
+      screen.getByText("Optional. Visible only to the independent reporting owner. Leave blank to stay anonymous."),
+    ).toBeInTheDocument();
+  });
+
   it("rejects an awareness time in the future", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderDialog();
@@ -64,22 +75,53 @@ describe("NewCaseDialog", () => {
     await user.click(screen.getByRole("button", { name: "Create case" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("The awareness time cannot be in the future.");
-    expect(create).not.toHaveBeenCalled();
+    expect(report).not.toHaveBeenCalled();
   });
 
-  it("submits a valid past awareness time as UTC and closes the dialog", async () => {
+  it("submits a valid past awareness time as UTC to the reports endpoint and closes the dialog", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const created = { id: "case-1", reference: "CASE-1", title: "Example incident" } as CaseDetail;
-    create.mockResolvedValue(created);
+    report.mockResolvedValue(created);
     const { onOpenChange, onCreated } = renderDialog();
 
     await user.type(screen.getByLabelText("Title"), "Example incident");
     fireEvent.change(screen.getByLabelText("Awareness time"), { target: { value: "08:30" } });
     await user.click(screen.getByRole("button", { name: "Create case" }));
 
-    expect(create).toHaveBeenCalledWith({ title: "Example incident", awareness_time: "2026-11-01T05:30:00.000Z" });
+    expect(report).toHaveBeenCalledWith({
+      title: "Example incident",
+      awareness_time: "2026-11-01T05:30:00.000Z",
+      contact: null,
+    });
+    expect(legacyCreate).not.toHaveBeenCalled();
     expect(onCreated).toHaveBeenCalledWith(created);
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("sends the contact trimmed", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    report.mockResolvedValue({ id: "case-1" } as CaseDetail);
+    renderDialog();
+
+    await user.type(screen.getByLabelText("Title"), "Example incident");
+    await user.type(screen.getByLabelText("Contact for follow-up"), "  reporter@example.com  ");
+    fireEvent.change(screen.getByLabelText("Awareness time"), { target: { value: "08:30" } });
+    await user.click(screen.getByRole("button", { name: "Create case" }));
+
+    expect(report).toHaveBeenCalledWith(expect.objectContaining({ contact: "reporter@example.com" }));
+  });
+
+  it("sends a blank contact as null", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    report.mockResolvedValue({ id: "case-1" } as CaseDetail);
+    renderDialog();
+
+    await user.type(screen.getByLabelText("Title"), "Example incident");
+    await user.type(screen.getByLabelText("Contact for follow-up"), "   ");
+    fireEvent.change(screen.getByLabelText("Awareness time"), { target: { value: "08:30" } });
+    await user.click(screen.getByRole("button", { name: "Create case" }));
+
+    expect(report).toHaveBeenCalledWith(expect.objectContaining({ contact: null }));
   });
 
   it("asks for a title before sending", async () => {
@@ -89,7 +131,7 @@ describe("NewCaseDialog", () => {
     fireEvent.change(screen.getByLabelText("Awareness time"), { target: { value: "08:30" } });
     await user.click(screen.getByRole("button", { name: "Create case" }));
 
-    expect(create).not.toHaveBeenCalled();
+    expect(report).not.toHaveBeenCalled();
     // The title is required, so the browser blocks the submit before the custom check runs.
     expect(screen.getByLabelText("Title")).toBeInvalid();
   });
@@ -105,13 +147,13 @@ describe("NewCaseDialog", () => {
     await user.click(screen.getByRole("button", { name: "Create case" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("does not exist in America/New_York");
-    expect(create).not.toHaveBeenCalled();
+    expect(report).not.toHaveBeenCalled();
   });
 
   it("shows the server message when the case cannot be created", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const { ApiError } = await vi.importActual<typeof import("../../api")>("../../api");
-    create.mockRejectedValue(new ApiError(400, "system timezone is not configured"));
+    report.mockRejectedValue(new ApiError(400, "system timezone is not configured"));
     renderDialog();
 
     await user.type(screen.getByLabelText("Title"), "Example incident");

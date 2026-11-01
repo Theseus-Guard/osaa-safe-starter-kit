@@ -1,5 +1,5 @@
 import { FormEvent, useState } from "react";
-import { CaseDetail, createCase } from "../../api";
+import { CaseDetail, createReport } from "../../api";
 import { describeError } from "../../messages";
 import { useSystemTimezone } from "../../system-timezone";
 import { offsetLabel, zonedParts, zonedToUtcIso } from "../../time";
@@ -10,6 +10,7 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui
 import { Input } from "@/components/ui/input";
 
 const TITLE_MAX_LENGTH = 200;
+const CONTACT_MAX_LENGTH = 200;
 
 interface Props {
   open: boolean;
@@ -37,6 +38,7 @@ function NewCaseForm({ onCreated }: { onCreated: (created: CaseDetail) => void }
   const { timezone } = useSystemTimezone();
   const zone = timezone ?? "UTC";
   const [title, setTitle] = useState("");
+  const [contact, setContact] = useState("");
   // The awareness time is entered as a wall-clock date and time in the system timezone, and converted to UTC on submit.
   const [initial] = useState(() => zonedParts(new Date(), zone));
   const [date, setDate] = useState(initial.date);
@@ -67,9 +69,17 @@ function NewCaseForm({ onCreated }: { onCreated: (created: CaseDetail) => void }
       setError("The awareness time cannot be in the future. Choose the time you became aware, not a later one.");
       return;
     }
+    // A blank contact is sent as null, so the reporter stays anonymous to the case team.
+    const trimmedContact = contact.trim();
     setBusy(true);
     try {
-      onCreated(await createCase({ title: trimmed, awareness_time: utcIso }));
+      onCreated(
+        await createReport({
+          title: trimmed,
+          awareness_time: utcIso,
+          contact: trimmedContact === "" ? null : trimmedContact,
+        }),
+      );
     } catch (caught) {
       setError(describeError(caught));
       setBusy(false);
@@ -110,6 +120,16 @@ function NewCaseForm({ onCreated }: { onCreated: (created: CaseDetail) => void }
               Times are in {zone}
               {offset !== null && ` (${offset})`}. The case stores the moment in UTC.
             </FieldDescription>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="case-contact">Contact for follow-up</FieldLabel>
+            <Input
+              id="case-contact"
+              value={contact}
+              maxLength={CONTACT_MAX_LENGTH}
+              onChange={(event) => setContact(event.target.value)}
+            />
+            <FieldDescription>Optional. Visible only to the independent reporting owner. Leave blank to stay anonymous.</FieldDescription>
           </Field>
         </FieldGroup>
         {error && (

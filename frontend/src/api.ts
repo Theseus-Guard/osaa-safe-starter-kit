@@ -348,6 +348,11 @@ export interface CaseCreateBody {
   awareness_time: string;
 }
 
+export interface ReportCreateBody extends CaseCreateBody {
+  // Optional follow-up contact, at most 200 characters. Null or blank means no contact.
+  contact?: string | null;
+}
+
 // q matches the case reference (partial, case-insensitive) or the case UUID prefix. Omitted or blank q lists every visible case.
 export function listCases(limit: number, offset: number, q?: string): Promise<CasePage> {
   const term = q?.trim() ?? "";
@@ -361,6 +366,11 @@ export function getCase(caseId: string): Promise<CaseDetail> {
 
 export function createCase(body: CaseCreateBody): Promise<CaseDetail> {
   return request<CaseDetail>("/cases", { method: "POST", json: body });
+}
+
+// Reporter intake. Returns the same shape as createCase. The contact is stored for the independent reporting owner and never returned.
+export function createReport(body: ReportCreateBody): Promise<CaseDetail> {
+  return request<CaseDetail>("/reports", { method: "POST", json: body });
 }
 
 // The reason is stored on the case and shown after closure.

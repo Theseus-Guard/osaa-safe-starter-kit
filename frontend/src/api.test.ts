@@ -334,6 +334,37 @@ describe("endpoints", () => {
       awareness_time: "2026-10-31T06:00:00.000Z",
     });
   });
+
+  it("creates a report at the reporter intake with the contact", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+
+    await api.createReport({
+      title: "Example case",
+      awareness_time: "2026-10-31T06:00:00.000Z",
+      contact: "reporter@example.com",
+    });
+
+    expect(urlOf(0)).toBe("/api/v1/reports");
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe("POST");
+    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({
+      title: "Example case",
+      awareness_time: "2026-10-31T06:00:00.000Z",
+      contact: "reporter@example.com",
+    });
+  });
+
+  it("sends a null contact to the reporter intake when none is given", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+
+    await api.createReport({ title: "Example case", awareness_time: "2026-10-31T06:00:00.000Z", contact: null });
+
+    expect(urlOf(0)).toBe("/api/v1/reports");
+    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({
+      title: "Example case",
+      awareness_time: "2026-10-31T06:00:00.000Z",
+      contact: null,
+    });
+  });
 });
 
 describe("case and evidence endpoints", () => {
