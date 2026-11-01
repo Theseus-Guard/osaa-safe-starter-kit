@@ -66,6 +66,17 @@ export function App() {
           />
         )}
       </main>
+      <footer className="border-t px-4 py-4 text-center text-xs text-muted-foreground">
+        <nav className="flex flex-wrap justify-center gap-x-4 gap-y-1">
+          <a className="underline underline-offset-4 hover:text-foreground" href="https://github.com/OpenSecureAIAlliance/wg-safe" target="_blank" rel="noopener noreferrer">
+            Open Secure AI Alliance official repo
+          </a>
+          <a className="underline underline-offset-4 hover:text-foreground" href="https://secureaialliance.org/" target="_blank" rel="noopener noreferrer">
+            Open Secure AI Alliance (OSAA)
+          </a>
+        </nav>
+        <p className="mt-2">SAFE-Starter-Kit is an independent open-source project. It is not an official Alliance product and is not endorsed by the Alliance.</p>
+      </footer>
     </div>
   );
 }
