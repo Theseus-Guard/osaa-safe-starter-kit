@@ -183,3 +183,25 @@ def test_expired_revoked_token_rows_are_soft_deleted_and_kept():
     assert sessions.is_access_token_revoked(expired_jti) is False
     assert revoked_access_token_rows(live_jti) == [(False, False)]
     assert sessions.is_access_token_revoked(live_jti) is True
+
+
+def test_a_session_within_the_absolute_limit_can_be_renewed():
+    token = sessions.open_session(new_user())
+    _, renewed = sessions.rotate_session(token)
+    assert renewed != token
+
+
+def test_a_session_past_the_absolute_limit_cannot_be_renewed_and_its_family_is_revoked():
+    token = sessions.open_session(new_user())
+    with connect() as conn:
+        # The limit is counted from the first token of the family, so age that row.
+        conn.execute(
+            """
+            UPDATE refresh_tokens SET created_at = now() - interval '13 hours'
+            WHERE family_id = (SELECT family_id FROM refresh_tokens WHERE token_hash = %s)
+            """,
+            (hash_refresh_token(token),),
+        )
+    with pytest.raises(InvalidRefreshToken):
+        sessions.rotate_session(token)
+    assert all(row["revoked"] for row in family_rows(token))

@@ -3,7 +3,7 @@
 from datetime import datetime
 
 from safe_kit.db import connect
-from safe_kit.security import hash_refresh_token, new_refresh_token, refresh_token_ttl
+from safe_kit.security import hash_refresh_token, new_refresh_token, refresh_token_ttl, session_max_age
 
 
 class InvalidRefreshToken(Exception):
@@ -30,24 +30,33 @@ def rotate_session(raw_token: str) -> tuple[str, str]:
     Presenting an already-rotated token is treated as possible theft: every token in
     that family is revoked and the request fails.
     """
-    reused = False
+    revoked_family = False
     with connect() as conn:
         row = conn.execute(
             """
-            SELECT id::text, user_id::text, family_id::text, revoked_at IS NOT NULL, expires_at > now()
+            SELECT id::text, user_id::text, family_id::text, revoked_at IS NOT NULL, expires_at > now(),
+                   now() - (SELECT min(f.created_at) FROM refresh_tokens f WHERE f.family_id = refresh_tokens.family_id)
+                       >= make_interval(secs => %s)
             FROM refresh_tokens WHERE token_hash = %s FOR UPDATE
             """,
-            (hash_refresh_token(raw_token),),
+            (session_max_age().total_seconds(), hash_refresh_token(raw_token)),
         ).fetchone()
         if row is None:
             raise InvalidRefreshToken
-        row_id, user_id, family_id, revoked, unexpired = row
+        row_id, user_id, family_id, revoked, unexpired, past_limit = row
         if revoked:
             conn.execute(
                 "UPDATE refresh_tokens SET revoked_at = now() WHERE family_id = %s AND revoked_at IS NULL",
                 (family_id,),
             )
-            reused = True
+            revoked_family = True
+        elif past_limit:
+            # The session has reached its absolute limit. Its tokens are revoked, so the user must log in again.
+            conn.execute(
+                "UPDATE refresh_tokens SET revoked_at = now() WHERE family_id = %s AND revoked_at IS NULL",
+                (family_id,),
+            )
+            revoked_family = True
         elif not unexpired:
             raise InvalidRefreshToken
         else:
@@ -61,7 +70,7 @@ def rotate_session(raw_token: str) -> tuple[str, str]:
                 (user_id, family_id, hash_refresh_token(new_token), refresh_token_ttl().total_seconds()),
             )
     # Raised after the commit above, so that the family revocation is not rolled back.
-    if reused:
+    if revoked_family:
         raise InvalidRefreshToken
     return user_id, new_token
 

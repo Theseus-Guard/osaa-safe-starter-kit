@@ -517,6 +517,18 @@ def test_investigator_cannot_store_a_classification(client, caller):
     assert client.put(f"/api/v1/cases/{CASE_ID}/classification", json={"expected_version": 0}).status_code == 403
 
 
+def test_classification_put_is_refused_without_read_all_so_the_hidden_text_is_not_cleared(client, caller, monkeypatch):
+    def must_not_save(*args):
+        raise AssertionError("a caller without cases:read_all must not replace the classification")
+
+    monkeypatch.setattr(case_records_api, "update_classification", must_not_save)
+    monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"cases:triage", "cases:read_own"}))
+    as_role(caller, TRIAGER_ID, "triager")
+    response = client.put(f"/api/v1/cases/{CASE_ID}/classification", json={"expected_version": 0})
+    assert response.status_code == 403
+    assert response.json()["detail"] == "classification_requires_full_view"
+
+
 def test_classification_put_refuses_internal_option_without_rationale(client, caller):
     as_role(caller, TRIAGER_ID, "triager")
     body = {"expected_version": 0, "internal_incident_option": True}

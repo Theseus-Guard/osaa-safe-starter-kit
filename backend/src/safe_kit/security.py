@@ -17,6 +17,7 @@ AUDIENCE = "safe-starter-kit-api"
 ALGORITHM = "HS256"
 DEFAULT_ACCESS_TTL_MINUTES = 60
 DEFAULT_REFRESH_TTL_MINUTES = 60
+DEFAULT_SESSION_MAX_HOURS = 12
 MIN_PASSWORD_LENGTH = 12
 # Every password expires this long after it was set, temporary passwords included.
 PASSWORD_MAX_AGE = timedelta(days=180)
@@ -57,6 +58,11 @@ def access_token_ttl() -> timedelta:
 def refresh_token_ttl() -> timedelta:
     # Each rotation restarts this window, so it is an idle limit: a session ends after this long without a refresh.
     return timedelta(minutes=int(os.environ.get("SAFE_REFRESH_TTL_MINUTES", DEFAULT_REFRESH_TTL_MINUTES)))
+
+
+def session_max_age() -> timedelta:
+    # Counted from the login that started the session family. Renewals do not extend it.
+    return timedelta(hours=int(os.environ.get("SAFE_SESSION_MAX_HOURS", DEFAULT_SESSION_MAX_HOURS)))
 
 
 def _signing_key() -> str:
