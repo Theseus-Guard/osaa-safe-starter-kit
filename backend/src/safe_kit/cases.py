@@ -484,6 +484,22 @@ def record_review(case_id: str, outcome: str, note: str | None, scope: CaseScope
     return Outcome.OK, review_id
 
 
+def list_reviews(case_id: str, scope: CaseScope) -> list[dict[str, str | None]] | None:
+    """Active reviews of a case, newest first, or None when the scope may not see the case."""
+    with connect() as conn:
+        if not _is_visible(conn, case_id, scope):
+            return None
+        rows = conn.execute(
+            """
+            SELECT id::text, outcome, note FROM case_reviews
+            WHERE case_id = %s AND NOT is_deleted
+            ORDER BY created_at DESC, id DESC
+            """,
+            (case_id,),
+        ).fetchall()
+    return [{"id": row[0], "outcome": row[1], "note": row[2]} for row in rows]
+
+
 def update_deadline(
     case_id: str,
     task_id: str,

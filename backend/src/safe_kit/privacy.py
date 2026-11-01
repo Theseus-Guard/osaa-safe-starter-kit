@@ -324,6 +324,19 @@ CATALOG: tuple[TableEntry, ...] = (
         deletion_mode="Soft delete (is_deleted, deleted_at).",
         created_column="created_at",
     ),
+    TableEntry(
+        table="reporter_identities",
+        description="Reporter of each case opened through the intake: the submitting account and an optional contact.",
+        category="case",
+        contains_personal_data=True,
+        personal_fields=("reporter_id (links to a person)", "contact (how to reach the reporter)"),
+        purpose="Keeping the reporter's identity apart from the case content, so the reporter is not exposed to retaliation.",
+        retention="Kept with its case. Follows the case retention once it is defined.",
+        retention_defined=False,
+        security="Written only when a case is submitted. No endpoint returns it, and the case history hides the reporter's account from every caller. Any future read needs a permission decided with the independent reporting owner.",
+        deletion_mode="Soft delete (is_deleted, deleted_at).",
+        created_column="created_at",
+    ),
 )
 
 

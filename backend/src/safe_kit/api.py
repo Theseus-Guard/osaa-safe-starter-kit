@@ -40,6 +40,7 @@ from safe_kit.cases import (
     create_case,
     find_visible_case,
     list_assignments,
+    list_reviews,
     list_visible_cases,
     record_review,
     redact_history,
@@ -68,6 +69,7 @@ from safe_kit.rate_limit import clear as clear_rate_limit
 from safe_kit.rate_limit import hit as hit_rate_limit
 from safe_kit.privacy import CSV_COLUMNS, inventory, inventory_csv_rows
 from safe_kit.rbac import RoleOutcome, list_catalog, list_role_permissions, set_role_permissions
+from safe_kit.reporter_channel import hide_reporter, submit_report
 from safe_kit.security import (
     MIN_PASSWORD_LENGTH,
     access_token_ttl,
@@ -801,6 +803,31 @@ def submit_case(
     return _case_response(case, _scope(actor))
 
 
+class ReportCreateRequest(CaseCreateRequest):
+    # Optional way to reach the reporter. Kept apart from the case content and never returned by the API.
+    contact: str | None = Field(default=None, max_length=200)
+
+    @field_validator("contact")
+    @classmethod
+    def contact_stripped(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        return value.strip()
+
+
+@app.post("/api/v1/reports", status_code=201, response_model=CaseResponse)
+def open_report(
+    body: ReportCreateRequest,
+    actor: User = Depends(require_permission("cases:submit")),
+) -> CaseResponse:
+    """Open a case through the reporter channel. The case, its deadlines, and the reporter identity are stored together."""
+    try:
+        case = submit_report(body.title, body.awareness_time, body.contact, actor.id)
+    except TimezoneNotConfigured:
+        raise HTTPException(status_code=409, detail="system timezone is not configured")
+    return _case_response(case, _scope(actor))
+
+
 async def _read_import_body(request: Request) -> bytes:
     """Read the import file with a size limit. A request with no Content-Length cannot exceed it either."""
     message = f"the import file exceeds the limit of {MAX_IMPORT_BYTES} bytes"
@@ -943,6 +970,21 @@ def add_case_review(
     return ReviewResponse(id=review_id, case_id=str(case_id), outcome=body.outcome, note=body.note)
 
 
+@app.get("/api/v1/cases/{case_id}/reviews", response_model=list[ReviewResponse])
+def list_case_reviews(
+    case_id: uuid.UUID,
+    actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS)),
+) -> list[ReviewResponse]:
+    # Same visibility as the case itself: a case the caller may not see is 404, as for every case read.
+    reviews = list_reviews(str(case_id), _scope(actor))
+    if reviews is None:
+        raise CASE_NOT_FOUND
+    return [
+        ReviewResponse(id=review["id"], case_id=str(case_id), outcome=review["outcome"], note=review["note"])
+        for review in reviews
+    ]
+
+
 @app.post("/api/v1/cases/{case_id}/close", response_model=CaseResponse)
 def close_case_endpoint(
     case_id: uuid.UUID,
@@ -1016,6 +1058,8 @@ def get_case_history(
     if result is None:
         raise CASE_NOT_FOUND
     entries, total = result
+    # The reporter's account is never shown, not even to triagers: the reporter must not be exposed to retaliation.
+    entries = hide_reporter(entries)
     # Full details go to callers who can read every case (the triager). Everyone else sees action and time only.
     if "cases:read_all" not in permissions:
         entries = redact_history(entries)
