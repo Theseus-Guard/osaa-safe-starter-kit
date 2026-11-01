@@ -1,6 +1,8 @@
 // Thin client for the existing backend API, called through the gateway at /api/v1.
 // Tokens live in memory only. A page reload requires logging in again.
 
+import { recordActivity } from "./idle";
+
 export const ROLES = [
   "reporter",
   "triager",
@@ -189,6 +191,7 @@ async function toApiError(response: Response): Promise<ApiError> {
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  recordActivity();
   if (session && options.auth !== false && Date.now() - session.issuedAt > RENEW_AFTER_MS) {
     if (!(await refreshOnce())) {
       endSession();
