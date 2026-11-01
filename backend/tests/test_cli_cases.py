@@ -997,6 +997,14 @@ def test_classification_permission_denied_names_the_full_view_requirement(api, c
     assert "cases:read_all" in err
 
 
+def test_assign_refusal_names_the_assignable_permission_not_the_role_names(api, capsys):
+    api.route("POST", f"{CASE_PATH}/assignments", status=422, body={"detail": "assignee must be an investigator or reviewer"})
+    code, out, err = run(capsys, "case", "assign", CASE_ID, "--user-id", USER_ID, "--username", "alice")
+    assert code == 1
+    assert "cases:assignable" in err
+    assert "investigator" not in err
+
+
 def test_review_record_permission_denied_names_the_assignment_requirement(api, capsys):
     api.route("POST", f"{CASE_PATH}/reviews", status=403, body={"detail": "only an assigned reviewer can record a review"})
     code, out, err = run(capsys, "case", "review", "record", CASE_ID, "--outcome", "fail", "--username", "alice")

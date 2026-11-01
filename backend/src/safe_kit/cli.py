@@ -666,7 +666,7 @@ REOPEN_MESSAGES = {404: "case not found", 409: "the case is not closed, so it ca
 ASSIGN_MESSAGES = {
     404: "case not found",
     409: "the case is closed, or the user is already assigned to it",
-    422: "the user must be an active investigator or reviewer",
+    422: "the user must be active and hold the cases:assignable permission",
 }
 UNASSIGN_MESSAGES = {404: "case or assignment not found", 409: "the case is closed, so its assignments cannot change"}
 LINK_ADD_MESSAGES = {
@@ -1045,7 +1045,7 @@ def _add_case_update_commands(case_commands) -> None:
     _add_auth_options(reopen)
     reopen.set_defaults(handler=_case_reopen)
 
-    assign = case_commands.add_parser("assign", help="Assign an active investigator or reviewer to a case")
+    assign = case_commands.add_parser("assign", help="Assign an active user whose role holds cases:assignable to a case")
     assign.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     assign.add_argument("--user-id", required=True, metavar="USER_ID", help="ID (UUID) of the user to assign")
     _add_auth_options(assign)
