@@ -259,6 +259,58 @@ export function updateRolePermissions(role: Role, permissions: string[]): Promis
   });
 }
 
+// Cases. The caller sees only the cases they created. Times are UTC ISO strings.
+export interface DeadlineTask {
+  kind: string;
+  due_at: string;
+  status: string;
+}
+
+export interface CaseSummary {
+  id: string;
+  reference: string;
+  title: string;
+  awareness_time: string;
+  status: string;
+  created_at: string;
+}
+
+export interface CaseDetail {
+  id: string;
+  reference: string;
+  title: string;
+  awareness_time: string;
+  status: string;
+  calendar_version: string;
+  created_at: string;
+  deadlines: DeadlineTask[];
+}
+
+export interface CasePage {
+  items: CaseSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface CaseCreateBody {
+  title: string;
+  // Timezone-aware UTC ISO string. The backend rejects a time in the future.
+  awareness_time: string;
+}
+
+export function listCases(limit: number, offset: number): Promise<CasePage> {
+  return request<CasePage>(`/cases?limit=${limit}&offset=${offset}`);
+}
+
+export function getCase(caseId: string): Promise<CaseDetail> {
+  return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}`);
+}
+
+export function createCase(body: CaseCreateBody): Promise<CaseDetail> {
+  return request<CaseDetail>("/cases", { method: "POST", json: body });
+}
+
 // System timezone. Storage is always UTC; this only changes how times are displayed.
 export interface SystemTimezone {
   timezone: string | null;

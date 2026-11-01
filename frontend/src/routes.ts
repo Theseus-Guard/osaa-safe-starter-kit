@@ -1,9 +1,15 @@
 import { useEffect, useState } from "react";
 
-// Pages live in the URL hash (for example #/users) so refresh and back work without a router library.
-export const PAGES = ["overview", "users", "privacy", "roles", "settings", "account"] as const;
+// Pages live in the URL hash (for example #/users or #/cases/{id}) so refresh and back work without a router library.
+export const PAGES = ["overview", "cases", "users", "privacy", "roles", "settings", "account"] as const;
 
 export type Page = (typeof PAGES)[number];
+
+export interface Route {
+  page: Page;
+  // Set only on the case detail page, #/cases/{id}.
+  caseId: string | null;
+}
 
 interface PageInfo {
   label: string;
@@ -17,6 +23,12 @@ export const PAGE_INFO: Record<Page, PageInfo> = {
     label: "Overview",
     title: "Overview",
     description: "Your account at a glance.",
+    adminOnly: false,
+  },
+  cases: {
+    label: "Cases",
+    title: "Cases",
+    description: "Cases you have opened. Deadlines are calculated from the awareness time.",
     adminOnly: false,
   },
   users: {
@@ -51,25 +63,25 @@ export const PAGE_INFO: Record<Page, PageInfo> = {
   },
 };
 
-export function hashFor(page: Page): string {
-  return `#/${page}`;
+export function hashFor(page: Page, caseId: string | null = null): string {
+  return caseId === null ? `#/${page}` : `#/${page}/${encodeURIComponent(caseId)}`;
 }
 
 // Unknown hashes, and admin pages for non-admins, fall back to Overview.
-export function pageFromHash(hash: string, isAdmin: boolean): Page {
-  const name = hash.replace(/^#\/?/, "");
+export function routeFromHash(hash: string, isAdmin: boolean): Route {
+  const [name, id] = hash.replace(/^#\/?/, "").split("/");
   const match = PAGES.find((candidate) => candidate === name);
-  if (match === undefined) return "overview";
-  if (PAGE_INFO[match].adminOnly && !isAdmin) return "overview";
-  return match;
+  if (match === undefined) return { page: "overview", caseId: null };
+  if (PAGE_INFO[match].adminOnly && !isAdmin) return { page: "overview", caseId: null };
+  return { page: match, caseId: match === "cases" && id ? decodeURIComponent(id) : null };
 }
 
-export function useHashPage(isAdmin: boolean): Page {
-  const [page, setPage] = useState<Page>(() => pageFromHash(window.location.hash, isAdmin));
+export function useHashRoute(isAdmin: boolean): Route {
+  const [route, setRoute] = useState<Route>(() => routeFromHash(window.location.hash, isAdmin));
 
   useEffect(() => {
     function sync() {
-      setPage(pageFromHash(window.location.hash, isAdmin));
+      setRoute(routeFromHash(window.location.hash, isAdmin));
     }
     sync();
     window.addEventListener("hashchange", sync);
@@ -78,8 +90,9 @@ export function useHashPage(isAdmin: boolean): Page {
 
   useEffect(() => {
     // Rewrite unknown or missing hashes so the URL matches the page on screen. replaceState does not fire hashchange.
-    if (window.location.hash !== hashFor(page)) window.history.replaceState(null, "", hashFor(page));
-  }, [page]);
+    const expected = hashFor(route.page, route.caseId);
+    if (window.location.hash !== expected) window.history.replaceState(null, "", expected);
+  }, [route.page, route.caseId]);
 
-  return page;
+  return route;
 }

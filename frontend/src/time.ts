@@ -85,6 +85,45 @@ export function formatUtcPlain(isoUtc: string): string {
   return `${date.toISOString().slice(0, 16).replace("T", " ")} UTC`;
 }
 
+// Wall-clock date ("YYYY-MM-DD") and time ("HH:MM") of an instant in a timezone. Used to pre-fill form inputs.
+export function zonedParts(at: Date, timezone: string): { date: string; time: string } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: resolveZone(timezone),
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).formatToParts(at);
+  const field = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "00";
+  return {
+    date: `${field("year")}-${field("month")}-${field("day")}`,
+    time: `${field("hour")}:${field("minute")}`,
+  };
+}
+
+// Converts a wall-clock date and time in a timezone to a UTC ISO string.
+// Returns null for malformed input and for a local time that does not exist (the hour skipped by a DST change).
+export function zonedToUtcIso(date: string, time: string, timezone: string): string | null {
+  const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  const timeMatch = /^(\d{2}):(\d{2})$/.exec(time);
+  if (dateMatch === null || timeMatch === null) return null;
+  const wallAsUtc = Date.UTC(
+    Number(dateMatch[1]),
+    Number(dateMatch[2]) - 1,
+    Number(dateMatch[3]),
+    Number(timeMatch[1]),
+    Number(timeMatch[2]),
+  );
+  // Two passes settle the offset when the zone's offset changes near the target time.
+  let instant = wallAsUtc - offsetMinutes(timezone, new Date(wallAsUtc)) * 60_000;
+  instant = wallAsUtc - offsetMinutes(timezone, new Date(instant)) * 60_000;
+  const check = zonedParts(new Date(instant), timezone);
+  if (check.date !== date || check.time !== time) return null;
+  return new Date(instant).toISOString();
+}
+
 export function timeZoneOptions(): string[] {
   const zones = Intl.supportedValuesOf("timeZone");
   return zones.includes("UTC") ? zones : [...zones, "UTC"];

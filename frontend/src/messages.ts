@@ -20,6 +20,8 @@ const MESSAGES: Record<string, string> = {
   "system setup required": "System setup required. An administrator must set the system timezone before you can continue.",
   "timezone changed by someone else; reload": "The timezone was changed by someone else. Reload the page to see the current value.",
   "confirmation required": "Confirm the change before saving.",
+  "system timezone is not configured": "The system timezone is not set yet. An administrator must set it before cases can be created.",
+  "case not found": "No case with that ID is available to your account.",
   "nothing to change": "Choose a role or status change first.",
   "username is reserved": "That username is reserved. Choose another.",
   "username must be 3-64 characters: lowercase letters, digits, '.', '_' or '-'":

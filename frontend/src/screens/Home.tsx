@@ -1,6 +1,6 @@
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { changePassword, Me } from "../api";
-import { useHashPage } from "../routes";
+import { useHashRoute } from "../routes";
 import { SystemTimezoneProvider, useSystemTimezone } from "../system-timezone";
 import { AppShell } from "./AppShell";
 import { ChangePassword } from "./ChangePassword";
@@ -9,6 +9,8 @@ import { PrivacyPage } from "./admin/PrivacyPage";
 import { RolesMatrix } from "./admin/RolesMatrix";
 import { SettingsPage } from "./admin/SettingsPage";
 import { UsersPage } from "./admin/UsersPage";
+import { CaseDetailPage } from "./cases/CaseDetailPage";
+import { CasesPage } from "./cases/CasesPage";
 
 interface Props {
   profile: Me;
@@ -27,17 +29,22 @@ export function Home(props: Props) {
 
 function HomeView({ profile, notice, onLogout, onPasswordChanged }: Props) {
   const isAdmin = profile.role === "admin";
-  const page = useHashPage(isAdmin);
+  const { page, caseId } = useHashRoute(isAdmin);
   const { error } = useSystemTimezone();
+  const caseDetailHeading =
+    page === "cases" && caseId !== null
+      ? { title: "Case", description: "Case details. Times are shown in the system timezone." }
+      : undefined;
 
   return (
-    <AppShell profile={profile} page={page} onLogout={onLogout}>
+    <AppShell profile={profile} page={page} onLogout={onLogout} heading={caseDetailHeading}>
       {error && (
         <Alert variant="destructive">
           <AlertDescription>Times are shown in UTC until the system timezone loads. {error}</AlertDescription>
         </Alert>
       )}
       {page === "overview" && <Overview profile={profile} notice={notice} />}
+      {page === "cases" && (caseId === null ? <CasesPage /> : <CaseDetailPage caseId={caseId} />)}
       {page === "users" && isAdmin && <UsersPage currentUserId={profile.id} />}
       {page === "privacy" && isAdmin && <PrivacyPage />}
       {page === "roles" && isAdmin && <RolesMatrix editable />}

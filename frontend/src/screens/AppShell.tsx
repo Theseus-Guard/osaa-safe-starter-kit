@@ -25,13 +25,15 @@ interface Props {
   page: Page;
   onLogout: () => void;
   children: ReactNode;
+  // Overrides the page title and description, for example on a case detail page.
+  heading?: { title: string; description: string };
 }
 
-export function AppShell({ profile, page, onLogout, children }: Props) {
+export function AppShell({ profile, page, onLogout, children, heading }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const isAdmin = profile.role === "admin";
   const visiblePages = PAGES.filter((item) => isAdmin || !PAGE_INFO[item].adminOnly);
-  const info = PAGE_INFO[page];
+  const info = heading ?? PAGE_INFO[page];
 
   return (
     <div className="flex min-h-svh flex-col">
