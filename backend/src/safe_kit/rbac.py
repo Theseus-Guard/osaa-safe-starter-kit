@@ -16,6 +16,11 @@ ADMIN_REQUIRED_PERMISSIONS = frozenset({"users:manage", "users:reset_password", 
 
 ROLE_LOCK_KEY = 0x5AFE0004
 
+# The one role that may hold a reporter contact permission. Its grant is fixed: the matrix refuses to add or remove
+# any reporter_contact permission for this role, and the role row is read-only in the admin screen.
+REPORTING_OWNER_ROLE = "reporting_owner"
+FIXED_REPORTER_CONTACT_GRANT = frozenset({"reporter_contact:read"})
+
 DEFAULT_ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "reporter": frozenset({"cases:submit", "cases:read_own"}),
     "triager": frozenset(
@@ -25,6 +30,10 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "reviewer": frozenset({"cases:read_assigned", "cases:assignable", "evidence:read", "reviews:write"}),
     "disclosure_approver": frozenset({"disclosures:approve"}),
     "auditor": frozenset({"audit:read"}),
+    # Reads the reporter contact (the fixed grant, see REPORTING_OWNER_ROLE). cases:read_all is needed as well: the
+    # contact route checks case visibility, and only a read_all caller can see a reporter-channel case that has no
+    # assignee (cases.CaseScope.visibility_sql). It holds no triage, assign, evidence or review permission.
+    "reporting_owner": frozenset({"cases:read_all", "reporter_contact:read"}),
     # By design the admin role has no case permissions: platform administration
     # does not grant access to case content.
     "admin": ADMIN_REQUIRED_PERMISSIONS | {"privacy:read"},
@@ -42,8 +51,8 @@ class RoleOutcome(Enum):
 # Permissions that read or change case content, including the reporter contact. The admin role never holds them:
 # platform administration does not reach case content (see DEFAULT_ROLE_PERMISSIONS and plans/01, R08).
 CASE_CONTENT_PERMISSION_PREFIXES = ("cases:", "evidence:", "reviews:", "reporter_contact:", "disclosures:")
-# No role may hold a reporter contact permission. The contact is read only by the holders decided in F0/F2, so the
-# matrix refuses it for every role, administrators included, whatever the matrix contains today.
+# Only the reporting_owner role may hold a reporter contact permission, and only its fixed grant. The matrix refuses every
+# other reporter contact permission for every role, administrators included.
 REPORTER_CONTACT_PREFIX = "reporter_contact:"
 
 
@@ -96,7 +105,12 @@ def set_role_permissions(role: str, permissions: frozenset[str], actor_id: str |
             return RoleOutcome.ADMIN_GUARD
         if any(name.startswith(CASE_CONTENT_PERMISSION_PREFIXES) for name in permissions):
             return RoleOutcome.ADMIN_CASE_CONTENT
-    if any(name.startswith(REPORTER_CONTACT_PREFIX) for name in permissions):
+    requested_contact = {name for name in permissions if name.startswith(REPORTER_CONTACT_PREFIX)}
+    if role == REPORTING_OWNER_ROLE:
+        # The fixed grant is kept as it is. A request that drops it, or adds another contact permission, is refused.
+        if requested_contact != FIXED_REPORTER_CONTACT_GRANT:
+            return RoleOutcome.REPORTER_CONTACT_NOT_GRANTABLE
+    elif requested_contact:
         return RoleOutcome.REPORTER_CONTACT_NOT_GRANTABLE
     with connect() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (ROLE_LOCK_KEY,))
@@ -116,6 +130,12 @@ def set_role_permissions(role: str, permissions: frozenset[str], actor_id: str |
                 (role,),
             ).fetchall()
         }
+        if role == REPORTING_OWNER_ROLE and {name for name in current if name.startswith(REPORTER_CONTACT_PREFIX)} != (
+            FIXED_REPORTER_CONTACT_GRANT
+        ):
+            # The stored grant is not the fixed one (changed by hand). Saving through the matrix would add it back,
+            # which the matrix does not do.
+            return RoleOutcome.REPORTER_CONTACT_NOT_GRANTABLE
         granted = permissions - current
         revoked = current - permissions
         for permission in sorted(granted):

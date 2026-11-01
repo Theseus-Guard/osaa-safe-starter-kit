@@ -29,6 +29,7 @@ ROLES = frozenset(
         "disclosure_approver",
         "auditor",
         "admin",
+        "reporting_owner",
     }
 )
 
