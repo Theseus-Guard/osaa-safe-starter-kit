@@ -22,3 +22,6 @@ frontend/dist/
 !SECURITY.md
 !/gateway/README-TLS.md
 !ROADMAP.md
+!CONTRIBUTING.md
+!CODE_OF_CONDUCT.md
+!/.github/**/*.md
