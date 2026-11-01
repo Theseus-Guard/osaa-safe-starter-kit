@@ -494,6 +494,34 @@ describe("case and evidence endpoints", () => {
     expect(bodyOf(1)).toEqual({ user_id: "user-2" });
   });
 
+  it("lists the links of a case", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, []));
+
+    await api.listCaseLinks("case-1");
+
+    expect(urlOf(0)).toBe("/api/v1/cases/case-1/links");
+    expect(methodOf(0)).toBe("GET");
+  });
+
+  it("adds a link with the linked case ID in the body", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(201, {}));
+
+    await api.addCaseLink("case-1", "case-2");
+
+    expect(urlOf(0)).toBe("/api/v1/cases/case-1/links");
+    expect(methodOf(0)).toBe("POST");
+    expect(bodyOf(0)).toEqual({ linked_case_id: "case-2" });
+  });
+
+  it("removes a link by the linked case ID and encodes the segment", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    await api.removeCaseLink("case-1", "case 2/x");
+
+    expect(urlOf(0)).toBe("/api/v1/cases/case-1/links/case%202%2Fx");
+    expect(methodOf(0)).toBe("DELETE");
+  });
+
   it("reads the reporter contact of a case", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { case_id: "case/1", contact: "example@example.com" }));
 

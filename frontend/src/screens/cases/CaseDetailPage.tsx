@@ -3,6 +3,7 @@ import { CaseDetail, getCase } from "../../api";
 import { describeError } from "../../messages";
 import { caseAbilities } from "../../permissions";
 import { CaseAssignments } from "./CaseAssignments";
+import { CaseLinks } from "./CaseLinks";
 import { CaseAwarenessEvents } from "./CaseAwarenessEvents";
 import { CaseClassification } from "./CaseClassification";
 import { CaseClosure } from "./CaseClosure";
@@ -126,6 +127,8 @@ export function CaseDetailPage({ caseId, permissions }: Props) {
           />
 
           <CaseAssignments caseId={detail.id} closed={closed} canAssign={abilities.canAssign} />
+
+          <CaseLinks caseId={detail.id} closed={closed} canWrite={abilities.canWriteRecords} />
 
           {/* Keyed by case so a contact read for one case never shows on another. Nothing is read until the button is pressed. */}
           {abilities.canReadReporterContact && <CaseReporterContact key={detail.id} caseId={detail.id} />}
