@@ -178,6 +178,58 @@ describe("401 handling", () => {
   });
 });
 
+describe("renewal before the refresh token expires", () => {
+  const FIVE_MINUTES = 5 * 60 * 1000;
+
+  it("renews the pair before a request made after five minutes", async () => {
+    vi.useFakeTimers();
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, TOKENS_1))
+      .mockResolvedValueOnce(jsonResponse(200, TOKENS_2))
+      .mockResolvedValueOnce(jsonResponse(200, ME));
+
+    await api.login("example-user", "example-password");
+    vi.advanceTimersByTime(FIVE_MINUTES + 1);
+    await api.me();
+
+    expect(urlOf(1)).toBe("/api/v1/auth/refresh");
+    expect(JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string)).toEqual({
+      refresh_token: "refresh-1",
+    });
+    expect(authorizationOf(2)).toBe("Bearer access-2");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not renew a pair that was issued less than five minutes ago", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, TOKENS_1)).mockResolvedValueOnce(jsonResponse(200, ME));
+
+    await api.login("example-user", "example-password");
+    vi.advanceTimersByTime(FIVE_MINUTES - 1000);
+    await api.me();
+
+    expect(urlOf(1)).toBe("/api/v1/auth/me");
+    expect(authorizationOf(1)).toBe("Bearer access-1");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("ends the session on the request when the refresh token has already expired", async () => {
+    vi.useFakeTimers();
+    const listener = vi.fn();
+    api.onSessionEnded(listener);
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, TOKENS_1))
+      .mockResolvedValueOnce(jsonResponse(401, { detail: "invalid refresh token" }));
+
+    await api.login("example-user", "example-password");
+    vi.advanceTimersByTime(FIVE_MINUTES + 1);
+
+    await expect(api.me()).rejects.toMatchObject({ status: 401, code: "session_expired" });
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("responses and error mapping", () => {
   it("returns undefined for a 204 response and encodes the path segment", async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));

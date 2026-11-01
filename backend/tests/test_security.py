@@ -52,6 +52,13 @@ def test_default_access_token_lifetime_is_60_minutes(signing_key, monkeypatch):
     assert expires_at - datetime.now(UTC) == pytest.approx(timedelta(minutes=60), abs=timedelta(seconds=5))
 
 
+def test_refresh_token_lifetime_matches_the_access_token_by_default(monkeypatch):
+    # Both start at issue time, so the frontend renews the pair before the access token expires.
+    monkeypatch.delenv("SAFE_REFRESH_TTL_MINUTES", raising=False)
+    assert security.refresh_token_ttl() == timedelta(minutes=60)
+    assert security.refresh_token_ttl() == security.access_token_ttl()
+
+
 def test_expired_token_is_rejected(signing_key, monkeypatch):
     monkeypatch.setenv("SAFE_ACCESS_TTL_MINUTES", "-1")
     token, _ = security.issue_access_token("user-1", "alice", "triager")
