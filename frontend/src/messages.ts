@@ -34,6 +34,8 @@ const MESSAGES: Record<string, string> = {
     "Usernames must be 3-64 characters: lowercase letters, digits, '.', '_' or '-'.",
   "case is closed": "This case is closed.",
   "case is not closed": "This case is not closed, so it cannot be reopened.",
+  reporter_contact_window_closed:
+    "The reporter contact can no longer be read. It is available while the case is open and for 72 hours after it was closed.",
   "only an assigned reviewer can record a review": "Only an assigned reviewer can record a review on this case.",
   "deadline task not found": "That deadline task does not exist on this case.",
   "legal duty not found": "That legal duty does not exist on this case.",

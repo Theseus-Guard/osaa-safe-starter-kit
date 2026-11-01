@@ -11,6 +11,9 @@ that actor is the reporter. Retaliation is a risk for the reporter, so the rule 
 The contact is returned only by read_reporter_contact, to a caller with reporter_contact:read, and every read writes
 an audit row in the same transaction. Reporter-channel cases are hidden from read_all callers until they are assigned
 (see cases.CaseScope.visibility_sql).
+
+The contact can be read while the case is open, or within REPORTER_CONTACT_WINDOW_HOURS after its latest closure. A
+case closed longer ago refuses the read, and a refused read writes no audit row. A reopened case is open again.
 """
 
 from collections.abc import Sequence
@@ -25,6 +28,10 @@ from safe_kit.db import connect
 # Written for every successful read of a reporter contact. The row targets the case, so the case history shows it.
 REPORTER_CONTACT_READ = "reporter_contact.read"
 
+# How long after a closure the reporter contact can still be read. The clock is the database clock, as is the
+# changed_at of case_status_changes, which holds the closure time.
+REPORTER_CONTACT_WINDOW_HOURS = 72
+
 
 class ContactOutcome(Enum):
     OK = "ok"
@@ -32,6 +39,8 @@ class ContactOutcome(Enum):
     NOT_FOUND = "not_found"
     # The case is visible but was not opened through the reporter channel, so it has no reporter contact.
     NO_REPORTER = "no_reporter"
+    # The case was closed more than REPORTER_CONTACT_WINDOW_HOURS ago. Nothing is read or audited.
+    WINDOW_CLOSED = "window_closed"
 
 
 def submit_report(title: str, awareness_time: datetime, contact: str | None, reporter_id: str) -> Case:
@@ -45,11 +54,33 @@ def submit_report(title: str, awareness_time: datetime, contact: str | None, rep
     return case
 
 
+def _contact_window_open(conn, case_id: str) -> bool:
+    """True while the case is open, or closed less than REPORTER_CONTACT_WINDOW_HOURS ago.
+
+    The closure time is the newest 'closed' row of case_status_changes. A case closed, reopened, and closed again is
+    counted from the second closure. A closed case with no closure row is refused.
+    """
+    row = conn.execute(
+        """
+        SELECT c.status = 'open' OR COALESCE(
+            (SELECT max(csc.changed_at) FROM case_status_changes csc
+             WHERE csc.case_id = c.id AND csc.action = 'closed' AND NOT csc.is_deleted)
+            >= now() - make_interval(hours => %s),
+            false)
+        FROM cases c
+        WHERE c.id = %s
+        """,
+        (REPORTER_CONTACT_WINDOW_HOURS, case_id),
+    ).fetchone()
+    return row is not None and bool(row[0])
+
+
 def read_reporter_contact(case_id: str, scope: CaseScope) -> tuple[ContactOutcome, str | None]:
     """The contact the reporter gave for an active case, and an audit row for the read.
 
-    The visibility check and the audit row share one transaction, so a read is never logged without its case check.
-    The caller is checked for reporter_contact:read by the route, before this function runs.
+    The visibility check, the window check, and the audit row share one transaction, so a read is never logged without
+    its case check. A refused read (window closed) writes no audit row. The caller is checked for reporter_contact:read
+    by the route, before this function runs.
     """
     with connect() as conn:
         if not cases.is_visible_on(conn, case_id, scope):
@@ -60,6 +91,8 @@ def read_reporter_contact(case_id: str, scope: CaseScope) -> tuple[ContactOutcom
         ).fetchone()
         if row is None:
             return ContactOutcome.NO_REPORTER, None
+        if not _contact_window_open(conn, case_id):
+            return ContactOutcome.WINDOW_CLOSED, None
         audit.record(conn, REPORTER_CONTACT_READ, "case", case_id, actor_id=scope.user_id)
     return ContactOutcome.OK, row[0]
 
