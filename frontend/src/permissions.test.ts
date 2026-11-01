@@ -51,7 +51,13 @@ describe("permissions", () => {
       canReadRecords: true,
       canWriteRecords: true,
       canReadFullView: true,
+      canReadReporterContact: false,
     });
+  });
+
+  it("lets only reporter_contact:read open the reporter contact", () => {
+    expect(caseAbilities(["reporter_contact:read"]).canReadReporterContact).toBe(true);
+    expect(caseAbilities(["cases:read_all", "cases:assign"]).canReadReporterContact).toBe(false);
   });
 
   it("lets a reporter submit cases but not change them", () => {

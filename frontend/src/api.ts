@@ -458,6 +458,22 @@ export function removeAssignment(caseId: string, userId: string): Promise<void> 
   });
 }
 
+// Needs reporter_contact:read. Every call is written to the audit log, so call it only on an explicit user action.
+// Resolves to null when no contact is recorded: the reporter gave none, or the case was not opened through the reporter channel.
+export async function getReporterContact(caseId: string): Promise<string | null> {
+  try {
+    const body = await request<{ case_id: string; contact: string | null }>(
+      `/reports/${encodeURIComponent(caseId)}/contact`,
+    );
+    return body.contact;
+  } catch (caught) {
+    if (caught instanceof ApiError && caught.status === 404 && caught.code === "reporter contact not found") {
+      return null;
+    }
+    throw caught;
+  }
+}
+
 // One audit entry. Actor and details are null for a caller without full case access.
 export interface HistoryEntry {
   id: string;

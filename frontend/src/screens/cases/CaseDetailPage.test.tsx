@@ -11,6 +11,7 @@ import {
   getCaseHistory,
   getClassification,
   getPreliminaryReport,
+  getReporterContact,
   listAssignments,
   listAwarenessEvents,
   listEvidence,
@@ -36,6 +37,7 @@ vi.mock("../../api", async (importOriginal) => {
     listLegalDuties: vi.fn(),
     getClassification: vi.fn(),
     getPreliminaryReport: vi.fn(),
+    getReporterContact: vi.fn(),
   };
 });
 
@@ -57,6 +59,7 @@ const impacts = vi.mocked(listImpacts);
 const legalDuties = vi.mocked(listLegalDuties);
 const classification = vi.mocked(getClassification);
 const report = vi.mocked(getPreliminaryReport);
+const read = vi.mocked(getReporterContact);
 
 const NO_CLASSIFICATION: Classification = {
   case_id: "case-1",
@@ -153,6 +156,7 @@ beforeEach(() => {
   legalDuties.mockReset().mockResolvedValue([]);
   classification.mockReset().mockResolvedValue(NO_CLASSIFICATION);
   report.mockReset().mockResolvedValue(EMPTY_REPORT);
+  read.mockReset();
 });
 
 describe("CaseDetailPage", () => {
@@ -320,5 +324,20 @@ describe("CaseDetailPage", () => {
     expect(screen.queryByRole("button", { name: "Add awareness event" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add legal duty" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit classification" })).not.toBeInTheDocument();
+  });
+
+  it("offers the reporter contact to a caller with reporter_contact:read, without reading it on load", async () => {
+    render(<CaseDetailPage caseId="case-1" permissions={["cases:read_all", "reporter_contact:read"]} />);
+
+    expect(await screen.findByRole("button", { name: "Show reporter contact" })).toBeInTheDocument();
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("hides the reporter contact without reporter_contact:read", async () => {
+    render(<CaseDetailPage caseId="case-1" permissions={FULL_ACCESS} />);
+
+    await screen.findByText("Example incident");
+    expect(screen.queryByRole("button", { name: "Show reporter contact" })).not.toBeInTheDocument();
+    expect(read).not.toHaveBeenCalled();
   });
 });
