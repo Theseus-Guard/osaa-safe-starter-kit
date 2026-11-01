@@ -524,3 +524,471 @@ def test_import_file_over_the_limit_is_refused_before_any_request(api, capsys, t
     assert code == 2
     assert api.calls == []
     assert "larger than" in err
+
+
+# --- case update commands ---
+
+USER_ID = "66666666-7777-4888-8999-aaaaaaaaaaaa"
+DUTY_ID = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"
+CASE_PATH = f"/api/v1/cases/{CASE_ID}"
+DUTY_PATH = f"{CASE_PATH}/legal-duties/{DUTY_ID}"
+CASE_UPDATED_AT = "2026-10-31T11:00:00Z"
+REVIEW_BODY = {
+    "id": "cccccccc-dddd-4eee-8fff-000000000001",
+    "case_id": CASE_ID,
+    "outcome": "pass",
+    "note": "Checked",
+    "created_at": CASE_UPDATED_AT,
+}
+ASSIGNMENT_BODY = {
+    "id": "cccccccc-dddd-4eee-8fff-000000000002",
+    "case_id": CASE_ID,
+    "user_id": USER_ID,
+    "username": "bob",
+    "role": "investigator",
+    "assigned_by": "alice",
+    "assigned_at": CASE_UPDATED_AT,
+}
+IMPACT_BODY = {
+    "area": "severity",
+    "assessed": True,
+    "severity": "high",
+    "scope": "Customer records",
+    "updated_at": CASE_UPDATED_AT,
+}
+DUTY_BODY = {
+    "id": DUTY_ID,
+    "case_id": CASE_ID,
+    "kind": "statutory",
+    "description": "Notify the regulator",
+    "source_reference": "Art. 33",
+    "jurisdiction": "EU",
+    "due_at": "2026-11-02T09:00:00Z",
+    "status": "open",
+    "created_by": "alice",
+    "created_at": CASE_UPDATED_AT,
+}
+AWARENESS_BODY = {
+    "id": "cccccccc-dddd-4eee-8fff-000000000003",
+    "case_id": CASE_ID,
+    "awareness_kind": "operator",
+    "event_kind": "incident",
+    "occurred_at": "2026-10-30T09:00:00Z",
+    "basis": "Log review",
+    "recorded_by": "alice",
+    "created_at": CASE_UPDATED_AT,
+}
+
+
+def classification_body(version: int = 2) -> dict:
+    return {
+        "case_id": CASE_ID,
+        "version": version,
+        "triggers": ["boundary_escape"],
+        "event_kind": "incident",
+        "internal_incident_option": False,
+        "classification_rationale": None,
+        "responsible_operator": None,
+        "affected_versions": None,
+        "approved_scope": None,
+        "scope_permission_source": None,
+        "containment": None,
+        "evidence_gap_plan": None,
+        "next_update_due_at": None,
+        "created_by": "alice",
+        "created_at": CASE_UPDATED_AT,
+    }
+
+
+def empty_classification_payload(expected_version: int) -> dict:
+    """A save with no optional field: every field is sent, and the omitted ones are empty or null."""
+    return {
+        "expected_version": expected_version,
+        "triggers": [],
+        "event_kind": None,
+        "internal_incident_option": False,
+        "classification_rationale": None,
+        "responsible_operator": None,
+        "affected_versions": None,
+        "approved_scope": None,
+        "scope_permission_source": None,
+        "containment": None,
+        "evidence_gap_plan": None,
+        "next_update_due_at": None,
+    }
+
+
+# argv, method, path, payload sent, success status, success body, text shown on success, text for a 409
+COMMAND_CASES = [
+    pytest.param(
+        ("case", "close", CASE_ID, "--reason", "Resolved"),
+        "POST", f"{CASE_PATH}/close", {"reason": "Resolved"}, 200, CASE_BODY,
+        "Case closed.", "cannot be closed now", id="close",
+    ),
+    pytest.param(
+        ("case", "reopen", CASE_ID, "--reason", "Reported again"),
+        "POST", f"{CASE_PATH}/reopen", {"reason": "Reported again"}, 200, CASE_BODY,
+        "Case reopened.", "not closed", id="reopen",
+    ),
+    pytest.param(
+        ("case", "assign", CASE_ID, "--user-id", USER_ID),
+        "POST", f"{CASE_PATH}/assignments", {"user_id": USER_ID}, 201, ASSIGNMENT_BODY,
+        "Assignment added.", "already assigned", id="assign",
+    ),
+    pytest.param(
+        ("case", "unassign", CASE_ID, "--user-id", USER_ID),
+        "DELETE", f"{CASE_PATH}/assignments/{USER_ID}", None, 204, None,
+        "Assignment removed.", "cannot change", id="unassign",
+    ),
+    pytest.param(
+        ("case", "review", "record", CASE_ID, "--outcome", "pass", "--note", "Checked"),
+        "POST", f"{CASE_PATH}/reviews", {"outcome": "pass", "note": "Checked"}, 201, REVIEW_BODY,
+        "Review recorded.", "no review can be recorded", id="review-record",
+    ),
+    pytest.param(
+        ("case", "classification", "set", CASE_ID, "--expected-version", "1"),
+        "PUT", f"{CASE_PATH}/classification", empty_classification_payload(1), 200, classification_body(),
+        "Classification saved as version 2.", "cannot change", id="classification-set",
+    ),
+    pytest.param(
+        ("case", "impact", "set", CASE_ID, "severity", "--severity", "high", "--scope", "Customer records"),
+        "PUT", f"{CASE_PATH}/impacts/severity", {"severity": "high", "scope": "Customer records"}, 200, IMPACT_BODY,
+        "Impact area severity saved.", "impact assessment cannot change", id="impact-set",
+    ),
+    pytest.param(
+        (
+            "case", "legal-duty", "add", CASE_ID,
+            "--kind", "statutory", "--description", "Notify the regulator", "--source-reference", "Art. 33",
+            "--jurisdiction", "EU", "--due-at", "2026-11-02T09:00:00Z",
+        ),
+        "POST", f"{CASE_PATH}/legal-duties",
+        {
+            "kind": "statutory",
+            "description": "Notify the regulator",
+            "source_reference": "Art. 33",
+            "jurisdiction": "EU",
+            "due_at": "2026-11-02T09:00:00+00:00",
+        },
+        201, DUTY_BODY,
+        "Legal duty added.", "legal duties cannot change", id="legal-duty-add",
+    ),
+    pytest.param(
+        ("case", "legal-duty", "update", CASE_ID, DUTY_ID, "--status", "done"),
+        "PATCH", DUTY_PATH, {"status": "done"}, 200, DUTY_BODY,
+        "Legal duty updated.", "legal duties cannot change", id="legal-duty-update",
+    ),
+    pytest.param(
+        (
+            "case", "awareness", "add", CASE_ID,
+            "--awareness-kind", "operator", "--event-kind", "incident",
+            "--occurred-at", "2026-10-30T09:00:00Z", "--basis", "Log review",
+        ),
+        "POST", f"{CASE_PATH}/awareness-events",
+        {
+            "awareness_kind": "operator",
+            "event_kind": "incident",
+            "occurred_at": "2026-10-30T09:00:00+00:00",
+            "basis": "Log review",
+        },
+        201, AWARENESS_BODY,
+        "Awareness event recorded.", "no awareness event", id="awareness-add",
+    ),
+]
+
+
+@pytest.mark.parametrize("argv, method, path, payload, status, body, heading, conflict", COMMAND_CASES)
+def test_case_update_sends_the_request_and_ends_the_session(
+    api, capsys, argv, method, path, payload, status, body, heading, conflict
+):
+    api.route(method, path, status=status, body=body)
+    code, out, err = run(capsys, *argv, "--username", "alice")
+    assert code == 0, err
+    assert heading in out
+    assert api.paths() == [("POST", "/api/v1/auth/token"), (method, path), ("POST", "/api/v1/auth/logout")]
+    assert api.calls[1]["headers"]["Authorization"] == f"Bearer {ACCESS}"
+    assert api.calls[1]["json"] == payload
+    assert api.calls[2]["json"] == {"refresh_token": REFRESH}
+    assert err == ""
+
+
+@pytest.mark.parametrize("argv, method, path, payload, status, body, heading, conflict", COMMAND_CASES)
+def test_case_update_permission_denied_is_reported_and_the_session_ends(
+    api, capsys, argv, method, path, payload, status, body, heading, conflict
+):
+    api.route(method, path, status=403, body={"detail": "forbidden"})
+    code, out, err = run(capsys, *argv, "--username", "alice")
+    assert code == 1
+    assert out == ""
+    assert "error: forbidden" in err
+    assert api.paths()[-1] == ("POST", "/api/v1/auth/logout")
+
+
+@pytest.mark.parametrize("argv, method, path, payload, status, body, heading, conflict", COMMAND_CASES)
+def test_case_update_conflict_uses_the_command_message(
+    api, capsys, argv, method, path, payload, status, body, heading, conflict
+):
+    api.route(method, path, status=409, body={"detail": "case is closed"})
+    code, out, err = run(capsys, *argv, "--username", "alice")
+    assert code == 1
+    assert out == ""
+    assert conflict in err
+    # Never the timezone text that the create command uses for 409.
+    assert "timezone" not in err
+    assert api.paths()[-1] == ("POST", "/api/v1/auth/logout")
+
+
+@pytest.mark.parametrize("argv, method, path, payload, status, body, heading, conflict", COMMAND_CASES)
+def test_case_update_password_change_required_stops_before_the_write(
+    api, capsys, argv, method, path, payload, status, body, heading, conflict
+):
+    api.route("POST", "/api/v1/auth/token", body=token_body(password_change_required=True))
+    api.route(method, path, status=status, body=body)
+    code, out, err = run(capsys, *argv, "--username", "alice")
+    assert code == 1
+    assert "change your password" in err
+    assert (method, path) not in api.paths()
+    assert api.paths()[-1] == ("POST", "/api/v1/auth/logout")
+
+
+@pytest.mark.parametrize(
+    "argv, method, path, payload, status, body, heading, conflict",
+    [case for case in COMMAND_CASES if case.id in ("close", "review-record", "classification-set")],
+)
+def test_case_update_secrets_never_reach_the_output(
+    api, capsys, argv, method, path, payload, status, body, heading, conflict
+):
+    api.route(method, path, status=status, body=body)
+    code, out, err = run(capsys, *argv, "--username", "alice")
+    assert code == 0
+    for secret in (ACCESS, REFRESH, PASSWORD):
+        assert secret not in out
+        assert secret not in err
+
+
+@pytest.mark.parametrize(
+    "argv, method, path, body",
+    [
+        (("case", "close", CASE_ID, "--reason", "Resolved", "--json"), "POST", f"{CASE_PATH}/close", CASE_BODY),
+        (("case", "review", "record", CASE_ID, "--outcome", "pass", "--json"), "POST", f"{CASE_PATH}/reviews",
+         REVIEW_BODY),
+        (("case", "impact", "set", CASE_ID, "scale", "--severity", "low", "--scope", "x", "--json"), "PUT",
+         f"{CASE_PATH}/impacts/scale", IMPACT_BODY),
+        (("case", "legal-duty", "add", CASE_ID, "--kind", "contractual", "--description", "d",
+          "--source-reference", "s", "--due-at", "2026-11-02T09:00:00Z", "--json"), "POST",
+         f"{CASE_PATH}/legal-duties", DUTY_BODY),
+    ],
+)
+def test_case_update_json_prints_the_api_body_exactly(api, capsys, argv, method, path, body):
+    api.route(method, path, status=201, body=body)
+    code, out, err = run(capsys, *argv, "--username", "alice")
+    assert code == 0
+    assert out == compact(body).decode("utf-8") + "\n"
+    assert err == ""
+
+
+def test_unassign_sends_a_delete_with_no_body(api, capsys):
+    api.route("DELETE", f"{CASE_PATH}/assignments/{USER_ID}", status=204)
+    code, out, err = run(capsys, "case", "unassign", CASE_ID, "--user-id", USER_ID, "--username", "alice")
+    assert code == 0
+    assert api.calls[1]["method"] == "DELETE"
+    assert api.calls[1]["json"] is None
+
+
+def test_unassign_has_no_json_flag(api, capsys):
+    code, out, err = run(capsys, "case", "unassign", CASE_ID, "--user-id", USER_ID, "--username", "alice", "--json")
+    assert code == 2
+    assert api.calls == []
+
+
+def test_close_sends_the_reason_as_given(api, capsys):
+    api.route("POST", f"{CASE_PATH}/close", body=CASE_BODY)
+    code, out, err = run(capsys, "case", "close", CASE_ID, "--reason", "  Resolved  ", "--username", "alice")
+    assert code == 0
+    # Trimming and the rules for blank reasons are the API's job; the CLI sends the text as typed.
+    assert api.calls[1]["json"] == {"reason": "  Resolved  "}
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("case", "close", CASE_ID),
+        ("case", "reopen", CASE_ID),
+        ("case", "assign", CASE_ID),
+        ("case", "review", "record", CASE_ID, "--outcome", "maybe"),
+        ("case", "impact", "set", CASE_ID, "votes", "--severity", "low", "--scope", "x"),
+        ("case", "awareness", "add", CASE_ID, "--awareness-kind", "operator", "--event-kind", "incident"),
+        ("case", "legal-duty", "add", CASE_ID, "--kind", "statutory"),
+        ("case", "classification", "set", CASE_ID),
+    ],
+)
+def test_missing_or_invalid_arguments_are_usage_errors_without_a_request(api, capsys, argv):
+    code, out, err = run(capsys, *argv, "--username", "alice")
+    assert code == 2
+    assert api.calls == []
+
+
+@pytest.mark.parametrize("option", ["assign", "unassign"])
+def test_user_id_must_be_a_uuid_before_any_request(api, capsys, option):
+    code, out, err = run(capsys, "case", option, CASE_ID, "--user-id", "bob", "--username", "alice")
+    assert code == 2
+    assert api.calls == []
+    assert "--user-id must be a UUID" in err
+
+
+def test_duty_id_must_be_a_uuid_before_any_request(api, capsys):
+    code, out, err = run(
+        capsys, "case", "legal-duty", "update", CASE_ID, "not-a-duty", "--status", "done", "--username", "alice"
+    )
+    assert code == 2
+    assert api.calls == []
+    assert "DUTY_ID must be a UUID" in err
+
+
+def test_legal_duty_update_without_a_field_is_a_usage_error(api, capsys):
+    code, out, err = run(capsys, "case", "legal-duty", "update", CASE_ID, DUTY_ID, "--username", "alice")
+    assert code == 2
+    assert api.calls == []
+    assert "give at least one field" in err
+
+
+def test_legal_duty_update_sends_only_the_fields_given(api, capsys):
+    api.route("PATCH", DUTY_PATH, body=DUTY_BODY)
+    code, out, err = run(
+        capsys, "case", "legal-duty", "update", CASE_ID, DUTY_ID,
+        "--due-at", "2026-11-05T12:00:00+03:00", "--jurisdiction", "", "--username", "alice",
+    )
+    assert code == 0
+    # An empty jurisdiction is sent as an empty string, which the API reads as a clear.
+    assert api.calls[1]["json"] == {"due_at": "2026-11-05T12:00:00+03:00", "jurisdiction": ""}
+
+
+@pytest.mark.parametrize("option, value", [("--occurred-at", "2026-10-30T09:00:00"), ("--due-at", "2026-11-02T09:00:00")])
+def test_timestamps_without_a_timezone_are_usage_errors(api, capsys, option, value):
+    argv = ["case", "legal-duty", "add", CASE_ID, "--kind", "statutory", "--description", "d",
+            "--source-reference", "s", "--due-at", value]
+    if option == "--occurred-at":
+        argv = ["case", "awareness", "add", CASE_ID, "--awareness-kind", "operator", "--event-kind", "incident",
+                "--occurred-at", value, "--basis", "b"]
+    code, out, err = run(capsys, *argv, "--username", "alice")
+    assert code == 2
+    assert api.calls == []
+    assert "must include a timezone" in err
+
+
+def test_awareness_occurred_at_in_the_future_is_refused_before_any_request(api, capsys):
+    code, out, err = run(
+        capsys, "case", "awareness", "add", CASE_ID, "--awareness-kind", "operator", "--event-kind", "incident",
+        "--occurred-at", future_time(), "--basis", "b", "--username", "alice",
+    )
+    assert code == 2
+    assert api.calls == []
+    assert "--occurred-at cannot be in the future" in err
+
+
+def test_classification_set_sends_every_field(api, capsys):
+    api.route("PUT", f"{CASE_PATH}/classification", body=classification_body(version=4))
+    code, out, err = run(
+        capsys, "case", "classification", "set", CASE_ID,
+        "--expected-version", "3",
+        "--trigger", "boundary_escape", "--trigger", "confidential_data_exposure",
+        "--event-kind", "near_miss",
+        "--internal-incident-option", "--classification-rationale", "Within the plan",
+        "--responsible-operator", "Ops", "--affected-versions", "1.2",
+        "--approved-scope", "Scope A", "--scope-permission-source", "Contract 7",
+        "--containment", "Keys rotated", "--evidence-gap-plan", "Pull logs",
+        "--next-update-due-at", "2026-11-02T09:00:00Z",
+        "--username", "alice",
+    )
+    assert code == 0, err
+    assert "Classification saved as version 4." in out
+    assert api.calls[1]["json"] == {
+        "expected_version": 3,
+        "triggers": ["boundary_escape", "confidential_data_exposure"],
+        "event_kind": "near_miss",
+        "internal_incident_option": True,
+        "classification_rationale": "Within the plan",
+        "responsible_operator": "Ops",
+        "affected_versions": "1.2",
+        "approved_scope": "Scope A",
+        "scope_permission_source": "Contract 7",
+        "containment": "Keys rotated",
+        "evidence_gap_plan": "Pull logs",
+        "next_update_due_at": "2026-11-02T09:00:00+00:00",
+    }
+
+
+def test_classification_set_clears_every_field_that_is_not_given(api, capsys):
+    api.route("PUT", f"{CASE_PATH}/classification", body=classification_body(version=1))
+    code, out, err = run(capsys, "case", "classification", "set", CASE_ID, "--expected-version", "0", "--username", "alice")
+    assert code == 0
+    assert api.calls[1]["json"] == empty_classification_payload(0)
+
+
+def test_classification_set_requires_expected_version(api, capsys):
+    code, out, err = run(capsys, "case", "classification", "set", CASE_ID, "--username", "alice")
+    assert code == 2
+    assert api.calls == []
+    assert "--expected-version" in err
+
+
+def test_classification_set_refuses_a_negative_expected_version(api, capsys):
+    code, out, err = run(
+        capsys, "case", "classification", "set", CASE_ID, "--expected-version", "-1", "--username", "alice"
+    )
+    assert code == 2
+    assert api.calls == []
+
+
+def test_classification_set_rejects_an_unknown_trigger(api, capsys):
+    code, out, err = run(
+        capsys, "case", "classification", "set", CASE_ID, "--expected-version", "0",
+        "--trigger", "not_a_trigger", "--username", "alice",
+    )
+    assert code == 2
+    assert api.calls == []
+
+
+def test_classification_stale_save_prints_the_current_version_and_does_not_retry(api, capsys):
+    api.route(
+        "PUT",
+        f"{CASE_PATH}/classification",
+        status=409,
+        body={"detail": "classification changed: the current version is 3; reload and retry"},
+    )
+    code, out, err = run(
+        capsys, "case", "classification", "set", CASE_ID, "--expected-version", "2", "--username", "alice"
+    )
+    assert code == 1
+    assert out == ""
+    assert "The current version is 3" in err
+    assert "--expected-version 3" in err
+    assert "Re-read" in err
+    # One save only: the command never retries on its own.
+    assert api.paths().count(("PUT", f"{CASE_PATH}/classification")) == 1
+    assert api.paths()[-1] == ("POST", "/api/v1/auth/logout")
+
+
+def test_classification_closed_case_conflict_uses_the_closed_message(api, capsys):
+    api.route("PUT", f"{CASE_PATH}/classification", status=409, body={"detail": "case is closed"})
+    code, out, err = run(
+        capsys, "case", "classification", "set", CASE_ID, "--expected-version", "2", "--username", "alice"
+    )
+    assert code == 1
+    assert "the case is closed, so the classification cannot change" in err
+    assert "current version" not in err
+
+
+def test_classification_permission_denied_names_the_full_view_requirement(api, capsys):
+    api.route("PUT", f"{CASE_PATH}/classification", status=403, body={"detail": "classification_requires_full_view"})
+    code, out, err = run(
+        capsys, "case", "classification", "set", CASE_ID, "--expected-version", "2", "--username", "alice"
+    )
+    assert code == 1
+    assert "cases:read_all" in err
+
+
+def test_review_record_permission_denied_names_the_assignment_requirement(api, capsys):
+    api.route("POST", f"{CASE_PATH}/reviews", status=403, body={"detail": "only an assigned reviewer can record a review"})
+    code, out, err = run(capsys, "case", "review", "record", CASE_ID, "--outcome", "fail", "--username", "alice")
+    assert code == 1
+    assert "assigned to the case" in err
