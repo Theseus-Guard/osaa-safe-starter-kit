@@ -11,6 +11,7 @@ Every release entry states the **SAFE compatibility baseline**: the SAFE version
 ### Added
 - Single-organization self-hosted stack (Docker Compose): PostgreSQL, one-shot migrations, API, worker, nginx gateway, container CLI.
 - Username and password login with Bearer JWT, refresh-token rotation, logout, rate limiting, forced password change.
+- Password policy: passwords expire after 180 days, and a new password may not reuse the last three passwords or any temporary password issued to the account.
 - First admin created once from the command line; first admin is protected and cannot be disabled, deleted, or demoted.
 - Admin user management: list, role and status changes, soft delete, password reset. Editable role-permission matrix.
 - Soft delete for every table, with `created_at`, `updated_at`, `deleted_at`, `is_deleted`.
@@ -21,6 +22,7 @@ Every release entry states the **SAFE compatibility baseline**: the SAFE version
 - React and TypeScript web UI, container CLI with case commands.
 - HTTPS-only gateway with a development certificate authority (`scripts/make-dev-cert.sh`) and HSTS.
 - Case lifecycle: assignment, deadline status per task, closing and reopening with stored reasons, and case history. Reasons and evidence events are shown only to roles that hold the matching permission.
+- Case review: an assigned reviewer records an outcome (pass, fail, insufficient evidence, not applicable) with an optional note. Reviews from earlier sessions are not listed yet.
 - Evidence: upload, download, and a custody record for each event. Files are encrypted with AES-256-GCM, keys come from a file, and uploads have a size limit and a media-type allowlist. New permission `evidence:read`; `evidence:write` is needed to upload.
 - Case import from a versioned JSON file (`import_format_version` 1), through the API and `safe-kit case import`. Each record reports imported, duplicate, conflict, rejected, or failed.
 - Profile fields (first name, last name, title, email); the top bar shows the full name and username.

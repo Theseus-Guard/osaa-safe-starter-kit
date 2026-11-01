@@ -72,9 +72,9 @@ Measured on 2026-11-01 with the commands below. Figures are statement coverage o
 
 | Part | Command | Tests | Coverage |
 |---|---|---|---|
-| Backend, without database | `scripts/test-backend.sh` | 411 passed, 74 skipped | 79% |
-| Backend, with database | `scripts/test-backend.sh --db` | 485 passed | 92% |
-| Frontend | `cd frontend && npm run test:coverage` | 130 passed | 35% statements, 26% branches |
+| Backend, without database | `scripts/test-backend.sh` | 475 passed, 89 skipped | 80% |
+| Backend, with database | `scripts/test-backend.sh --db` | 563 passed, 1 skipped | 93% |
+| Frontend | `cd frontend && npm run test:coverage` | 227 passed | 57% statements, 53% branches |
 
 The backend `--db` mode starts a throwaway PostgreSQL container and removes it afterwards. Database-backed tests are skipped unless `SAFE_TEST_DATABASE=1` is set, which the script does for you.
 
@@ -83,6 +83,7 @@ The backend `--db` mode starts a throwaway PostgreSQL container and removes it a
 - The application never deletes rows; deletion is a soft delete. Physical removal is a manual database action.
 - Every table has `created_at`, `updated_at`, `deleted_at`, and `is_deleted`.
 - Passwords are stored as Argon2id hashes. Login is rate limited.
+- Passwords expire after 180 days. A new password may not match any of the account's last three passwords, nor any temporary password issued to the account.
 - Access tokens are short-lived and kept in memory in the browser. Refresh tokens are rotated.
 - The application roles cannot change the schema. The bootstrap superuser password is random and not stored.
 - Not yet implemented: a production certificate, OIDC/SSO, encryption at rest for the database volume, the disclosure workflow, a Vault Transit key provider, and backup/restore procedures.
