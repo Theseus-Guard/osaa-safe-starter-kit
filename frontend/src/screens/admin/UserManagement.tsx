@@ -5,6 +5,7 @@ import { ResetPasswordRow } from "./ResetPasswordRow";
 
 const PAGE_SIZE = 20;
 const COLUMN_COUNT = 6;
+const PROTECTED_TITLE = "The protected admin account cannot be changed";
 
 interface Props {
   currentUserId: string;
@@ -122,19 +123,23 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
           <tbody>
             {page?.items.map((user) => {
               const isSelf = user.id === currentUserId;
+              // Protected accounts keep their role and status. Reset password stays available as the recovery path.
+              const isLocked = isSelf || user.is_protected;
+              const lockTitle = (selfMessage: string) => (isSelf ? selfMessage : user.is_protected ? PROTECTED_TITLE : undefined);
               return (
                 <Fragment key={user.id}>
                   <tr>
                     <td>
                       {user.username}
                       {isSelf && <span className="hint"> (you)</span>}
+                      {user.is_protected && <span className="hint"> Protected</span>}
                     </td>
                     <td>
                       <select
                         aria-label={`Role of ${user.username}`}
                         value={user.role}
-                        disabled={isSelf || busy}
-                        title={isSelf ? "You cannot change your own role" : undefined}
+                        disabled={isLocked || busy}
+                        title={lockTitle("You cannot change your own role")}
                         onChange={(e) => {
                           const role = e.target.value as Role;
                           void applyChange(user, { role }, `${user.username} is now ${role}.`);
@@ -155,8 +160,8 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
                         <button
                           type="button"
                           className="secondary"
-                          disabled={isSelf || busy}
-                          title={isSelf ? "You cannot change your own status" : undefined}
+                          disabled={isLocked || busy}
+                          title={lockTitle("You cannot change your own status")}
                           onClick={() =>
                             void applyChange(
                               user,
@@ -179,8 +184,8 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
                         <button
                           type="button"
                           className="danger"
-                          disabled={isSelf || busy}
-                          title={isSelf ? "You cannot delete your own account" : undefined}
+                          disabled={isLocked || busy}
+                          title={lockTitle("You cannot delete your own account")}
                           onClick={() => void handleDelete(user)}
                         >
                           Delete

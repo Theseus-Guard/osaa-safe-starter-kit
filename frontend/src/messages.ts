@@ -12,6 +12,11 @@ const MESSAGES: Record<string, string> = {
   "user not found": "No user with that ID exists.",
   "cannot change your own role or status": "You cannot change your own role or status.",
   "the last active admin cannot be removed": "The last active admin cannot be demoted or disabled.",
+  "the protected admin account cannot be disabled, deleted, or demoted": "The protected admin account cannot be disabled, deleted, or demoted.",
+  "the admin role must keep users:manage, users:reset_password and roles:manage":
+    "The admin role must keep users:manage, users:reset_password and roles:manage.",
+  "unknown permission": "One of the selected permissions does not exist.",
+  "role not found": "That role does not exist.",
   "nothing to change": "Choose a role or status change first.",
   "username is reserved": "That username is reserved. Choose another.",
   "username must be 3-64 characters: lowercase letters, digits, '.', '_' or '-'":

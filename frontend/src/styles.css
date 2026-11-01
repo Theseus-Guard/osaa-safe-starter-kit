@@ -115,8 +115,30 @@ td {
   border-bottom: 1px solid #8883;
 }
 
+th {
+  overflow-wrap: anywhere;
+}
+
 td select {
   padding: 0.25rem 0.4rem;
+}
+
+input[type="checkbox"] {
+  padding: 0;
+  margin: 0;
+}
+
+.legend {
+  font-size: 0.85rem;
+  margin: 0.75rem 0 0;
+}
+
+.legend dt {
+  margin-top: 0.4rem;
+}
+
+.legend dd {
+  margin: 0 0 0 1rem;
 }
 
 .actions {

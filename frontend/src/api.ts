@@ -32,6 +32,7 @@ export interface UserSummary {
   username: string;
   role: Role;
   is_active: boolean;
+  is_protected: boolean;
   password_change_required: boolean;
   created_at: string;
 }
@@ -51,6 +52,11 @@ export interface UserUpdate {
 export interface RoleSummary {
   role: Role;
   permissions: string[];
+}
+
+export interface PermissionSummary {
+  name: string;
+  description: string;
 }
 
 interface TokenResponse {
@@ -79,7 +85,7 @@ interface Session {
 }
 
 interface RequestOptions {
-  method?: "GET" | "POST" | "PATCH" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   json?: unknown;
   // Set to false for requests that must not carry or renew the session (login, readiness).
   auth?: boolean;
@@ -233,6 +239,18 @@ export function resetUserPassword(userId: string, temporaryPassword: string): Pr
 
 export function listRoles(): Promise<RoleSummary[]> {
   return request<RoleSummary[]>("/rbac/roles");
+}
+
+export function listPermissions(): Promise<PermissionSummary[]> {
+  return request<PermissionSummary[]>("/rbac/permissions");
+}
+
+// Replaces the full permission set of one role. Changes take effect on the next request.
+export function updateRolePermissions(role: Role, permissions: string[]): Promise<RoleSummary> {
+  return request<RoleSummary>(`/rbac/roles/${encodeURIComponent(role)}/permissions`, {
+    method: "PUT",
+    json: { permissions },
+  });
 }
 
 export async function readiness(): Promise<Readiness> {

@@ -41,7 +41,7 @@ export function Home({ profile, notice, onLogout, onPasswordChanged }: Props) {
           onDone={onPasswordChanged}
         />
       )}
-      {profile.role === "admin" && <AdminPanel currentUserId={profile.id} />}
+      {profile.role === "admin" && <AdminPanel currentUserId={profile.id} currentRole={profile.role} />}
     </>
   );
 }
