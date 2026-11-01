@@ -383,6 +383,27 @@ export function updateDeadline(
   });
 }
 
+// Review outcomes accepted by the backend. The backend has no endpoint that lists reviews.
+export type ReviewOutcome = "pass" | "fail" | "insufficient_evidence" | "not_applicable";
+
+export interface ReviewCreateBody {
+  outcome: ReviewOutcome;
+  // Omitted or null when the reviewer adds no note. The backend trims it and stores blank text as null.
+  note?: string | null;
+}
+
+export interface ReviewResponse {
+  id: string;
+  case_id: string;
+  outcome: ReviewOutcome;
+  note: string | null;
+}
+
+// Needs reviews:write and an active assignment to the case. The case must be open.
+export function createReview(caseId: string, body: ReviewCreateBody): Promise<ReviewResponse> {
+  return request<ReviewResponse>(`/cases/${encodeURIComponent(caseId)}/reviews`, { method: "POST", json: body });
+}
+
 export interface Assignment {
   id: string;
   case_id: string;

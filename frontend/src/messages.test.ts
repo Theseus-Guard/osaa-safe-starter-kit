@@ -65,6 +65,12 @@ describe("case and evidence messages", () => {
     );
   });
 
+  it("explains that only an assigned reviewer can record a review", () => {
+    expect(describeCode("only an assigned reviewer can record a review")).toBe(
+      "Only an assigned reviewer can record a review on this case.",
+    );
+  });
+
   it("keeps the fallback for an unknown code that only resembles a prefix", () => {
     expect(describeCode("case cannot be reopened")).toBe("Request failed (case cannot be reopened).");
   });

@@ -16,6 +16,8 @@ export interface CaseAbilities {
   canReadEvidence: boolean;
   // evidence:write. Upload evidence.
   canWriteEvidence: boolean;
+  // reviews:write. Record a review. The backend also requires an assignment to the case.
+  canReview: boolean;
 }
 
 export function hasPermission(permissions: readonly string[], name: string): boolean {
@@ -32,5 +34,6 @@ export function caseAbilities(permissions: readonly string[]): CaseAbilities {
     canAssign: hasPermission(permissions, "cases:assign"),
     canReadEvidence: hasPermission(permissions, "evidence:read"),
     canWriteEvidence: hasPermission(permissions, "evidence:write"),
+    canReview: hasPermission(permissions, "reviews:write"),
   };
 }

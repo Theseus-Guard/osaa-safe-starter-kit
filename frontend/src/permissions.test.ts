@@ -20,6 +20,7 @@ describe("permissions", () => {
       canAssign: true,
       canReadEvidence: false,
       canWriteEvidence: false,
+      canReview: false,
     });
   });
 
@@ -37,6 +38,11 @@ describe("permissions", () => {
     expect(abilities.canUpdateDeadlines).toBe(true);
     expect(abilities.canClose).toBe(false);
     expect(abilities.canMarkNotApplicable).toBe(false);
+  });
+
+  it("lets only a caller with reviews:write record a review", () => {
+    expect(caseAbilities(["reviews:write"])).toMatchObject({ canReview: true });
+    expect(caseAbilities(["cases:read_assigned", "evidence:read"])).toMatchObject({ canReview: false });
   });
 
   it("keeps evidence read and evidence write apart", () => {

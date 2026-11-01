@@ -1,7 +1,7 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CaseDetail, closeCase, getCase, getCaseHistory, listAssignments, listEvidence } from "../../api";
+import { CaseDetail, closeCase, createReview, getCase, getCaseHistory, listAssignments, listEvidence } from "../../api";
 import { CaseDetailPage } from "./CaseDetailPage";
 
 vi.mock("../../api", async (importOriginal) => {
@@ -10,6 +10,7 @@ vi.mock("../../api", async (importOriginal) => {
     ...actual,
     getCase: vi.fn(),
     closeCase: vi.fn(),
+    createReview: vi.fn(),
     listAssignments: vi.fn(),
     listEvidence: vi.fn(),
     getCaseHistory: vi.fn(),
@@ -24,6 +25,7 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const get = vi.mocked(getCase);
 const close = vi.mocked(closeCase);
+const review = vi.mocked(createReview);
 const assignments = vi.mocked(listAssignments);
 const evidence = vi.mocked(listEvidence);
 const history = vi.mocked(getCaseHistory);
@@ -39,6 +41,8 @@ const FULL_ACCESS = [
 ];
 // A reporter can submit cases and see their own. The case controls stay locked and evidence is hidden.
 const REPORTER = ["cases:submit", "cases:read_own"];
+// A reviewer records reviews on the cases assigned to them.
+const REVIEWER = ["cases:read_assigned", "evidence:read", "reviews:write"];
 
 const OPEN_CASE: CaseDetail = {
   id: "case-1",
@@ -64,6 +68,7 @@ const OPEN_CASE: CaseDetail = {
 beforeEach(() => {
   get.mockReset().mockResolvedValue(OPEN_CASE);
   close.mockReset();
+  review.mockReset();
   assignments.mockReset().mockResolvedValue([]);
   evidence.mockReset().mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
   history.mockReset().mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
@@ -152,5 +157,38 @@ describe("CaseDetailPage", () => {
     render(<CaseDetailPage caseId="case-1" permissions={FULL_ACCESS} />);
 
     expect(await screen.findByText("New evidence arrived")).toBeInTheDocument();
+  });
+
+  it("shows the review section to a caller with reviews:write", async () => {
+    render(<CaseDetailPage caseId="case-1" permissions={REVIEWER} />);
+
+    expect(await screen.findByText("Review", { exact: true })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Record review" })).toBeInTheDocument();
+  });
+
+  it("hides the review section without reviews:write", async () => {
+    render(<CaseDetailPage caseId="case-1" permissions={FULL_ACCESS} />);
+
+    expect(await screen.findByText("Example incident")).toBeInTheDocument();
+    expect(screen.queryByText("Review", { exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Record review" })).not.toBeInTheDocument();
+  });
+
+  it("reloads the history after a review is recorded", async () => {
+    review.mockResolvedValue({ id: "review-1", case_id: "case-1", outcome: "pass", note: null });
+    const user = userEvent.setup();
+    render(<CaseDetailPage caseId="case-1" permissions={REVIEWER} />);
+
+    await screen.findByText("Example incident");
+    expect(history).toHaveBeenCalledTimes(1);
+
+    await user.click(await screen.findByRole("button", { name: "Record review" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByLabelText("Outcome"));
+    await user.click(await screen.findByRole("option", { name: "Pass" }));
+    await user.click(within(dialog).getByRole("button", { name: "Submit review" }));
+
+    await waitFor(() => expect(history).toHaveBeenCalledTimes(2));
+    expect(review).toHaveBeenCalledWith("case-1", { outcome: "pass", note: null });
   });
 });

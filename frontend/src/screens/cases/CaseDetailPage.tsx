@@ -7,6 +7,7 @@ import { CaseClosure } from "./CaseClosure";
 import { CaseDeadlines } from "./CaseDeadlines";
 import { CaseEvidence } from "./CaseEvidence";
 import { CaseHistory } from "./CaseHistory";
+import { CaseReview } from "./CaseReview";
 import { Timestamp } from "@/components/timestamp";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -84,6 +85,16 @@ export function CaseDetailPage({ caseId, permissions }: Props) {
               </dl>
             </CardContent>
           </Card>
+
+          {/* Keyed by case, so the reviews listed for this session never carry over to another case. */}
+          {abilities.canReview && (
+            <CaseReview
+              key={detail.id}
+              caseId={detail.id}
+              closed={closed}
+              onRecorded={() => setHistoryRevision((value) => value + 1)}
+            />
+          )}
 
           <CaseClosure
             caseId={detail.id}

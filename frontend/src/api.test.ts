@@ -362,6 +362,16 @@ describe("case and evidence endpoints", () => {
     expect(bodyOf(0)).toEqual({ reason: "New evidence" });
   });
 
+  it("records a review with the outcome and the note", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(201, {}));
+
+    await api.createReview("case/1", { outcome: "insufficient_evidence", note: null });
+
+    expect(urlOf(0)).toBe("/api/v1/cases/case%2F1/reviews");
+    expect(methodOf(0)).toBe("POST");
+    expect(bodyOf(0)).toEqual({ outcome: "insufficient_evidence", note: null });
+  });
+
   it("sends the reason only for a not-applicable deadline", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, {})).mockResolvedValueOnce(jsonResponse(200, {}));
 

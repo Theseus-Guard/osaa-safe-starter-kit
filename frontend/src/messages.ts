@@ -34,6 +34,7 @@ const MESSAGES: Record<string, string> = {
     "Usernames must be 3-64 characters: lowercase letters, digits, '.', '_' or '-'.",
   "case is closed": "This case is closed.",
   "case is not closed": "This case is not closed, so it cannot be reopened.",
+  "only an assigned reviewer can record a review": "Only an assigned reviewer can record a review on this case.",
   "deadline task not found": "That deadline task does not exist on this case.",
   "only a triager may mark a deadline not applicable": "Only a triager can mark a deadline not applicable.",
   "assignment not found": "That person is not assigned to this case.",
