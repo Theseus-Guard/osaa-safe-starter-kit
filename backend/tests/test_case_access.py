@@ -831,6 +831,10 @@ def test_close_and_reopen_reasons_are_stored_as_text(db_client, people):
     assert triager.post(f"/api/v1/cases/{case_id}/close", json={"reason": close_reason}).status_code == 200
     assert triager.post(f"/api/v1/cases/{case_id}/reopen", json={"reason": reopen_reason}).status_code == 200
     assert triager.get(f"/api/v1/cases/{case_id}").json()["reopen_reason"] == reopen_reason
+    # The assigned reviewer can see the case but not the reason texts.
+    reviewer_view = db_client(people["reviewer"]).get(f"/api/v1/cases/{case_id}").json()
+    assert reviewer_view["close_reason"] is None
+    assert reviewer_view["reopen_reason"] is None
 
     with connect() as conn:
         rows = conn.execute(
@@ -861,13 +865,13 @@ def test_close_and_reopen_reasons_are_stored_as_text(db_client, people):
 @requires_database
 def test_evidence_history_entries_need_evidence_read(db_client, people):
     case_id = create_case_via_api(db_client, people["reporter"])
-    # Evidence rows are written against the evidence item. This row stands in for an evidence entry on the case.
+    # Evidence rows use target_type "evidence" and name the case in details, as evidence.py writes them.
     with connect() as conn:
         audit.record(
             conn,
             audit.EVIDENCE_UPLOADED,
-            "case",
-            case_id,
+            "evidence",
+            str(uuid.uuid4()),
             actor_id=people["investigator"],
             details={"case_id": case_id},
         )

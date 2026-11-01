@@ -721,7 +721,8 @@ def _scope(actor: User) -> CaseScope:
     return CaseScope.from_permissions(actor.id, permissions_of(actor))
 
 
-def _case_response(case: Case) -> CaseResponse:
+def _case_response(case: Case, scope: CaseScope) -> CaseResponse:
+    # Reasons are shown only to callers with the full view, the same rule as the history details.
     return CaseResponse(
         id=case.id,
         reference=case.reference,
@@ -732,8 +733,8 @@ def _case_response(case: Case) -> CaseResponse:
         created_at=case.created_at,
         closed_at=case.closed_at,
         closed_by=case.closed_by,
-        close_reason=case.close_reason,
-        reopen_reason=case.reopen_reason,
+        close_reason=case.close_reason if scope.read_all else None,
+        reopen_reason=case.reopen_reason if scope.read_all else None,
         deadlines=[
             DeadlineTaskResponse(
                 id=task.id,
@@ -786,7 +787,7 @@ def submit_case(
         case = create_case(body.title, body.awareness_time, created_by=actor.id)
     except TimezoneNotConfigured:
         raise HTTPException(status_code=409, detail="system timezone is not configured")
-    return _case_response(case)
+    return _case_response(case, _scope(actor))
 
 
 async def _read_import_body(request: Request) -> bytes:
@@ -862,7 +863,8 @@ def get_case(
     actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS)),
 ) -> CaseResponse:
     # A case the caller may not see gets the same 404 as a missing one, so existence is not revealed.
-    return _case_response(_visible_case_or_404(case_id, _scope(actor)))
+    scope = _scope(actor)
+    return _case_response(_visible_case_or_404(case_id, scope), scope)
 
 
 @app.get("/api/v1/cases/{case_id}/assignments", response_model=list[AssignmentResponse])
@@ -944,7 +946,7 @@ def close_case_endpoint(
         raise CASE_CLOSED
     if outcome is Outcome.BLOCKED:
         raise HTTPException(status_code=409, detail="case cannot be closed: " + "; ".join(blockers))
-    return _case_response(_visible_case_or_404(case_id, scope))
+    return _case_response(_visible_case_or_404(case_id, scope), scope)
 
 
 @app.post("/api/v1/cases/{case_id}/reopen", response_model=CaseResponse)
@@ -959,7 +961,7 @@ def reopen_case_endpoint(
         raise CASE_NOT_FOUND
     if outcome is Outcome.NOT_CLOSED:
         raise HTTPException(status_code=409, detail="case is not closed")
-    return _case_response(_visible_case_or_404(case_id, scope))
+    return _case_response(_visible_case_or_404(case_id, scope), scope)
 
 
 @app.patch("/api/v1/cases/{case_id}/deadlines/{task_id}", response_model=CaseResponse)
@@ -986,7 +988,7 @@ def update_case_deadline(
         raise HTTPException(status_code=404, detail="deadline task not found")
     if outcome is Outcome.NOT_APPLICABLE_FORBIDDEN:
         raise HTTPException(status_code=403, detail="only a triager may mark a deadline not applicable")
-    return _case_response(_visible_case_or_404(case_id, scope))
+    return _case_response(_visible_case_or_404(case_id, scope), scope)
 
 
 @app.get("/api/v1/cases/{case_id}/history", response_model=HistoryPage)

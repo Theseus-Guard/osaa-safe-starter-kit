@@ -625,7 +625,9 @@ def case_history(
             AND csc.actor_id = ae.actor_id
             AND csc.action = CASE ae.action WHEN %s THEN 'closed' WHEN %s THEN 'reopened' END
             AND NOT csc.is_deleted
-        WHERE ae.target_type = 'case' AND ae.target_id = %s AND NOT ae.is_deleted
+        WHERE ((ae.target_type = 'case' AND ae.target_id = %s)
+            OR (ae.target_type = 'evidence' AND ae.details->>'case_id' = %s))
+            AND NOT ae.is_deleted
             AND (%s OR ae.action <> ALL(%s::text[]))
     """
     evidence_filter = (include_evidence, sorted(audit.EVIDENCE_AUDIT_ACTIONS))
@@ -635,12 +637,14 @@ def case_history(
         rows = conn.execute(
             f"SELECT ae.id::text, ae.action, ae.created_at, ae.actor_id::text, ae.details, csc.reason {history_join}"
             " ORDER BY ae.created_at DESC, ae.id DESC LIMIT %s OFFSET %s",
-            (audit.CASE_CLOSE, audit.CASE_REOPEN, case_id, *evidence_filter, limit, offset),
+            (audit.CASE_CLOSE, audit.CASE_REOPEN, case_id, case_id, *evidence_filter, limit, offset),
         ).fetchall()
         total = conn.execute(
             "SELECT count(*) FROM audit_events ae "
-            "WHERE ae.target_type = 'case' AND ae.target_id = %s AND NOT ae.is_deleted AND (%s OR ae.action <> ALL(%s::text[]))",
-            (case_id, *evidence_filter),
+            "WHERE ((ae.target_type = 'case' AND ae.target_id = %s)"
+            " OR (ae.target_type = 'evidence' AND ae.details->>'case_id' = %s))"
+            " AND NOT ae.is_deleted AND (%s OR ae.action <> ALL(%s::text[]))",
+            (case_id, case_id, *evidence_filter),
         ).fetchone()[0]
     entries = []
     for row in rows:
