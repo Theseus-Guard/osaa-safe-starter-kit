@@ -206,7 +206,9 @@ def test_closed_case_is_not_served_as_open_after_the_close(triager_api):
     case = cases.create_case("Close check " + suffix, datetime.now(UTC) - timedelta(hours=1), triager_id)
     with connect() as conn:
         # Test setup: close the deadline tasks and record the one review that closure requires.
-        conn.execute("UPDATE deadline_tasks SET status = 'done' WHERE case_id = %s", (case.id,))
+        conn.execute(
+            "UPDATE deadline_tasks SET status = 'done', not_applicable_reason = NULL WHERE case_id = %s", (case.id,)
+        )
         round_id = conn.execute(
             "INSERT INTO review_rounds (case_id, opened_by) VALUES (%s, %s) RETURNING id",
             (case.id, triager_id),

@@ -30,7 +30,7 @@ from pydantic import ValidationError
 from safe_kit import api, audit, system_timezone
 from safe_kit.case_records import LegalDuty, build_preliminary_report
 from safe_kit.case_records_api import AwarenessEventRequest
-from safe_kit.cases import Case, calendar_for, deadline_tasks_for
+from safe_kit.cases import WEEKLY_NOT_SIGNIFICANT_REASON, Case, calendar_for, deadline_tasks_for
 from safe_kit.db import connect
 from safe_kit.migrate import main as migrate
 from test_case_records_db import ActingClient, new_user, past
@@ -285,3 +285,88 @@ def test_each_timeline_change_writes_one_audit_row_and_a_repeat_writes_none(time
     assert audit_count(audit.CASE_DEADLINE_UPDATE, case_id) == 1
     triager.patch(f"/api/v1/cases/{case_id}/deadlines/{task_id}", json={"status": "done"})
     assert audit_count(audit.CASE_DEADLINE_UPDATE, case_id) == 1
+
+
+def tasks_by_kind(client: ActingClient, case_id: str) -> dict[str, dict]:
+    return {task["kind"]: task for task in client.get(f"/api/v1/cases/{case_id}").json()["deadlines"]}
+
+
+@requires_database
+def test_the_broader_advisory_starts_not_applicable_and_a_triager_may_open_it(timeline_people):
+    reporter, triager = timeline_people["reporter"], timeline_people["triager"]
+    case_id = open_case(reporter, datetime.now(UTC) - timedelta(hours=1))
+    tasks = tasks_by_kind(triager, case_id)
+
+    assert tasks["broader_advisory"]["status"] == "not_applicable"
+    assert tasks["broader_advisory"]["not_applicable_reason"]
+    assert "weekly_update" not in tasks
+    url = f"/api/v1/cases/{case_id}/deadlines/{tasks['broader_advisory']['id']}"
+    assert triager.patch(url, json={"status": "open"}).status_code == 200
+    assert tasks_by_kind(triager, case_id)["broader_advisory"]["status"] == "open"
+
+
+@requires_database
+def test_an_exception_applies_to_one_task_only_needs_a_reason_and_is_audited_once(timeline_people):
+    reporter, triager = timeline_people["reporter"], timeline_people["triager"]
+    case_id = open_case(reporter, datetime.now(UTC) - timedelta(hours=1))
+    before = tasks_by_kind(triager, case_id)
+    url = f"/api/v1/cases/{case_id}/deadlines/{before['affected_customers']['id']}"
+
+    assert triager.patch(url, json={"status": "not_applicable"}).status_code == 422
+    assert audit_count(audit.CASE_DEADLINE_UPDATE, case_id) == 0
+
+    reason = "the partner informed the customers"
+    assert triager.patch(url, json={"status": "not_applicable", "reason": reason}).status_code == 200
+    after = tasks_by_kind(triager, case_id)
+    assert after["affected_customers"]["status"] == "not_applicable"
+    assert after["affected_customers"]["not_applicable_reason"] == reason
+    assert after["affected_customers"]["due_at"] == before["affected_customers"]["due_at"]
+    for kind, task in before.items():
+        if kind != "affected_customers":
+            assert after[kind]["status"] == task["status"]
+            assert after[kind]["not_applicable_reason"] == task["not_applicable_reason"]
+            assert after[kind]["due_at"] == task["due_at"]
+    assert audit_count(audit.CASE_DEADLINE_UPDATE, case_id) == 1
+
+    # The same request changes nothing and writes no audit row.
+    assert triager.patch(url, json={"status": "not_applicable", "reason": reason}).status_code == 200
+    assert audit_count(audit.CASE_DEADLINE_UPDATE, case_id) == 1
+
+
+@requires_database
+def test_a_significant_risk_opens_the_weekly_update_and_each_change_is_audited(timeline_people):
+    reporter, triager = timeline_people["reporter"], timeline_people["triager"]
+    case_id = open_case(reporter, datetime.now(UTC) - timedelta(hours=1))
+    url = f"/api/v1/cases/{case_id}/impacts/scale"
+
+    assert triager.put(url, json={"severity": "low", "scope": "three users"}).status_code == 200
+    assert "weekly_update" not in tasks_by_kind(triager, case_id)
+    assert audit_count(audit.CASE_DEADLINE_UPDATE, case_id) == 0
+
+    # A high impact is a significant risk: the weekly update opens, due 7 elapsed days after the change.
+    recorded_at = datetime.now(UTC)
+    assert triager.put(url, json={"severity": "high", "scope": "three users"}).status_code == 200
+    weekly = tasks_by_kind(triager, case_id)["weekly_update"]
+    assert weekly["status"] == "open"
+    due = datetime.fromisoformat(weekly["due_at"])
+    assert recorded_at + timedelta(days=7) <= due <= datetime.now(UTC) + timedelta(days=7)
+    assert audit_count(audit.CASE_DEADLINE_UPDATE, case_id) == 1
+
+    # The risk falls below significant: the task the rule opened becomes not applicable with a reason.
+    assert triager.put(url, json={"severity": "low", "scope": "three users"}).status_code == 200
+    closed = tasks_by_kind(triager, case_id)["weekly_update"]
+    assert closed["status"] == "not_applicable"
+    assert closed["not_applicable_reason"] == WEEKLY_NOT_SIGNIFICANT_REASON
+    assert audit_count(audit.CASE_DEADLINE_UPDATE, case_id) == 2
+
+    # Raised again: the same task row is reopened, not a second one is added.
+    assert triager.put(url, json={"severity": "critical", "scope": "three users"}).status_code == 200
+    reopened = tasks_by_kind(triager, case_id)["weekly_update"]
+    assert reopened["id"] == weekly["id"]
+    assert reopened["status"] == "open"
+    assert reopened["not_applicable_reason"] is None
+    assert audit_count(audit.CASE_DEADLINE_UPDATE, case_id) == 3
+
+    # A repeated assessment with no change writes no deadline audit row.
+    assert triager.put(url, json={"severity": "critical", "scope": "three users"}).status_code == 200
+    assert audit_count(audit.CASE_DEADLINE_UPDATE, case_id) == 3
