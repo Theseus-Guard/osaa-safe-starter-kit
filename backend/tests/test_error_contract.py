@@ -120,8 +120,8 @@ def test_a_domain_refusal_stays_422_with_its_detail_and_gains_the_domain_code(cl
     # A pass needs evidence of the case. The domain refuses it before any database access (reviews.set_layer).
     response = client.patch(
         f"/api/v1/reviews/{SOME_UUID}/layers/model",
-        headers={"Idempotency-Key": "key-3"},
-        json={"outcome": "pass", "expected_revision": 1, "evidence_ids": []},
+        headers={"Idempotency-Key": "key-3", "If-Match": '"1"'},
+        json={"outcome": "pass", "evidence_ids": []},
     )
 
     body = assert_error_body(response, 422, "domain_rule_violated")

@@ -46,7 +46,7 @@ const MESSAGES: Record<string, string> = {
   "only an assigned reviewer can record a review": "Only an assigned reviewer can record a review on this case.",
   "review round is closed": "This review is closed, so its layers cannot change.",
   "review not found": "That review does not exist, or your account cannot see its case.",
-  revision_conflict: "The review was changed by someone else. Reload it, check the current revision and save again.",
+  precondition_failed: "The review was changed by someone else. Reload it, check the current revision and save again.",
   "a conflict is declared on this review round, so this reviewer cannot set a layer":
     "A conflict is declared on this review round, so you cannot set its layers.",
   "this reviewer has withdrawn from this review round, so cannot set a layer":

@@ -768,7 +768,7 @@ COMMAND_CASES = [
         ("case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "pass", "--reason", "Checked",
          "--evidence", EVIDENCE_ID, "--round", ROUND_ID, "--revision", "1"),
         "PATCH", REVIEW_LAYER_PATH,
-        {"outcome": "pass", "reason": "Checked", "evidence_ids": [EVIDENCE_ID], "expected_revision": 1}, 200, REVIEW_BODY,
+        {"outcome": "pass", "reason": "Checked", "evidence_ids": [EVIDENCE_ID]}, 200, REVIEW_BODY,
         "Review layer saved.", "is closed", id="review-record",
     ),
     pytest.param(
@@ -1155,7 +1155,10 @@ def test_review_record_without_round_uses_the_open_round_and_its_revision_is_the
         ("POST", "/api/v1/auth/token"), ("GET", "/api/v1/reviews"), ("PATCH", REVIEW_LAYER_PATH),
         ("POST", "/api/v1/auth/logout"),
     ]
-    assert api.calls[2]["json"] == {"outcome": "pass", "reason": None, "evidence_ids": [EVIDENCE_ID], "expected_revision": 4}
+    assert api.calls[2]["json"] == {"outcome": "pass", "reason": None, "evidence_ids": [EVIDENCE_ID]}
+    # The revision read with 'review list' travels as If-Match, not in the body.
+    sent = {name.lower(): value for name, value in api.calls[2]["headers"].items()}
+    assert sent["if-match"] == '"4"'
 
 
 def test_review_record_pass_without_evidence_is_refused_before_any_request(api, capsys):
@@ -1192,8 +1195,8 @@ def test_review_record_refuses_a_non_pass_outcome_without_a_reason_before_any_re
 
 def test_review_record_revision_conflict_reports_the_current_revision(api, capsys):
     api.route(
-        "PATCH", REVIEW_LAYER_PATH, status=409,
-        body={"detail": {"status": "revision_conflict", "current_revision": 7}},
+        "PATCH", REVIEW_LAYER_PATH, status=412,
+        body={"detail": {"status": "precondition_failed", "current_revision": 7}},
     )
     code, out, err = run(
         capsys, "case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "pass",

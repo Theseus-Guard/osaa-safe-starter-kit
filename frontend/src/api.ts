@@ -86,7 +86,7 @@ export class ApiError extends Error {
   readonly code: string;
   // Set only on a classification_version_conflict (409): the version the server holds now.
   readonly currentVersion: number | null;
-  // Set only on a revision_conflict (409) of a review round: the revision the server holds now.
+  // Set only on a precondition_failed (412) of a review round: the revision the server holds now.
   readonly currentRevision: number | null;
 
   constructor(status: number, code: string, currentVersion: number | null = null, currentRevision: number | null = null) {
@@ -541,7 +541,8 @@ export interface ReviewRound {
   id: string;
   case_id: string;
   status: "open" | "closed";
-  // Starts at 1 and increases by one for every change to a layer. Send it as expected_revision when changing a layer.
+  // Starts at 1 and increases by one for every change to a layer. It is the ETag of the round: send it as If-Match
+  // when changing a layer.
   revision: number;
   opened_at: string;
   closed_at: string | null;
@@ -553,7 +554,6 @@ export interface ReviewLayerBody {
   // Required for every outcome except pass. Omitted or null otherwise.
   reason?: string | null;
   evidence_ids?: string[];
-  expected_revision: number;
 }
 
 // Opens a review round with all eleven layers not set. Needs reviews:write and an active assignment to the case.
@@ -571,12 +571,18 @@ export function listReviewRounds(caseId: string): Promise<ReviewRound[]> {
   return request<ReviewRound[]>(`/reviews?case_id=${encodeURIComponent(caseId)}`);
 }
 
-// Sets one layer of a round. A stale expected_revision answers 409 with ApiError.currentRevision and changes nothing.
-export function setReviewLayer(roundId: string, layer: string, body: ReviewLayerBody): Promise<ReviewRound> {
+// Sets one layer of a round. revision is the round revision the caller read, sent as If-Match. A stale revision
+// answers 412 with ApiError.currentRevision and changes nothing.
+export function setReviewLayer(
+  roundId: string,
+  layer: string,
+  body: ReviewLayerBody,
+  revision: number,
+): Promise<ReviewRound> {
   return request<ReviewRound>(`/reviews/${encodeURIComponent(roundId)}/layers/${encodeURIComponent(layer)}`, {
     method: "PATCH",
     json: body,
-    headers: idempotencyHeaders(),
+    headers: { ...idempotencyHeaders(), "If-Match": `"${revision}"` },
   });
 }
 

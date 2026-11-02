@@ -599,33 +599,35 @@ describe("case and evidence endpoints", () => {
     expect(new Headers(init.headers).get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/);
   });
 
-  it("sets one review layer with its reason and the expected revision", async () => {
+  it("sets one review layer with its reason and sends the round revision as If-Match", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
 
-    await api.setReviewLayer("round/1", "supply-chain", {
-      outcome: "fail",
-      reason: "Missing SBOM",
-      evidence_ids: [],
-      expected_revision: 4,
-    });
+    await api.setReviewLayer(
+      "round/1",
+      "supply-chain",
+      { outcome: "fail", reason: "Missing SBOM", evidence_ids: [] },
+      4,
+    );
 
     expect(urlOf(0)).toBe("/api/v1/reviews/round%2F1/layers/supply-chain");
     expect(methodOf(0)).toBe("PATCH");
-    expect(bodyOf(0)).toEqual({ outcome: "fail", reason: "Missing SBOM", evidence_ids: [], expected_revision: 4 });
+    expect(bodyOf(0)).toEqual({ outcome: "fail", reason: "Missing SBOM", evidence_ids: [] });
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(new Headers(init.headers).get("If-Match")).toBe('"4"');
+    expect(new Headers(init.headers).get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/);
   });
 
-  it("reads the stored current revision from a revision conflict", async () => {
+  it("reads the stored current revision from a precondition failure", async () => {
     fetchMock.mockResolvedValueOnce(
-      jsonResponse(409, { detail: { status: "revision_conflict", current_revision: 7 } }),
+      jsonResponse(412, { detail: { status: "precondition_failed", current_revision: 7 } }),
     );
 
-    const error = await api.setReviewLayer("round-1", "model", {
-      outcome: "pass",
-      expected_revision: 3,
-    }).catch((caught: unknown) => caught);
+    const error = await api.setReviewLayer("round-1", "model", { outcome: "pass" }, 3).catch(
+      (caught: unknown) => caught,
+    );
 
     expect(error).toBeInstanceOf(api.ApiError);
-    expect(error).toMatchObject({ status: 409, code: "revision_conflict", currentRevision: 7 });
+    expect(error).toMatchObject({ status: 412, code: "precondition_failed", currentRevision: 7 });
   });
 
   it("sends the reason only for a not-applicable deadline", async () => {

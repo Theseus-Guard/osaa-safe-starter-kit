@@ -156,12 +156,12 @@ describe("CaseReview", () => {
     await user.click(within(dialog).getByRole("button", { name: "Save layer" }));
 
     await waitFor(() =>
-      expect(setLayer).toHaveBeenCalledWith("round-1", "model", {
-        outcome: "pass",
-        reason: null,
-        evidence_ids: [evidenceId],
-        expected_revision: 3,
-      }),
+      expect(setLayer).toHaveBeenCalledWith(
+        "round-1",
+        "model",
+        { outcome: "pass", reason: null, evidence_ids: [evidenceId] },
+        3,
+      ),
     );
     expect(toast.success).toHaveBeenCalledWith("Review layer saved.");
     expect(onRecorded).toHaveBeenCalledTimes(1);
@@ -200,18 +200,18 @@ describe("CaseReview", () => {
     await user.click(within(dialog).getByRole("button", { name: "Save layer" }));
 
     await waitFor(() =>
-      expect(setLayer).toHaveBeenCalledWith("round-1", "model", {
-        outcome: "fail",
-        reason: "Missing logs",
-        evidence_ids: [evidence],
-        expected_revision: 3,
-      }),
+      expect(setLayer).toHaveBeenCalledWith(
+        "round-1",
+        "model",
+        { outcome: "fail", reason: "Missing logs", evidence_ids: [evidence] },
+        3,
+      ),
     );
   });
 
   it("shows the conflict message with the current revision and reloads the round", async () => {
     list.mockResolvedValueOnce([roundAt(3)]).mockResolvedValueOnce([roundAt(5)]);
-    setLayer.mockRejectedValue(new ApiError(409, "revision_conflict", null, 5));
+    setLayer.mockRejectedValue(new ApiError(412, "precondition_failed", null, 5));
     const user = userEvent.setup();
     render(<CaseReview caseId="case-1" closed={false} canReview onRecorded={() => {}} />);
 
