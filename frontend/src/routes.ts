@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 // Pages live in the URL hash (for example #/users or #/cases/{id}) so refresh and back work without a router library.
-export const PAGES = ["overview", "cases", "users", "privacy", "roles", "settings", "account"] as const;
+export const PAGES = ["overview", "cases", "catalog", "users", "privacy", "roles", "settings", "account"] as const;
 
 export type Page = (typeof PAGES)[number];
 
@@ -9,6 +9,8 @@ export interface Route {
   page: Page;
   // Set only on the case detail page, #/cases/{id}.
   caseId: string | null;
+  // Set only on the catalog entry page, #/catalog/{id}.
+  entryId: string | null;
 }
 
 interface PageInfo {
@@ -61,19 +63,42 @@ export const PAGE_INFO: Record<Page, PageInfo> = {
     description: "Change the password you use to sign in.",
     adminOnly: false,
   },
+  catalog: {
+    label: "Catalog",
+    title: "Catalog",
+    description: "Versioned catalog entries, their verification history and the recommendations behind them.",
+    adminOnly: false,
+  },
 };
 
-export function hashFor(page: Page, caseId: string | null = null): string {
-  return caseId === null ? `#/${page}` : `#/${page}/${encodeURIComponent(caseId)}`;
+// The permission a page needs to be listed in the navigation. Pages without an entry are open to every signed-in user.
+// The backend checks every request; this only hides navigation the caller cannot use.
+export const PAGE_PERMISSION: Partial<Record<Page, string>> = {
+  catalog: "catalog:read",
+};
+
+export function pageInNavigation(page: Page, isAdmin: boolean, permissions: readonly string[]): boolean {
+  if (PAGE_INFO[page].adminOnly && !isAdmin) return false;
+  const required = PAGE_PERMISSION[page];
+  return required === undefined || permissions.includes(required);
+}
+
+export function hashFor(page: Page, id: string | null = null): string {
+  return id === null ? `#/${page}` : `#/${page}/${encodeURIComponent(id)}`;
 }
 
 // Unknown hashes, and admin pages for non-admins, fall back to Overview.
 export function routeFromHash(hash: string, isAdmin: boolean): Route {
   const [name, id] = hash.replace(/^#\/?/, "").split("/");
   const match = PAGES.find((candidate) => candidate === name);
-  if (match === undefined) return { page: "overview", caseId: null };
-  if (PAGE_INFO[match].adminOnly && !isAdmin) return { page: "overview", caseId: null };
-  return { page: match, caseId: match === "cases" && id ? decodeURIComponent(id) : null };
+  if (match === undefined) return { page: "overview", caseId: null, entryId: null };
+  if (PAGE_INFO[match].adminOnly && !isAdmin) return { page: "overview", caseId: null, entryId: null };
+  const itemId = id ? decodeURIComponent(id) : null;
+  return {
+    page: match,
+    caseId: match === "cases" ? itemId : null,
+    entryId: match === "catalog" ? itemId : null,
+  };
 }
 
 export function useHashRoute(isAdmin: boolean): Route {
@@ -90,9 +115,9 @@ export function useHashRoute(isAdmin: boolean): Route {
 
   useEffect(() => {
     // Rewrite unknown or missing hashes so the URL matches the page on screen. replaceState does not fire hashchange.
-    const expected = hashFor(route.page, route.caseId);
+    const expected = hashFor(route.page, route.caseId ?? route.entryId);
     if (window.location.hash !== expected) window.history.replaceState(null, "", expected);
-  }, [route.page, route.caseId]);
+  }, [route.page, route.caseId, route.entryId]);
 
   return route;
 }

@@ -503,6 +503,16 @@ def list_evidence(
     return [_to_item(row) for row in rows], total
 
 
+def get_item(evidence_id: str) -> EvidenceItem | None:
+    """The metadata of one item. No access check here: the caller checks the case ACL and the TLP rule first."""
+    with connect() as conn:
+        row = conn.execute(
+            f"SELECT {_ITEM_COLUMNS} FROM evidence_items e WHERE e.id = %s AND NOT e.is_deleted",
+            (evidence_id,),
+        ).fetchone()
+    return None if row is None else _to_item(row)
+
+
 def custody_events(evidence_id: str) -> list[CustodyEvent]:
     with connect() as conn:
         rows = conn.execute(

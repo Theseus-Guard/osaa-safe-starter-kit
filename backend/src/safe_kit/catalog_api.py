@@ -40,6 +40,7 @@ from safe_kit.catalog import (
     create_entry,
     get_entry,
     list_entries,
+    list_recommendations,
     public_export,
     record_verification_run,
 )
@@ -363,6 +364,23 @@ def create_recommendation(
         _values(body), actor.id, idempotency=scope, render=_recommendation_view
     )
     return _settle(result, not_found="", build=_recommendation_view)
+
+
+@catalog_router.get(RECOMMENDATIONS_ROUTE)
+def list_catalog_recommendations(
+    limit: int = Query(default=DEFAULT_PAGE, ge=1, le=MAX_PAGE),
+    cursor: str | None = Query(default=None, max_length=200),
+    actor: User = Depends(require_permission("catalog:read")),
+) -> dict[str, Any]:
+    """A page of recommendations, oldest first. A recommendation is a suggestion: it carries no result."""
+    page = list_recommendations(limit, cursor)
+    if page is None:
+        raise HTTPException(status_code=400, detail={"status": "invalid_cursor"})
+    recommendations, next_cursor = page
+    return {
+        "items": [_recommendation_view(item) for item in recommendations],
+        "next_cursor": next_cursor,
+    }
 
 
 @catalog_router.post(RUNS_ROUTE, status_code=201)

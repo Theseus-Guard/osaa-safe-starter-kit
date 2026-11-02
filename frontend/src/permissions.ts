@@ -16,6 +16,8 @@ export interface CaseAbilities {
   canReadEvidence: boolean;
   // evidence:write. Upload evidence.
   canWriteEvidence: boolean;
+  // evidence:read and evidence:write. Make a redacted copy of a text original. The backend also checks the case and the TLP rule.
+  canRedactEvidence: boolean;
   // reviews:write. Record a review. The backend also requires an assignment to the case.
   canReview: boolean;
   // Any case-read permission. Shows the case record sections: awareness events, impacts, legal duties and classification.
@@ -49,10 +51,29 @@ export function caseAbilities(permissions: readonly string[]): CaseAbilities {
     canAssign: hasPermission(permissions, "cases:assign"),
     canReadEvidence: hasPermission(permissions, "evidence:read"),
     canWriteEvidence: hasPermission(permissions, "evidence:write"),
+    canRedactEvidence:
+      hasPermission(permissions, "evidence:read") && hasPermission(permissions, "evidence:write"),
     canReview: hasPermission(permissions, "reviews:write"),
     canReadRecords: canReadCases(permissions),
     canWriteRecords: hasPermission(permissions, "cases:triage"),
     canReadFullView: hasPermission(permissions, "cases:read_all"),
     canReadReporterContact: hasPermission(permissions, "reporter_contact:read"),
+  };
+}
+
+export interface CatalogAbilities {
+  // catalog:read. Open the catalog list, the entries, their versions and the recommendations.
+  canRead: boolean;
+  // catalog:write. Record an entry, a version, a correction, a dispute, a withdrawal, a supersession, a recommendation or a verification run.
+  canWrite: boolean;
+  // catalog:read_restricted. See a restricted reference and its digest. The API omits them otherwise.
+  canReadRestricted: boolean;
+}
+
+export function catalogAbilities(permissions: readonly string[]): CatalogAbilities {
+  return {
+    canRead: hasPermission(permissions, "catalog:read"),
+    canWrite: hasPermission(permissions, "catalog:write"),
+    canReadRestricted: hasPermission(permissions, "catalog:read_restricted"),
   };
 }

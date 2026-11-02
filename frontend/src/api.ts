@@ -764,6 +764,54 @@ export interface EvidenceItem {
   sha256_plaintext: string | null;
   status: string;
   created_at: string;
+  // The TLP audience label. Null for an uploaded original, which has no TLP rule.
+  tlp_label?: string | null;
+}
+
+// TLP audience labels, from the narrowest to the widest. A redacted copy may not be labelled less restrictively than its original.
+export const TLP_LABELS = ["RED", "AMBER", "AMBER+STRICT", "GREEN", "CLEAR"] as const;
+export type TlpLabel = (typeof TLP_LABELS)[number];
+
+export interface RemovedRange {
+  from_line: number;
+  to_line: number;
+  // The number of lines in the range, from 1-based inclusive line numbers.
+  lines: number;
+  reason: string;
+}
+
+// The manifest of a redacted copy. It names the removed ranges and the reasons, never the removed text.
+export interface RedactionManifest {
+  method: string;
+  replacement: string;
+  source_sha256: string | null;
+  tlp_label: string;
+  lines_total: number;
+  removed_lines: number;
+  removed: RemovedRange[];
+}
+
+// A review layer that cites the original. On the redacted copy it is insufficient_evidence.
+export interface ClaimAssessment {
+  review_layer_id: string;
+  round_id: string;
+  layer: string;
+  outcome: string;
+  reason: string;
+}
+
+export interface Derivation {
+  redaction_id: string;
+  original_evidence_id: string;
+  derived: EvidenceItem;
+  manifest: RedactionManifest;
+  claim_assessments: ClaimAssessment[];
+}
+
+export interface RedactionRangeBody {
+  from_line: number;
+  to_line: number;
+  reason: string;
 }
 
 export interface EvidencePage {
@@ -798,6 +846,33 @@ export function downloadEvidence(evidenceId: string): Promise<Blob> {
 
 export function listCustodyEvents(evidenceId: string): Promise<CustodyEvent[]> {
   return request<CustodyEvent[]>(`/evidence/${encodeURIComponent(evidenceId)}/custody`);
+}
+
+// One item, with its TLP label. Needs evidence:read and a visible case. A TLP-hidden item answers the same 404 as a missing one.
+export function getEvidence(evidenceId: string): Promise<EvidenceItem> {
+  return request<EvidenceItem>(`/evidence/${encodeURIComponent(evidenceId)}`);
+}
+
+// The redacted copies of an original that the caller may see under the TLP rule.
+export function listDerivatives(evidenceId: string): Promise<EvidenceItem[]> {
+  return request<EvidenceItem[]>(`/evidence/${encodeURIComponent(evidenceId)}/derivatives`);
+}
+
+// The manifest and claim assessments of a redacted copy. An original answers 404.
+export function getRedaction(derivedEvidenceId: string): Promise<Derivation> {
+  return request<Derivation>(`/evidence/${encodeURIComponent(derivedEvidenceId)}/redaction`);
+}
+
+// Needs evidence:read and evidence:write. The original is unchanged; the copy is a new item with its own ID.
+export function redactEvidence(
+  evidenceId: string,
+  body: { removed: RedactionRangeBody[]; tlp_label: TlpLabel },
+): Promise<Derivation> {
+  return request<Derivation>(`/evidence/${encodeURIComponent(evidenceId)}/derivatives`, {
+    method: "POST",
+    json: body,
+    headers: idempotencyHeaders(),
+  });
 }
 
 // Case record: awareness events, impacts, legal duties, classification and the preliminary report.
@@ -1255,4 +1330,209 @@ export async function readiness(): Promise<Readiness> {
     // Fall through to unavailable.
   }
   return "unavailable";
+}
+
+// Catalog. Reads need catalog:read; writes need catalog:write. A restricted reference and its digest are returned only
+// with catalog:read_restricted. A withdrawn or superseded entry accepts no further change (409 entry_closed).
+export const CATALOG_RESULTS = ["pass", "fail", "inconclusive"] as const;
+export type CatalogResult = (typeof CATALOG_RESULTS)[number];
+
+// What a catalog version shows of its verification run. The checker and the evidence path stay internal.
+export interface VerificationSummary {
+  run_id: string;
+  subject: string;
+  method: string;
+  result: CatalogResult;
+  verified_at: string;
+}
+
+export interface CatalogVersion {
+  version: number;
+  operation: "create" | "version" | "correction" | "dispute" | "withdrawal" | "supersession";
+  status: string;
+  title: string;
+  body: string;
+  reason: string | null;
+  replacement_entry_id: string | null;
+  created_by: string;
+  created_at: string;
+  verification: VerificationSummary | null;
+  // True only for a passing run. A recommendation alone never makes an entry verified.
+  verified: boolean;
+  // Present only for a caller with catalog:read_restricted. Null when the version has none.
+  restricted?: { reference: string; digest: string } | null;
+}
+
+export interface CatalogEntry {
+  id: string;
+  created_by: string;
+  created_at: string;
+  status: string;
+  version: number;
+  current: CatalogVersion;
+  // The full history, oldest first. Present on the detail read only.
+  versions?: CatalogVersion[];
+}
+
+export interface CatalogEntryPage {
+  items: CatalogEntry[];
+  next_cursor: string | null;
+}
+
+export interface Recommendation {
+  id: string;
+  failure_or_system: string;
+  required_defence_outcome: string;
+  minimum_control: string;
+  control_alternative: string | null;
+  responsible: string;
+  due_at: string;
+  evidence_to_keep: string;
+  created_by: string;
+  created_at: string;
+}
+
+export interface RecommendationPage {
+  items: Recommendation[];
+  next_cursor: string | null;
+}
+
+export interface RecommendationBody {
+  failure_or_system: string;
+  required_defence_outcome: string;
+  minimum_control: string;
+  control_alternative: string | null;
+  responsible: string;
+  due_at: string;
+  evidence_to_keep: string;
+}
+
+export interface VerificationRunBody {
+  subject: string;
+  scope: string;
+  assumptions: string;
+  evidence_path: string;
+  failure_behavior: string;
+  error_class: string;
+  uncertainty: string;
+  method: string;
+  result: CatalogResult;
+}
+
+export interface VerificationRun extends VerificationRunBody {
+  id: string;
+  recommendation_id: string;
+  verified_by: string;
+  verified_at: string;
+}
+
+// The fields of a new version or a correction. The expected version is the one the editor read.
+export interface CatalogContentBody {
+  title: string;
+  body: string;
+  verification_run_id?: string | null;
+  restricted_reference?: string | null;
+}
+
+export function listCatalogEntries(cursor: string | null = null): Promise<CatalogEntryPage> {
+  const query = cursor === null ? "" : `&cursor=${encodeURIComponent(cursor)}`;
+  return request<CatalogEntryPage>(`/catalog/entries?limit=50${query}`);
+}
+
+export function getCatalogEntry(entryId: string): Promise<CatalogEntry> {
+  return request<CatalogEntry>(`/catalog/entries/${encodeURIComponent(entryId)}`);
+}
+
+export function createCatalogEntry(body: CatalogContentBody): Promise<CatalogEntry> {
+  return request<CatalogEntry>("/catalog/entries", { method: "POST", json: body, headers: idempotencyHeaders() });
+}
+
+export function addCatalogVersion(
+  entryId: string,
+  expectedVersion: number,
+  body: CatalogContentBody,
+): Promise<CatalogEntry> {
+  return request<CatalogEntry>(`/catalog/entries/${encodeURIComponent(entryId)}/versions`, {
+    method: "POST",
+    json: { expected_version: expectedVersion, ...body },
+    headers: idempotencyHeaders(),
+  });
+}
+
+export function correctCatalogEntry(
+  entryId: string,
+  expectedVersion: number,
+  body: CatalogContentBody & { reason: string },
+): Promise<CatalogEntry> {
+  return request<CatalogEntry>(`/catalog/entries/${encodeURIComponent(entryId)}/corrections`, {
+    method: "POST",
+    json: { expected_version: expectedVersion, ...body },
+    headers: idempotencyHeaders(),
+  });
+}
+
+// A dispute, or a withdrawal. Both keep the content and need a reason.
+export function disputeCatalogEntry(entryId: string, expectedVersion: number, reason: string): Promise<CatalogEntry> {
+  return request<CatalogEntry>(`/catalog/entries/${encodeURIComponent(entryId)}/disputes`, {
+    method: "POST",
+    json: { expected_version: expectedVersion, reason },
+    headers: idempotencyHeaders(),
+  });
+}
+
+export function withdrawCatalogEntry(entryId: string, expectedVersion: number, reason: string): Promise<CatalogEntry> {
+  return request<CatalogEntry>(`/catalog/entries/${encodeURIComponent(entryId)}/withdrawals`, {
+    method: "POST",
+    json: { expected_version: expectedVersion, reason },
+    headers: idempotencyHeaders(),
+  });
+}
+
+export function supersedeCatalogEntry(
+  entryId: string,
+  expectedVersion: number,
+  replacementEntryId: string,
+  reason: string | null,
+): Promise<CatalogEntry> {
+  return request<CatalogEntry>(`/catalog/entries/${encodeURIComponent(entryId)}/supersessions`, {
+    method: "POST",
+    json: { expected_version: expectedVersion, replacement_entry_id: replacementEntryId, reason },
+    headers: idempotencyHeaders(),
+  });
+}
+
+export function listRecommendations(cursor: string | null = null): Promise<RecommendationPage> {
+  const query = cursor === null ? "" : `&cursor=${encodeURIComponent(cursor)}`;
+  return request<RecommendationPage>(`/catalog/recommendations?limit=50${query}`);
+}
+
+export function createRecommendation(body: RecommendationBody): Promise<Recommendation> {
+  return request<Recommendation>("/catalog/recommendations", {
+    method: "POST",
+    json: body,
+    headers: idempotencyHeaders(),
+  });
+}
+
+export function recordVerificationRun(recommendationId: string, body: VerificationRunBody): Promise<VerificationRun> {
+  return request<VerificationRun>(`/catalog/recommendations/${encodeURIComponent(recommendationId)}/verification-runs`, {
+    method: "POST",
+    json: body,
+    headers: idempotencyHeaders(),
+  });
+}
+
+// The verification of an entry, as the CLI does it: record the run, then save a version with the same content that
+// names the run. The entry shows as verified only when the run passed. A failing run is attached too, so the history shows it.
+export async function verifyCatalogEntry(
+  entry: CatalogEntry,
+  recommendationId: string,
+  run: VerificationRunBody,
+): Promise<CatalogEntry> {
+  const recorded = await recordVerificationRun(recommendationId, run);
+  return addCatalogVersion(entry.id, entry.version, {
+    title: entry.current.title,
+    body: entry.current.body,
+    verification_run_id: recorded.id,
+  });
 }

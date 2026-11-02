@@ -365,6 +365,29 @@ def create_derivative(
     raise RedactionRefused("not_found")
 
 
+def list_derivatives(original_id: str, recipient: tlp.Recipient) -> list[evidence.EvidenceItem]:
+    """The derived items of an original that the caller may see under the TLP rule, oldest first.
+
+    Derived items the rule hides are left out, as list_evidence leaves them out of a case page. The caller checks the
+    case ACL and the TLP rule for the original before calling this.
+    """
+    audience, audience_params = tlp.visibility_sql(recipient)
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT {evidence._ITEM_COLUMNS} FROM evidence_items e
+            WHERE e.id IN (
+                SELECT r.derived_evidence_id FROM evidence_redactions r
+                WHERE r.original_evidence_id = %s AND NOT r.is_deleted
+            )
+              AND NOT e.is_deleted AND {audience}
+            ORDER BY e.created_at, e.id
+            """,
+            (original_id, *audience_params),
+        ).fetchall()
+    return [evidence._to_item(row) for row in rows]
+
+
 def load_derivation(derived_id: str) -> Derivation | None:
     """The redaction that produced a derived item, with its manifest and claim assessments. No access check here:
     the caller checks RBAC, the case ACL, and the TLP rule for the derived item first."""
