@@ -93,6 +93,9 @@ CATALOG_ENTRY_SUPERSESSION = "catalog.entry_superseded"
 # purpose are free text and are never written here; the details hold identifiers, the digest, and counts only.
 DISCLOSURE_VERSION_CREATE = "disclosure.version_created"
 DISCLOSURE_APPROVAL = "disclosure.approved"
+# Written on every export of an approved version (safe_kit.disclosure.export_version). Details hold identifiers, the
+# status, and the digest only: never the export's content, the recipient or the purpose.
+DISCLOSURE_EXPORT = "disclosure.exported"
 SYSTEM_TIMEZONE_SET = "system.timezone_set"
 SYSTEM_TIMEZONE_CHANGED = "system.timezone_changed"
 

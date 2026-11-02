@@ -461,3 +461,98 @@ def test_approve_json_prints_the_api_body(api, capsys):
     )
     assert code == 0
     assert out == compact(APPROVED_BODY).decode("utf-8") + "\n"
+
+
+# --- case disclosure export: the versioned JSON of one approved version ----------------------------------------------
+
+EXPORT_PATH = f"{DISCLOSURE_PATH}/{VERSION_ID}/export"
+EXPORT_BODY = {
+    "disclosure_export_schema_version": "0.1.0",
+    "disclosure_export": {
+        "case_id": CASE_ID,
+        "package_id": PACKAGE_ID,
+        "version_id": VERSION_ID,
+        "version": 1,
+        "status": "approved",
+        "latest_version": 1,
+        "template": {"key": "confidential_rapid_alert", "title": "Confidential rapid alert", "sections": []},
+        "recipient": "Member CERT",
+        "purpose": "Rapid alert",
+        "tlp_audience": "AMBER",
+        "digest": DIGEST,
+        "items": [{"withheld": True}],
+        "withheld_count": 1,
+        "manifest": {"items": []},
+        "approval": {
+            "id": "cccccccc-dddd-4eee-8fff-000000000009",
+            "approved_by": "dddddddd-eeee-4fff-8000-000000000001",
+            "approved_at": "2026-11-02T10:00:00+00:00",
+            "digest": DIGEST,
+            "separation_rule": "preparer_differs_from_approver",
+        },
+    },
+}
+
+
+def test_export_writes_the_document_to_the_file_and_prints_nothing(api, capsys, tmp_path):
+    api.route("GET", EXPORT_PATH, body=EXPORT_BODY)
+    target = tmp_path / "disclosure-export.json"
+
+    code, out, err = run(
+        capsys, "case", "disclosure", "export", CASE_ID, VERSION_ID, "--username", "alice", "--out", str(target)
+    )
+
+    assert code == 0, err
+    assert out == ""
+    assert target.read_bytes() == compact(EXPORT_BODY) + b"\n"
+    assert api.paths()[-1] == ("POST", "/api/v1/auth/logout")
+
+
+def test_export_without_a_file_prints_the_document_as_received(api, capsys):
+    api.route("GET", EXPORT_PATH, body=EXPORT_BODY)
+
+    code, out, _ = run(capsys, "case", "disclosure", "export", CASE_ID, VERSION_ID, "--username", "alice")
+
+    assert code == 0
+    assert json.loads(out) == EXPORT_BODY
+
+
+def test_export_of_an_unapproved_version_is_refused_with_the_next_step(api, capsys):
+    api.route("GET", EXPORT_PATH, status=409, body={"detail": {"status": "version_not_approved"}})
+
+    code, out, err = run(capsys, "case", "disclosure", "export", CASE_ID, VERSION_ID, "--username", "alice")
+
+    assert code == 1
+    assert out == ""
+    assert "only an approved version can be exported" in err
+    assert "case disclosure approve" in err
+
+
+def test_export_of_a_version_the_caller_cannot_see_is_not_found(api, capsys):
+    api.route("GET", EXPORT_PATH, status=404, body={"detail": "disclosure version not found"})
+
+    code, out, err = run(capsys, "case", "disclosure", "export", CASE_ID, VERSION_ID, "--username", "alice")
+
+    assert code == 1
+    assert out == ""
+    assert "not visible to your account" in err
+
+
+def test_export_to_an_unwritable_path_is_a_usage_error(api, capsys, tmp_path):
+    api.route("GET", EXPORT_PATH, body=EXPORT_BODY)
+    target = tmp_path / "missing-directory" / "disclosure-export.json"
+
+    code, out, err = run(
+        capsys, "case", "disclosure", "export", CASE_ID, VERSION_ID, "--username", "alice", "--out", str(target)
+    )
+
+    assert code == 2
+    assert "cannot write" in err
+
+
+def test_export_with_a_malformed_version_id_is_refused_before_any_request(api, capsys):
+    code, out, err = run(capsys, "case", "disclosure", "export", CASE_ID, "not-a-uuid", "--username", "alice")
+
+    assert code == 2
+    assert "VERSION_ID must be a UUID" in err
+    assert not any(path.endswith("/export") for _, path in api.paths())

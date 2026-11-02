@@ -7,8 +7,10 @@ import {
   DisclosurePreview,
   DisclosureVersion,
   approveDisclosure,
+  exportDisclosure,
   getDisclosurePreview,
   listDisclosures,
+  saveBlob,
 } from "../../api";
 import { CaseDisclosures } from "./CaseDisclosures";
 
@@ -19,6 +21,8 @@ vi.mock("../../api", async (importOriginal) => {
     listDisclosures: vi.fn(),
     getDisclosurePreview: vi.fn(),
     approveDisclosure: vi.fn(),
+    exportDisclosure: vi.fn(),
+    saveBlob: vi.fn(),
   };
 });
 
@@ -31,6 +35,8 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 const list = vi.mocked(listDisclosures);
 const preview = vi.mocked(getDisclosurePreview);
 const approve = vi.mocked(approveDisclosure);
+const exportOne = vi.mocked(exportDisclosure);
+const save = vi.mocked(saveBlob);
 
 const CASE_ID = "11111111-2222-4333-8444-555555555555";
 const VERSION_ID = "aaaaaaaa-bbbb-4ccc-8ddd-000000000002";
@@ -207,6 +213,72 @@ describe("CaseDisclosures", () => {
       { timeout: 3000 },
     );
     expect(screen.getByLabelText("Recipient")).toHaveValue("Other CERT");
+  });
+
+  it("exports an approved version as a file named by its version number", async () => {
+    const user = userEvent.setup();
+    const approved: DisclosureVersion = {
+      ...VERSION,
+      approval_state: "approved",
+      approval: {
+        id: "cccccccc-dddd-4eee-8fff-000000000009",
+        recipient: VERSION.recipient,
+        purpose: VERSION.purpose,
+        digest: DIGEST,
+        preparer_id: VERSION.created_by,
+        approved_by: "dddddddd-eeee-4fff-8000-000000000001",
+        approved_at: "2026-11-02T10:00:00Z",
+        separation_rule: "preparer_differs_from_approver",
+      },
+    };
+    list.mockResolvedValue({ items: [approved] });
+    const blob = new Blob(["{}"], { type: "application/json" });
+    exportOne.mockResolvedValue(blob);
+    render(<CaseDisclosures caseId={CASE_ID} closed={false} canApprove={false} />);
+    await screen.findByText("Preview: Confidential rapid alert");
+
+    await user.click(screen.getByRole("button", { name: "Export JSON" }));
+
+    await waitFor(() => expect(save).toHaveBeenCalledWith(blob, "disclosure-version-1.json"));
+    expect(exportOne).toHaveBeenCalledWith(CASE_ID, VERSION_ID);
+  });
+
+  it("offers no export of a version that has no approval and says why", async () => {
+    render(<CaseDisclosures caseId={CASE_ID} closed={false} canApprove={false} />);
+    await screen.findByText("Preview: Confidential rapid alert");
+
+    expect(screen.getByRole("button", { name: "Export JSON" })).toBeDisabled();
+    expect(exportOne).not.toHaveBeenCalled();
+  });
+
+  it("shows the refusal when the export fails", async () => {
+    const user = userEvent.setup();
+    list.mockResolvedValue({
+      items: [
+        {
+          ...VERSION,
+          approval_state: "approved",
+          approval: {
+            id: "cccccccc-dddd-4eee-8fff-000000000009",
+            recipient: VERSION.recipient,
+            purpose: VERSION.purpose,
+            digest: DIGEST,
+            preparer_id: VERSION.created_by,
+            approved_by: "dddddddd-eeee-4fff-8000-000000000001",
+            approved_at: "2026-11-02T10:00:00Z",
+            separation_rule: "preparer_differs_from_approver",
+          },
+        },
+      ],
+    });
+    exportOne.mockRejectedValue(new ApiError(409, "version_not_approved"));
+    render(<CaseDisclosures caseId={CASE_ID} closed={false} canApprove={false} />);
+    await screen.findByText("Preview: Confidential rapid alert");
+
+    await user.click(screen.getByRole("button", { name: "Export JSON" }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(save).not.toHaveBeenCalled();
   });
 
   it("locks the approval for a closed case and says why", async () => {

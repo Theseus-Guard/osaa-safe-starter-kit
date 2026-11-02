@@ -14,6 +14,12 @@ the latest version.
 The send step, which is not built yet, must call check_release before it sends. check_release re-checks the approval
 against the current digest and the release rules, and returns a refusal whenever a check fails.
 
+Export (export_version): only a version that has an approval can be exported. The export is the approved package as
+JSON (schemas/disclosure-export.v0.json). It follows the preview rule: derivatives only, no file name, no case title,
+no redaction reason, no source checksum, and items outside the caller's TLP audience are withheld without details. An
+approved version that a later version has replaced is exported with status "superseded", so the history is marked.
+Each export writes one audit row, in the same transaction as the read, with the identifiers and the status only.
+
 Access: the caller needs the permission of the route (disclosures:read, disclosures:prepare, or disclosures:approve), the
 case must be visible to the caller (cases.CaseScope, the same rule as the other case records), and the caller must be in
 the TLP audience of each non-CLEAR item (safe_kit.tlp). CLEAR items are gated by release approval, which is recorded by
@@ -151,6 +157,7 @@ class Outcome(Enum):
     EVIDENCE_NOT_ELIGIBLE = "evidence_not_eligible"
     AUDIENCE_WIDER_THAN_EVIDENCE = "audience_wider_than_evidence"
     NOT_LATEST = "not_latest"
+    NOT_APPROVED = "not_approved"  # export: only an approved version can be exported
     ALREADY_APPROVED = "already_approved"
     PREPARER_IS_APPROVER = "preparer_is_approver"
     BINDING_MISMATCH = "binding_mismatch"
@@ -899,3 +906,148 @@ def check_release(version_id: str) -> ReleaseCheck:
                 ReleaseOutcome.RELEASE_APPROVAL_MISSING, version_id, version.digest
             )
     return ReleaseCheck(ReleaseOutcome.RELEASABLE, version_id, version.digest)
+
+
+# --- export of an approved version ----------------------------------------------------------------------------------
+
+EXPORT_SCHEMA_VERSION = "0.1.0"  # disclosure_export_schema_version; changes to the fields or enums change it
+EXPORT_STATUS_APPROVED = "approved"  # the latest version, with its approval
+EXPORT_STATUS_SUPERSEDED = "superseded"  # an approved version that a later version of the package replaced: history
+
+
+def export_document(
+    version: Version, visible: Sequence[bool], latest: int
+) -> dict[str, Any]:
+    """The approved version as the versioned export document (schemas/disclosure-export.v0.json).
+
+    visible: for each item of the version, whether the caller may see it (the TLP rule). latest: the latest version
+    number of the package. The document holds no export time, so an unchanged version exports the same document. It
+    holds the template, recipient, purpose, TLP audience, digest, the derivative items, the line ranges of the items the
+    caller may see, and the approval reference. It never holds a file name, a case title, a redaction reason, the
+    checksum of an original, or the redaction ID; a withheld item is only a placeholder.
+    """
+    approval = version.approval
+    assert approval is not None, "only an approved version is exported"
+    template = TEMPLATES[version.template]
+    manifest_by_item = {
+        entry["evidence_id"]: entry for entry in version.manifest["items"]
+    }
+    items: list[dict[str, Any]] = []
+    manifest_items: list[dict[str, Any]] = []
+    withheld = 0
+    for item, may_see in zip(version.items, visible):
+        if not may_see:
+            withheld += 1
+            items.append({"withheld": True})
+            continue
+        items.append(
+            {
+                "withheld": False,
+                "evidence_id": item.evidence_id,
+                "media_type": item.media_type,
+                "size_bytes": item.size_bytes,
+                "sha256_plaintext": item.sha256_plaintext,
+                "tlp_label": item.tlp_label,
+            }
+        )
+        entry = manifest_by_item[item.evidence_id]
+        manifest_items.append(
+            {
+                "evidence_id": item.evidence_id,
+                "lines_total": entry["lines_total"],
+                "removed_lines": entry["removed_lines"],
+                "removed": [
+                    {
+                        "from_line": removed["from_line"],
+                        "to_line": removed["to_line"],
+                        "lines": removed["lines"],
+                    }
+                    for removed in entry["removed"]
+                ],
+            }
+        )
+    return {
+        "disclosure_export_schema_version": EXPORT_SCHEMA_VERSION,
+        "disclosure_export": {
+            "case_id": version.case_id,
+            "package_id": version.package_id,
+            "version_id": version.id,
+            "version": version.version,
+            "status": EXPORT_STATUS_APPROVED
+            if version.is_latest
+            else EXPORT_STATUS_SUPERSEDED,
+            "latest_version": latest,
+            "template": {
+                "key": template.key,
+                "title": template.title,
+                "sections": [
+                    {"title": section.title, "contains": section.contains}
+                    for section in template.sections
+                ],
+            },
+            "recipient": version.recipient,
+            "purpose": version.purpose,
+            "tlp_audience": version.tlp_audience,
+            "digest": version.digest,
+            "items": items,
+            "withheld_count": withheld,
+            "manifest": {"items": manifest_items},
+            "approval": {
+                "id": approval.id,
+                "approved_by": approval.approved_by,
+                "approved_at": approval.approved_at.isoformat(),
+                "digest": approval.digest,
+                "separation_rule": "preparer_differs_from_approver",
+            },
+        },
+    }
+
+
+def export_version(
+    case_id: str, version_id: str, scope: CaseScope, recipient: tlp.Recipient
+) -> Result:
+    """The export of one version, and its audit row, in one transaction.
+
+    Refused: a case the caller cannot see (NOT_FOUND), a version of another case (VERSION_NOT_FOUND), a version with no
+    approval (NOT_APPROVED), and a stored content that no longer matches its digest (INTEGRITY_FAILED). The audit row
+    holds the identifiers, the digest, and the status; the export itself is never written to the log.
+    """
+    with connect() as conn:
+        visibility, params = scope.visibility_sql()
+        if (
+            conn.execute(
+                f"SELECT 1 FROM cases WHERE id = %s AND NOT is_deleted AND {visibility}",
+                (case_id, *params),
+            ).fetchone()
+            is None
+        ):
+            return Result(Outcome.NOT_FOUND)
+        version = _load_version(conn, case_id, version_id)
+        if version is None:
+            return Result(Outcome.VERSION_NOT_FOUND)
+        if version.approval is None:
+            return Result(Outcome.NOT_APPROVED)
+        if digest_of_version(version) != version.digest:
+            return Result(Outcome.INTEGRITY_FAILED)
+        visible = _labels_visible(
+            conn, case_id, recipient, [item.tlp_label for item in version.items]
+        )
+        latest = _latest_version_number(conn, version.package_id)
+        document = export_document(version, visible, latest)
+        status = document["disclosure_export"]["status"]
+        audit.record(
+            conn,
+            audit.DISCLOSURE_EXPORT,
+            "disclosure_version",
+            version.id,
+            actor_id=scope.user_id,
+            details={
+                "case_id": case_id,
+                "package_id": version.package_id,
+                "version": version.version,
+                "digest": version.digest,
+                "status": status,
+                "schema_version": EXPORT_SCHEMA_VERSION,
+            },
+        )
+    return Result(Outcome.OK, value=document)

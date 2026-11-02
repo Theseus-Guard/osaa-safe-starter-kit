@@ -544,6 +544,19 @@ def _case_import(base_url: str, args: argparse.Namespace) -> None:
     _with_session(base_url, args, action)
 
 
+def _write_document(raw: bytes, out: str | None) -> None:
+    """Print a versioned JSON document as received, or write it to the file out (one trailing newline)."""
+    if out is None:
+        _print_json(raw)
+        return
+    body = raw if raw.endswith(b"\n") else raw + b"\n"
+    try:
+        with open(out, "wb") as handle:
+            handle.write(body)
+    except OSError as error:
+        raise UsageError(f"cannot write {out}: {error.strerror or 'unknown error'}") from None
+
+
 def _catalog_export(base_url: str, args: argparse.Namespace) -> None:
     captured: dict[str, bytes] = {}
 
@@ -551,16 +564,7 @@ def _catalog_export(base_url: str, args: argparse.Namespace) -> None:
         captured["raw"] = _call(base, "GET", "/api/v1/catalog/export", token=token)
 
     _with_session(base_url, args, action)
-    raw = captured["raw"]
-    if args.out is None:
-        _print_json(raw)
-        return
-    body = raw if raw.endswith(b"\n") else raw + b"\n"
-    try:
-        with open(args.out, "wb") as handle:
-            handle.write(body)
-    except OSError as error:
-        raise UsageError(f"cannot write {args.out}: {error.strerror or 'unknown error'}") from None
+    _write_document(captured["raw"], args.out)
 
 
 def _print_evidence(item: dict) -> None:
@@ -1914,6 +1918,9 @@ DISCLOSURE_STATUS_TEXT = {
     ),
     "evidence_not_visible": "one or more items are outside your TLP audience, so you cannot approve this version",
     "digest_mismatch": "the stored content does not match its digest, so nothing was approved. Report this to an administrator",
+    "version_not_approved": (
+        "only an approved version can be exported. Approve it first with 'case disclosure approve', then export it again"
+    ),
     "idempotency_key_reused": "this Idempotency-Key was used with another request. Run again without --idempotency-key",
 }
 
@@ -2059,6 +2066,28 @@ def _disclosure_approve(base_url: str, args: argparse.Namespace) -> None:
         payload,
         _render_disclosure_approved,
     )
+
+
+def _disclosure_export(base_url: str, args: argparse.Namespace) -> None:
+    """Export one approved version. The JSON is the API body as received; it holds no evidence content."""
+    case_id = _case_id_arg(args.case_id)
+    version_id = _uuid_arg(args.version_id, "VERSION_ID")
+    captured: dict[str, bytes] = {}
+
+    def action(base: str, token: str) -> None:
+        try:
+            captured["raw"] = _call(
+                base,
+                "GET",
+                f"/api/v1/cases/{case_id}/disclosures/{version_id}/export",
+                token=token,
+                messages=DISCLOSURE_VERSION_MESSAGES,
+            )
+        except RequestFailed as error:
+            raise _disclosure_failure(error) from None
+
+    _with_session(base_url, args, action)
+    _write_document(captured["raw"], args.out)
 
 
 def _add_idempotency_option(parser: argparse.ArgumentParser) -> None:
@@ -2279,7 +2308,7 @@ def _add_case_update_commands(case_commands) -> None:
 
     disclosure = case_commands.add_parser(
         "disclosure",
-        help="Create, show and approve disclosure packages: redacted derivatives for one recipient and purpose",
+        help="Create, show, approve and export disclosure packages: redacted derivatives for one recipient and purpose",
     )
     disclosure_commands = disclosure.add_subparsers(dest="disclosure_command", required=True)
     disclosure_create = disclosure_commands.add_parser(
@@ -2331,6 +2360,18 @@ def _add_case_update_commands(case_commands) -> None:
     _add_idempotency_option(disclosure_approve)
     _add_auth_options(disclosure_approve)
     disclosure_approve.set_defaults(handler=_disclosure_approve)
+    disclosure_export = disclosure_commands.add_parser(
+        "export",
+        help="Export one approved version as versioned JSON: derivatives, TLP, digest and approval, no evidence content. "
+        "Needs disclosures:read",
+    )
+    disclosure_export.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    disclosure_export.add_argument("version_id", metavar="VERSION_ID", help="Version ID (UUID)")
+    disclosure_export.add_argument(
+        "--out", metavar="FILE", default=None, help="Write the JSON to FILE instead of printing it"
+    )
+    _add_auth_options(disclosure_export, json_output=False)
+    disclosure_export.set_defaults(handler=_disclosure_export)
 
     review = case_commands.add_parser(
         "review",
