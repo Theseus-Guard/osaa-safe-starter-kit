@@ -18,6 +18,10 @@ MAX_PORT = 65535
 # Token and session lifetimes. The values are required: there is no default. The upper bounds only catch typos.
 MAX_TTL_MINUTES = 525_600  # one year
 MAX_SESSION_HOURS = 8_760  # one year
+# Retention period in years, shown in the privacy inventory. Required, no default. The value is provisional: legal review
+# of the retention rules is pending (decision D-09 in plans/f0/karar-gunlugu.md).
+MIN_RETENTION_YEARS = 1
+MAX_RETENTION_YEARS = 30
 
 
 class ConfigError(Exception):
@@ -40,6 +44,7 @@ class Settings:
     access_ttl_minutes: int
     refresh_ttl_minutes: int
     session_max_hours: int
+    retention_years: int
     trusted_proxies: tuple[TrustedNetwork, ...] = ()
 
 
@@ -76,6 +81,14 @@ def _db_port(env: Mapping[str, str]) -> int:
     if not (raw.isascii() and raw.isdigit()) or not 1 <= int(raw) <= MAX_PORT:
         raise ConfigError(f"SAFE_DB_PORT must be a port number from 1 to {MAX_PORT}")
     return int(raw)
+
+
+def retention_years(env: Mapping[str, str]) -> int:
+    """The retention period in years from SAFE_RETENTION_YEARS. Required; a whole number from 1 to 30.
+
+    The value is provisional until legal review. The privacy inventory shows it; nothing is deleted by it.
+    """
+    return required_int(env, "SAFE_RETENTION_YEARS", minimum=MIN_RETENTION_YEARS, maximum=MAX_RETENTION_YEARS)
 
 
 def trusted_proxies(env: Mapping[str, str]) -> tuple[TrustedNetwork, ...]:
@@ -134,6 +147,7 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         access_ttl_minutes=required_int(env, "SAFE_ACCESS_TTL_MINUTES", maximum=MAX_TTL_MINUTES),
         refresh_ttl_minutes=required_int(env, "SAFE_REFRESH_TTL_MINUTES", maximum=MAX_TTL_MINUTES),
         session_max_hours=required_int(env, "SAFE_SESSION_MAX_HOURS", maximum=MAX_SESSION_HOURS),
+        retention_years=retention_years(env),
         trusted_proxies=trusted_proxies(env),
     )
 

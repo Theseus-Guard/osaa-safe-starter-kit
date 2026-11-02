@@ -29,6 +29,8 @@ DB_SETTINGS = {
     "SAFE_ACCESS_TTL_MINUTES": "60",
     "SAFE_REFRESH_TTL_MINUTES": "60",
     "SAFE_SESSION_MAX_HOURS": "12",
+    # Also required by the startup guard (no default). The privacy inventory shows it.
+    "SAFE_RETENTION_YEARS": "5",
 }
 
 
@@ -129,6 +131,44 @@ def test_token_settings_are_read_into_the_settings():
     settings = load_settings(production_env(SAFE_ACCESS_TTL_MINUTES="30", SAFE_REFRESH_TTL_MINUTES="90",
                                             SAFE_SESSION_MAX_HOURS="8"))
     assert (settings.access_ttl_minutes, settings.refresh_ttl_minutes, settings.session_max_hours) == (30, 90, 8)
+
+
+@pytest.mark.parametrize("value", ["0", "31", "-1", "1.5", "five", "525600"])
+def test_retention_years_must_be_a_whole_number_from_1_to_30(value):
+    with pytest.raises(ConfigError, match="SAFE_RETENTION_YEARS"):
+        load_settings(production_env(SAFE_RETENTION_YEARS=value))
+    with pytest.raises(ConfigError, match="SAFE_RETENTION_YEARS"):
+        load_settings(demo_env(SAFE_RETENTION_YEARS=value))
+
+
+@pytest.mark.parametrize("value", ["1", "5", "30"])
+def test_retention_years_accepts_the_bounds_and_values_in_between(value):
+    assert load_settings(production_env(SAFE_RETENTION_YEARS=value)).retention_years == int(value)
+
+
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_retention_years_is_required_with_no_default(value):
+    with pytest.raises(ConfigError, match="SAFE_RETENTION_YEARS is required"):
+        load_settings(production_env(SAFE_RETENTION_YEARS=value))
+    with pytest.raises(ConfigError, match="SAFE_RETENTION_YEARS is required"):
+        load_settings(demo_env(SAFE_RETENTION_YEARS=value))
+
+
+def test_retention_years_is_read_into_the_settings():
+    assert load_settings(production_env()).retention_years == 5
+
+
+@pytest.mark.parametrize("service", ["api", "worker"])
+def test_compose_sets_the_retention_period_for_api_and_worker(service):
+    # The guard runs in both processes; the value is provisional until legal review (decision D-09).
+    compose = (Path(__file__).resolve().parents[2] / "compose.yaml").read_text(encoding="utf-8")
+    lines = compose.split(f"\n  {service}:\n", 1)[1].split("\n")
+    environment = []
+    for line in lines[lines.index("    environment:") + 1:]:
+        if line and not line.startswith("      "):
+            break
+        environment.append(line)
+    assert 'SAFE_RETENTION_YEARS: "5"' in "\n".join(environment)
 
 
 @pytest.mark.parametrize("service", ["api", "worker"])
@@ -302,6 +342,19 @@ def test_api_startup_refuses_an_invalid_environment(monkeypatch):
         asyncio.run(start())
 
 
+def test_api_startup_refuses_a_missing_retention_period(monkeypatch):
+    for name, value in demo_env().items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("SAFE_RETENTION_YEARS")
+
+    async def start():
+        async with api.app.router.lifespan_context(api.app):
+            pass
+
+    with pytest.raises(ConfigError, match="SAFE_RETENTION_YEARS"):
+        asyncio.run(start())
+
+
 def test_api_startup_accepts_a_valid_environment(monkeypatch):
     for name, value in demo_env().items():
         monkeypatch.setenv(name, value)
@@ -328,3 +381,19 @@ def test_worker_process_refuses_to_start_without_a_valid_environment():
     assert result.returncode == 2
     assert "SAFE_MODE" in result.stderr
     assert SECRET not in result.stderr
+
+
+def test_worker_process_refuses_a_missing_retention_period():
+    # Every other required setting is present, so the only refusal is the retention period. Nothing connects.
+    env = {"PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(SOURCE_DIR), **demo_env(SAFE_RETENTION_YEARS=None)}
+    result = subprocess.run(
+        [sys.executable, "-m", "safe_kit.worker"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "SAFE_RETENTION_YEARS" in result.stderr

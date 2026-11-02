@@ -67,7 +67,7 @@ from safe_kit.cases import (
     update_deadline,
 )
 from safe_kit.client_address import resolve_client_address
-from safe_kit.config_guard import is_demo, load_settings, trusted_proxies
+from safe_kit.config_guard import is_demo, load_settings, retention_years, trusted_proxies
 from safe_kit.db import connect
 from safe_kit.demo_auth import (
     DEMO_ROLES,
@@ -1513,7 +1513,8 @@ def get_case_history(
 @app.get("/api/v1/privacy/inventory")
 def privacy_inventory(actor: User = Depends(require_permission("privacy:read"))) -> dict:
     # Metadata and row counts only. Row contents and secrets are never read or returned here.
-    return {"generated_at": datetime.now(UTC).isoformat(), "items": inventory()}
+    years = retention_years(os.environ)
+    return {"generated_at": datetime.now(UTC).isoformat(), "retention_years": years, "items": inventory(years)}
 
 
 @app.get("/api/v1/privacy/inventory/export")
@@ -1522,10 +1523,11 @@ def privacy_inventory_export(
     actor: User = Depends(require_permission("privacy:read")),
 ) -> Response:
     generated_at = datetime.now(UTC)
-    items = inventory()
+    years = retention_years(os.environ)
+    items = inventory(years)
     if format == "json":
         return JSONResponse(
-            content={"generated_at": generated_at.isoformat(), "items": items},
+            content={"generated_at": generated_at.isoformat(), "retention_years": years, "items": items},
             headers={"Content-Disposition": 'attachment; filename="data-inventory.json"'},
         )
     buffer = io.StringIO()

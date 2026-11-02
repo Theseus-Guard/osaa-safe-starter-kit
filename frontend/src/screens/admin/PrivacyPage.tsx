@@ -54,7 +54,6 @@ export function PrivacyPage() {
 
   const items = inventory?.items ?? [];
   const withPersonalData = items.filter((item) => item.contains_personal_data).length;
-  const withRetention = items.filter((item) => item.retention_defined).length;
   const pageCount = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
   const currentPage = Math.min(pageIndex, pageCount - 1);
   const pageStart = currentPage * PAGE_SIZE;
@@ -89,7 +88,8 @@ export function PrivacyPage() {
             <CardHeader>
               <CardTitle>About this inventory</CardTitle>
               <CardDescription>
-                Generated <Timestamp value={inventory.generated_at} />.
+                Generated <Timestamp value={inventory.generated_at} />. The retention periods are provisional and
+                await legal review.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -101,7 +101,8 @@ export function PrivacyPage() {
                   Each table lists its security measures below. Secrets such as password hashes and tokens are never included.
                 </Detail>
                 <Detail label="How long">
-                  Retention is defined for {withRetention} of {items.length} tables.
+                  {inventory.retention_years} {inventory.retention_years === 1 ? "year" : "years"} for each of the{" "}
+                  {items.length} tables. Provisional, awaiting legal review. Nothing is deleted when the period ends.
                 </Detail>
               </dl>
             </CardContent>

@@ -51,7 +51,12 @@ DB_DEFAULTS = {
     "SAFE_DB_USER": "safe_app",
     "SAFE_DB_PASSWORD_FILE": "/nonexistent/password",
 }
-TOKEN_TTL = {"SAFE_ACCESS_TTL_MINUTES": "60", "SAFE_REFRESH_TTL_MINUTES": "60", "SAFE_SESSION_MAX_HOURS": "12"}
+TOKEN_TTL = {
+    "SAFE_ACCESS_TTL_MINUTES": "60",
+    "SAFE_REFRESH_TTL_MINUTES": "60",
+    "SAFE_SESSION_MAX_HOURS": "12",
+    "SAFE_RETENTION_YEARS": "5",
+}
 LOOPBACK = ("127.0.0.1", 50000)
 REMOTE = ("203.0.113.9", 50000)
 GATEWAY = "172.28.0.10"  # the gateway's fixed address on the edge network (compose.yaml)
