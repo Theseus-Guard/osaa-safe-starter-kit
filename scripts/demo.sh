@@ -73,6 +73,13 @@ gateway_ready() {
   curl -ksf --max-time 5 -o /dev/null "$url/api/v1/health/ready"
 }
 
+# The probe alone cannot say which stack answered: another Compose project may publish the same loopback port (the
+# owner's safe-starter-kit gateway holds 127.0.0.1:8443). So ready also needs this project's own gateway container
+# to be running.
+demo_ready() {
+  [ -n "$(compose ps --status running -q gateway 2>/dev/null)" ] && gateway_ready
+}
+
 # The seed runs as the container user (uid 10001) and writes into the operator's directory. The directory and its
 # files are handed to that user for the seed, and back to the operator afterwards, so the operator can read them.
 # This one-off run uses the api image as root with only the CHOWN capability added (the service drops all capabilities).
@@ -120,7 +127,7 @@ cmd_start() {
   compose up -d --build
 
   deadline=$(( $(date +%s) + timeout ))
-  until gateway_ready; do
+  until demo_ready; do
     if [ "$(date +%s)" -ge "$deadline" ]; then
       fail "the demo did not report ready within $timeout seconds; run scripts/demo.sh status"
     fi
@@ -148,7 +155,7 @@ cmd_status() {
   require_demo_dir
   require_docker
   compose ps
-  if command -v curl >/dev/null 2>&1 && gateway_ready; then
+  if command -v curl >/dev/null 2>&1 && demo_ready; then
     echo "demo: ready at $url"
   else
     echo "demo: not ready at $url"
