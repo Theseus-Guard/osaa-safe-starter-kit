@@ -52,7 +52,10 @@ function CaseList({ permissions }: Props) {
   // The trimmed search that is sent to the server. Changing it starts again at the first page.
   const [term, setTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(ALL_STATUSES);
-  const [offset, setOffset] = useState(0);
+  // Cursors of the pages already passed, oldest first. The current page is fetched with the last one.
+  // The first page has no cursor, so the stack is empty there.
+  const [cursors, setCursors] = useState<string[]>([]);
+  const cursor = cursors.length > 0 ? cursors[cursors.length - 1] : undefined;
   const [page, setPage] = useState<CasePage | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,7 +64,7 @@ function CaseList({ permissions }: Props) {
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setTerm(query.trim());
-      setOffset(0);
+      setCursors([]);
     }, SEARCH_DELAY_MS);
     return () => window.clearTimeout(timer);
   }, [query]);
@@ -69,7 +72,7 @@ function CaseList({ permissions }: Props) {
   useEffect(() => {
     let stale = false;
     setLoading(true);
-    listCases(PAGE_SIZE, offset, term, statusFilter === ALL_STATUSES ? undefined : statusFilter)
+    listCases(PAGE_SIZE, cursor, term, statusFilter === ALL_STATUSES ? undefined : statusFilter)
       .then((result) => {
         if (stale) return;
         setPage(result);
@@ -84,7 +87,7 @@ function CaseList({ permissions }: Props) {
     return () => {
       stale = true;
     };
-  }, [offset, term, statusFilter]);
+  }, [cursor, term, statusFilter]);
 
   function handleCreated(created: CaseDetail) {
     toast.success(`Case ${created.reference} created.`);
@@ -93,12 +96,10 @@ function CaseList({ permissions }: Props) {
 
   function chooseStatus(value: StatusFilter) {
     setStatusFilter(value);
-    setOffset(0);
+    setCursors([]);
   }
 
-  const total = page?.total ?? 0;
-  const shownFrom = page && page.items.length > 0 ? page.offset + 1 : 0;
-  const shownTo = page ? page.offset + page.items.length : 0;
+  const nextCursor = page?.next_cursor ?? null;
   const searching = term !== "";
   const filtering = statusFilter !== ALL_STATUSES;
   // Read once per render, so the Overdue marks are current whenever the list is shown.
@@ -106,10 +107,7 @@ function CaseList({ permissions }: Props) {
 
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground" aria-live="polite">
-          {page !== null && `${total} ${total === 1 ? "case" : "cases"}${searching ? " found" : ""}`}
-        </p>
+      <div className="flex flex-wrap items-center justify-end gap-3">
         {canSubmit && <Button onClick={() => setDialogOpen(true)}>New case</Button>}
       </div>
 
@@ -228,22 +226,24 @@ function CaseList({ permissions }: Props) {
         </Table>
         <CardFooter className="justify-between gap-2 py-3">
           <p className="text-sm text-muted-foreground" aria-live="polite">
-            {loading ? "Loading…" : total > 0 ? `Showing ${shownFrom}–${shownTo} of ${total}` : ""}
+            {loading ? "Loading…" : ""}
           </p>
           <div className="flex gap-2">
             <Button
               variant="outline"
               size="sm"
-              disabled={loading || !page || page.offset === 0}
-              onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+              disabled={loading || cursors.length === 0}
+              onClick={() => setCursors(cursors.slice(0, -1))}
             >
               Previous
             </Button>
             <Button
               variant="outline"
               size="sm"
-              disabled={loading || !page || page.offset + page.limit >= page.total}
-              onClick={() => setOffset(offset + PAGE_SIZE)}
+              disabled={loading || nextCursor === null}
+              onClick={() => {
+                if (nextCursor !== null) setCursors([...cursors, nextCursor]);
+              }}
             >
               Next
             </Button>

@@ -675,12 +675,13 @@ EXPECTED_CASE_VIEW = {
 def _listed_case_ids(client: TestClient) -> set[str]:
     """Every case the caller's case list returns, read page by page."""
     ids: set[str] = set()
-    offset = 0
+    cursor = None
     while True:
-        page = client.get("/api/v1/cases", params={"limit": 200, "offset": offset}).json()
+        params = {"limit": 200, **({"cursor": cursor} if cursor else {})}
+        page = client.get("/api/v1/cases", params=params).json()
         ids |= {item["id"] for item in page["items"]}
-        offset += 200
-        if offset >= page["total"]:
+        cursor = page["next_cursor"]
+        if cursor is None:
             return ids
 
 

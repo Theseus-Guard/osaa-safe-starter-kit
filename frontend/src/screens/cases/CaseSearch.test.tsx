@@ -29,7 +29,7 @@ const CASE: CaseSummary = {
 };
 
 function page(items: CaseSummary[]) {
-  return { items, total: items.length, limit: 8, offset: 0 };
+  return { items, next_cursor: null };
 }
 
 beforeEach(() => {
@@ -44,7 +44,7 @@ describe("CaseSearch", () => {
 
     await user.type(screen.getByRole("searchbox", { name: "Search cases by ID" }), "SAFE-2026");
 
-    await waitFor(() => expect(list).toHaveBeenCalledWith(8, 0, "SAFE-2026"));
+    await waitFor(() => expect(list).toHaveBeenCalledWith(8, undefined, "SAFE-2026"));
     expect(list).toHaveBeenCalledTimes(1);
   });
 

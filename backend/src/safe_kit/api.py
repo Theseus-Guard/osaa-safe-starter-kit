@@ -58,7 +58,6 @@ from safe_kit.cases import (
     assign_member,
     case_history,
     close_case,
-    count_visible_cases,
     create_case,
     find_visible_case,
     list_assignable_users,
@@ -68,11 +67,13 @@ from safe_kit.cases import (
     reopen_case,
     restore_deadline,
     unassign_member,
+    update_case_title,
     update_deadline,
 )
 from safe_kit.client_address import resolve_client_address
 from safe_kit.config_guard import is_demo, load_settings, retention_years, trusted_proxies
 from safe_kit.db import connect
+from safe_kit.pagination import decode_cursor, encode_cursor
 from safe_kit.demo_auth import (
     DEMO_ROLES,
     DEMO_USERNAMES,
@@ -197,6 +198,9 @@ _MESSAGE_BY_STATUS = {
     503: "The service is temporarily unavailable. Retry later.",
 }
 ERROR_MESSAGES = {
+    "precondition_required": "This change must say which version it changes. Send If-Match with the ETag you read.",
+    "precondition_failed": "The record was changed by someone else. Reload it, then retry with its new ETag.",
+    "invalid_if_match": "If-Match must be the ETag of the record, a quoted whole number such as \"2\".",
     "validation_failed": "A field in the request is missing, has the wrong type, or is out of range.",
     "unknown_field": "The request contains a field that is not allowed.",
     "revision_conflict": "The record was changed by another request. Reload it and retry.",
@@ -346,6 +350,7 @@ IMPORT_ROUTE = "/api/v1/cases/import"
 ASSIGNMENTS_ROUTE = "/api/v1/cases/{case_id}/assignments"
 CLOSE_ROUTE = "/api/v1/cases/{case_id}/close"
 REOPEN_ROUTE = "/api/v1/cases/{case_id}/reopen"
+CASE_ROUTE = "/api/v1/cases/{case_id}"
 DEADLINE_ROUTE = "/api/v1/cases/{case_id}/deadlines/{task_id}"
 RESTORE_ROUTE = "/api/v1/cases/{case_id}/deadlines/{task_id}/restore"
 
@@ -959,6 +964,8 @@ class CaseResponse(BaseModel):
     close_reason: str | None
     # Reason of the latest reopening, null when the case was never reopened.
     reopen_reason: str | None
+    # Sent back as If-Match on a change to this case. Also sent as the ETag header.
+    revision: int
     deadlines: list[DeadlineTaskResponse]
     # Risk (safe_kit.impact): the three impact values and the risk score. Null until the values are set.
     risk_score: float | None
@@ -987,9 +994,7 @@ class CaseSummary(BaseModel):
 
 class CasePage(BaseModel):
     items: list[CaseSummary]
-    total: int
-    limit: int
-    offset: int
+    next_cursor: str | None
 
 
 class AssignmentRequest(BaseModel):
@@ -1115,6 +1120,20 @@ class CaseImportDryRunResponse(BaseModel):
 CASE_READ_PERMISSIONS = ("cases:read_own", "cases:read_all", "cases:read_assigned")
 CASE_NOT_FOUND = HTTPException(status_code=404, detail="case not found")
 CASE_CLOSED = HTTPException(status_code=409, detail="case is closed")
+
+
+def _etag(revision: int) -> str:
+    return f'"{revision}"'
+
+
+def _if_match_revision(value: str | None) -> int:
+    """The revision a change was made against. Missing is refused with 428; a value that is not a quoted whole number with 400."""
+    if value is None:
+        raise HTTPException(status_code=428, detail={"status": "precondition_required"})
+    match = re.fullmatch(r'"([0-9]+)"', value.strip())
+    if match is None:
+        raise HTTPException(status_code=400, detail={"status": "invalid_if_match"})
+    return int(match.group(1))
 TEXT_LIMIT = 1000
 
 
@@ -1150,6 +1169,7 @@ def _case_response(case: Case, scope: CaseScope) -> CaseResponse:
         closed_by=case.closed_by,
         close_reason=case.close_reason if scope.read_all else None,
         reopen_reason=case.reopen_reason if scope.read_all else None,
+        revision=case.revision,
         deadlines=[
             DeadlineTaskResponse(
                 id=task.id,
@@ -1405,7 +1425,8 @@ async def dry_run_case_import(
 @app.get("/api/v1/cases", response_model=CasePage)
 def list_cases(
     limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
+    # Opaque. Omit it for the first page; use next_cursor from the previous page for the next one.
+    cursor: str | None = Query(default=None, max_length=200),
     q: str | None = Query(default=None, max_length=100),
     # Omitted means every status. Any other value is refused with 422 (the Literal type).
     status: CaseStatus | None = Query(default=None),
@@ -1416,26 +1437,90 @@ def list_cases(
     scope = _scope(actor)
     search = q.strip() if q is not None else None
     include_evidence = "evidence:read" in permissions
+    after = None
+    if cursor is not None:
+        after = decode_cursor(cursor)
+        if after is None:
+            raise HTTPException(status_code=400, detail={"status": "invalid_cursor"})
+    # One extra row tells whether another page exists; it is not returned.
     page_cases = list_visible_cases(
-        scope, limit, offset, q=search, status=status, include_evidence=include_evidence
+        scope, limit + 1, after, q=search, status=status, include_evidence=include_evidence
     )
+    has_more = len(page_cases) > limit
+    page_cases = page_cases[:limit]
     scores = current_scores_for_cases(case.id for case in page_cases)
     return CasePage(
         items=[_case_summary(case, scores.get(case.id)) for case in page_cases],
-        total=count_visible_cases(scope, q=search, status=status),
-        limit=limit,
-        offset=offset,
+        next_cursor=encode_cursor(page_cases[-1].created_at, page_cases[-1].id) if has_more else None,
     )
 
 
 @app.get("/api/v1/cases/{case_id}", response_model=CaseResponse)
 def get_case(
     case_id: uuid.UUID,
+    response: Response,
     actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS)),
 ) -> CaseResponse:
     # A case the caller may not see gets the same 404 as a missing one, so existence is not revealed.
     scope = _scope(actor)
-    return _case_response(_visible_case_or_404(case_id, scope), scope)
+    case = _visible_case_or_404(case_id, scope)
+    response.headers["ETag"] = _etag(case.revision)
+    return _case_response(case, scope)
+
+
+class CaseTitleRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+
+    @field_validator("title")
+    @classmethod
+    def not_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("title must not be blank")
+        return value
+
+
+@app.patch("/api/v1/cases/{case_id}", response_model=CaseResponse)
+def update_case(
+    case_id: uuid.UUID,
+    body: CaseTitleRequest,
+    response: Response,
+    actor: User = Depends(require_any_permission("cases:triage")),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    # The ETag the caller read (see GET). Required: a change without it is refused with 428.
+    if_match: str | None = Header(default=None, alias="If-Match"),
+) -> CaseResponse:
+    expected_revision = _if_match_revision(if_match)
+    scope = _scope(actor)
+    scope_key = key_scope(
+        actor.id,
+        "PATCH",
+        CASE_ROUTE,
+        checked_key(idempotency_key),
+        f"/api/v1/cases/{case_id}",
+        body.model_dump(mode="json"),
+    )
+    outcome, revision = update_case_title(
+        str(case_id),
+        body.title,
+        expected_revision,
+        scope,
+        idempotency=scope_key,
+        render=lambda changed: _case_response(changed, scope).model_dump(mode="json"),
+    )
+    if outcome is Outcome.NOT_FOUND:
+        raise CASE_NOT_FOUND
+    if outcome is Outcome.CLOSED:
+        raise CASE_CLOSED
+    if outcome is Outcome.REVISION_MISMATCH:
+        raise HTTPException(
+            status_code=412,
+            detail={"status": "precondition_failed"},
+            headers={"ETag": _etag(revision)},
+        )
+    case = _visible_case_or_404(case_id, scope)
+    response.headers["ETag"] = _etag(case.revision)
+    return _case_response(case, scope)
 
 
 @app.get("/api/v1/cases/{case_id}/assignments", response_model=list[AssignmentResponse])

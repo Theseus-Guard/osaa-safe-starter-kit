@@ -229,50 +229,72 @@ def test_create_rejects_a_blank_title_without_a_request(api, capsys):
 
 
 def test_list_sends_the_paging_arguments(api, capsys):
-    page = {"items": [SUMMARY], "total": 45, "limit": 10, "offset": 20}
+    page = {"items": [SUMMARY], "next_cursor": None}
     api.route("GET", "/api/v1/cases", body=page)
-    code, out, err = run(capsys, "case", "list", "--limit", "10", "--offset", "20", "--username", "alice")
+    code, out, err = run(capsys, "case", "list", "--limit", "10", "--cursor", "abc-123", "--username", "alice")
     assert code == 0
     get = api.calls[1]
-    assert get["query"] == {"limit": ["10"], "offset": ["20"]}
+    assert get["query"] == {"limit": ["10"], "cursor": ["abc-123"]}
     assert get["headers"]["Authorization"] == f"Bearer {ACCESS}"
-    assert "Showing 21-21 of 45" in out
     assert "SAFE-2026-000001" in out
 
 
-def test_list_uses_the_web_page_size_by_default(api, capsys):
-    api.route("GET", "/api/v1/cases", body={"items": [], "total": 0, "limit": 20, "offset": 0})
+def test_list_uses_the_web_page_size_by_default_and_no_cursor(api, capsys):
+    api.route("GET", "/api/v1/cases", body={"items": [], "next_cursor": None})
     code, out, err = run(capsys, "case", "list", "--username", "alice")
     assert code == 0
-    assert api.calls[1]["query"] == {"limit": ["20"], "offset": ["0"]}
-    assert "No cases to show. Total: 0" in out
+    assert api.calls[1]["query"] == {"limit": ["20"]}
+    assert out == "No cases to show.\n"
 
 
 def test_list_json_prints_the_api_body_exactly(api, capsys):
-    page = {"items": [SUMMARY], "total": 1, "limit": 20, "offset": 0}
+    page = {"items": [SUMMARY], "next_cursor": None}
     api.route("GET", "/api/v1/cases", body=page)
     code, out, err = run(capsys, "case", "list", "--username", "alice", "--json")
     assert code == 0
     assert out == compact(page).decode("utf-8") + "\n"
 
 
-@pytest.mark.parametrize("argv", [("--limit", "0"), ("--limit", "201"), ("--offset", "-1")])
+@pytest.mark.parametrize("argv", [("--limit", "0"), ("--limit", "201")])
 def test_list_rejects_out_of_range_paging_without_a_request(api, capsys, argv):
     code, out, err = run(capsys, "case", "list", "--username", "alice", *argv)
     assert code == 2
     assert api.calls == []
 
 
+def test_list_no_longer_takes_an_offset(api, capsys):
+    code, out, err = run(capsys, "case", "list", "--offset", "20", "--username", "alice")
+    assert code == 2
+    assert api.calls == []
+
+
+def test_list_prints_the_next_page_cursor(api, capsys):
+    page = {"items": [SUMMARY], "next_cursor": "eyJyZWYiOiJTQUZFLTIwMjYtMDAwMDAxIn0"}
+    api.route("GET", "/api/v1/cases", body=page)
+    code, out, err = run(capsys, "case", "list", "--username", "alice")
+    assert code == 0
+    assert out.splitlines()[-1] == "Next page: --cursor eyJyZWYiOiJTQUZFLTIwMjYtMDAwMDAxIn0"
+
+
+def test_list_reports_an_invalid_cursor_with_a_clear_message(api, capsys):
+    api.route("GET", "/api/v1/cases", status=400, body={"detail": {"status": "invalid_cursor"}})
+    code, out, err = run(capsys, "case", "list", "--cursor", "not-a-cursor", "--username", "alice")
+    assert code == 1
+    assert out == ""
+    assert "error: the cursor is not valid" in err
+    assert "without --cursor" in err
+
+
 @pytest.mark.parametrize("status", cli.CASE_STATUS_CHOICES)
 def test_list_sends_the_status_filter(api, capsys, status):
-    api.route("GET", "/api/v1/cases", body={"items": [SUMMARY], "total": 1, "limit": 20, "offset": 0})
+    api.route("GET", "/api/v1/cases", body={"items": [SUMMARY], "next_cursor": None})
     code, out, err = run(capsys, "case", "list", "--status", status, "--username", "alice")
     assert code == 0
-    assert api.calls[1]["query"] == {"limit": ["20"], "offset": ["0"], "status": [status]}
+    assert api.calls[1]["query"] == {"limit": ["20"], "status": [status]}
 
 
 def test_list_without_a_status_sends_no_status_parameter(api, capsys):
-    api.route("GET", "/api/v1/cases", body={"items": [], "total": 0, "limit": 20, "offset": 0})
+    api.route("GET", "/api/v1/cases", body={"items": [], "next_cursor": None})
     run(capsys, "case", "list", "--username", "alice")
     assert "status" not in api.calls[1]["query"]
 
@@ -292,11 +314,11 @@ def test_status_choices_are_the_case_statuses_of_the_backend():
 
 def test_list_prints_the_next_deadline_and_the_last_update(api, capsys):
     hidden = {**SUMMARY, "reference": "SAFE-2026-000002", "next_deadline": None, "updated_at": "2026-11-02T07:00:00Z"}
-    page = {"items": [SUMMARY, hidden], "total": 2, "limit": 20, "offset": 0}
+    page = {"items": [SUMMARY, hidden], "next_cursor": None}
     api.route("GET", "/api/v1/cases", body=page)
     code, out, err = run(capsys, "case", "list", "--username", "alice")
     assert code == 0
-    header, first, second, footer = out.splitlines()[:4]
+    header, first, second = out.splitlines()
     # Cells are separated by at least two spaces. The title is last, so it may contain single spaces.
     assert re.split(r"\s{2,}", header.strip()) == [
         "REFERENCE",
@@ -325,7 +347,7 @@ def test_list_prints_the_next_deadline_and_the_last_update(api, capsys):
         "Not assessed",
         "Phishing campaign",
     ]
-    assert footer == "Showing 1-2 of 2"
+    assert "Showing" not in out and "Total" not in out
 
 
 # --- show ---
@@ -393,7 +415,7 @@ def test_unmapped_status_reports_the_http_status(api, capsys):
 
 
 def test_failed_logout_does_not_change_the_exit_code(api, capsys):
-    api.route("GET", "/api/v1/cases", body={"items": [], "total": 0, "limit": 20, "offset": 0})
+    api.route("GET", "/api/v1/cases", body={"items": [], "next_cursor": None})
     api.route("POST", "/api/v1/auth/logout", status=500, body={"detail": "boom"})
     code, out, err = run(capsys, "case", "list", "--username", "alice")
     assert code == 0
@@ -408,7 +430,7 @@ def test_unreachable_api_reports_that_the_server_could_not_be_reached(api, capsy
 
 def test_username_comes_from_the_environment(api, capsys, monkeypatch):
     monkeypatch.setenv("SAFE_USERNAME", "bob")
-    api.route("GET", "/api/v1/cases", body={"items": [], "total": 0, "limit": 20, "offset": 0})
+    api.route("GET", "/api/v1/cases", body={"items": [], "next_cursor": None})
     code, out, err = run(capsys, "case", "list")
     assert code == 0
     assert api.calls[0]["json"]["username"] == "bob"
@@ -422,7 +444,7 @@ def test_missing_username_is_a_usage_error_without_a_request(api, capsys):
 
 
 def test_password_is_read_from_stdin_when_stdin_is_not_a_terminal(api, capsys):
-    api.route("GET", "/api/v1/cases", body={"items": [], "total": 0, "limit": 20, "offset": 0})
+    api.route("GET", "/api/v1/cases", body={"items": [], "next_cursor": None})
     code, out, err = run(capsys, "case", "list", "--username", "alice")
     assert code == 0
     assert api.calls[0]["json"] == {"username": "alice", "password": PASSWORD}
@@ -444,7 +466,7 @@ def test_password_is_prompted_with_getpass_in_a_terminal(api, capsys, monkeypatc
 
     monkeypatch.setattr(cli.sys, "stdin", Terminal())
     monkeypatch.setattr(getpass, "getpass", fake_getpass)
-    api.route("GET", "/api/v1/cases", body={"items": [], "total": 0, "limit": 20, "offset": 0})
+    api.route("GET", "/api/v1/cases", body={"items": [], "next_cursor": None})
     code, out, err = run(capsys, "case", "list", "--username", "alice")
     assert code == 0
     assert len(prompts) == 1
@@ -465,7 +487,7 @@ def test_password_is_prompted_with_getpass_in_a_terminal(api, capsys, monkeypatc
 )
 def test_stdout_and_stderr_never_contain_the_token_or_the_password(api, capsys, argv):
     api.route("POST", "/api/v1/cases", status=201, body=CASE_BODY)
-    api.route("GET", "/api/v1/cases", body={"items": [SUMMARY], "total": 1, "limit": 20, "offset": 0})
+    api.route("GET", "/api/v1/cases", body={"items": [SUMMARY], "next_cursor": None})
     api.route("GET", f"/api/v1/cases/{CASE_ID}", body=CASE_BODY)
     code, out, err = run(capsys, *argv)
     assert code == 0

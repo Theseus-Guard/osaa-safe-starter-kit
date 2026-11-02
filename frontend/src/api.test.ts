@@ -248,10 +248,10 @@ describe("401 handling", () => {
     });
 
     await api.login("example-user", "example-password");
-    const [first, second] = await Promise.all([api.me(), api.listCases(10, 0)]);
+    const [first, second] = await Promise.all([api.me(), api.listCases(10)]);
 
     expect(first).toEqual({ url: "/api/v1/auth/me" });
-    expect(second).toEqual({ url: "/api/v1/cases?limit=10&offset=0" });
+    expect(second).toEqual({ url: "/api/v1/cases?limit=10" });
     const refreshes = fetchMock.mock.calls.filter(([url]) => url === "/api/v1/auth/refresh");
     expect(refreshes).toHaveLength(1);
   });
@@ -474,10 +474,13 @@ describe("endpoints", () => {
     ["listRoles", (a) => a.listRoles(), "GET", "/api/v1/rbac/roles"],
     ["listPermissions", (a) => a.listPermissions(), "GET", "/api/v1/rbac/permissions"],
     ["updateRolePermissions", (a) => a.updateRolePermissions("auditor", ["cases:read"]), "PUT", "/api/v1/rbac/roles/auditor/permissions"],
-    ["listCases", (a) => a.listCases(5, 0), "GET", "/api/v1/cases?limit=5&offset=0"],
-    ["listCases with q", (a) => a.listCases(8, 0, "SAFE-2026"), "GET", "/api/v1/cases?limit=8&offset=0&q=SAFE-2026"],
-    ["listCases encodes q", (a) => a.listCases(8, 0, "a b&c"), "GET", "/api/v1/cases?limit=8&offset=0&q=a%20b%26c"],
-    ["listCases omits blank q", (a) => a.listCases(8, 0, "   "), "GET", "/api/v1/cases?limit=8&offset=0"],
+    ["listCases", (a) => a.listCases(5), "GET", "/api/v1/cases?limit=5"],
+    ["listCases with cursor", (a) => a.listCases(5, "opaque-token"), "GET", "/api/v1/cases?limit=5&cursor=opaque-token"],
+    ["listCases encodes cursor", (a) => a.listCases(5, "a+b/c="), "GET", "/api/v1/cases?limit=5&cursor=a%2Bb%2Fc%3D"],
+    ["listCases with q", (a) => a.listCases(8, undefined, "SAFE-2026"), "GET", "/api/v1/cases?limit=8&q=SAFE-2026"],
+    ["listCases encodes q", (a) => a.listCases(8, undefined, "a b&c"), "GET", "/api/v1/cases?limit=8&q=a%20b%26c"],
+    ["listCases omits blank q", (a) => a.listCases(8, undefined, "   "), "GET", "/api/v1/cases?limit=8"],
+    ["listCases with cursor, q and status", (a) => a.listCases(8, "next", "SAFE", "closed"), "GET", "/api/v1/cases?limit=8&cursor=next&q=SAFE&status=closed"],
     ["getCase", (a) => a.getCase("case-1"), "GET", "/api/v1/cases/case-1"],
     ["getSystemTimezone", (a) => a.getSystemTimezone(), "GET", "/api/v1/system/timezone"],
     [

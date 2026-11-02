@@ -141,12 +141,12 @@ def test_list_pages_are_consecutive_and_newest_first():
     scope = CaseScope(owner, read_own=True)
     created = [cases.create_case(f"Page case {n}", a_while_ago(), created_by=owner) for n in range(3)]
 
-    first = cases.list_visible_cases(scope, 2, 0)
-    second = cases.list_visible_cases(scope, 2, 2)
+    first = cases.list_visible_cases(scope, 2)
+    second = cases.list_visible_cases(scope, 2, (first[-1].created_at, first[-1].id))
+    third = cases.list_visible_cases(scope, 2, (second[-1].created_at, second[-1].id))
 
     assert [case.id for case in first + second] == [case.id for case in reversed(created)]
-    assert cases.count_visible_cases(scope) == 3
-    assert cases.list_visible_cases(scope, 2, 4) == []
+    assert third == []
 
 
 # --- deadline status transitions ------------------------------------------------------------------------------

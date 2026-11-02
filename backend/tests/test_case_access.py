@@ -234,12 +234,11 @@ def test_unknown_or_invisible_case_is_404_on_every_read(client, caller, monkeypa
 def test_list_is_built_from_the_callers_scope(client, caller, monkeypatch):
     seen = {}
 
-    def fake_list(scope, limit, offset, q=None, **kwargs):
+    def fake_list(scope, limit, after=None, q=None, **kwargs):
         seen["scope"] = scope
         return []
 
     monkeypatch.setattr(api, "list_visible_cases", fake_list)
-    monkeypatch.setattr(api, "count_visible_cases", lambda scope, q=None, **kwargs: 0)
     as_role(caller, TRIAGER_ID, "triager")
     assert client.get("/api/v1/cases").status_code == 200
     assert seen["scope"] == CaseScope(user_id=TRIAGER_ID, read_all=True, read_assigned=True)
@@ -1161,11 +1160,37 @@ def test_reporter_contact_holder_sees_unassigned_reporter_case(db_client, people
 
 
 @requires_database
-def test_hidden_reporter_case_is_not_counted_for_a_triager(db_client, people):
-    before = db_client(people["triager"]).get("/api/v1/cases?limit=1").json()["total"]
+def test_hidden_reporter_case_is_not_listed_for_a_triager(db_client, people):
+    before = {item["id"] for item in db_client(people["triager"]).get("/api/v1/cases?limit=200").json()["items"]}
     open_report_via_api(db_client, people["reporter"], title="Hidden from triagers")
-    after = db_client(people["triager"]).get("/api/v1/cases?limit=1").json()["total"]
+    after = {item["id"] for item in db_client(people["triager"]).get("/api/v1/cases?limit=200").json()["items"]}
     assert after == before
+
+
+@requires_database
+def test_case_pages_follow_the_cursor_without_gaps_or_repeats(db_client, people):
+    created = {create_case_via_api(db_client, people["reporter"]) for _ in range(3)}
+    full = [item["id"] for item in db_client(people["reporter"]).get("/api/v1/cases?limit=200").json()["items"]]
+    walked = []
+    cursor = None
+    while True:
+        params = {"limit": 2, **({"cursor": cursor} if cursor else {})}
+        body = db_client(people["reporter"]).get("/api/v1/cases", params=params).json()
+        assert set(body) == {"items", "next_cursor"}
+        assert len(body["items"]) <= 2
+        walked.extend(item["id"] for item in body["items"])
+        cursor = body["next_cursor"]
+        if cursor is None:
+            break
+    assert walked == full
+    assert created <= set(walked)
+
+
+@requires_database
+def test_a_cursor_that_is_not_one_of_ours_is_refused(db_client, people):
+    response = db_client(people["reporter"]).get("/api/v1/cases", params={"cursor": "invalid"})
+    assert response.status_code == 400
+    assert response.json()["detail"] == {"status": "invalid_cursor"}
 
 
 # --- q: case-insensitive match on the reference or the id prefix (F1) ----------------------------------------------
@@ -1192,17 +1217,18 @@ def test_q_is_combined_with_visibility(db_client, people):
     assert own not in listed_ids(db_client, people["other_reporter"], own_reference)
     assert own not in listed_ids(db_client, people["other_reporter"], own[:8])
     other = db_client(people["other_reporter"]).get("/api/v1/cases", params={"limit": 200, "q": own_reference})
-    assert other.status_code == 200 and other.json()["total"] == 0 and other.json()["items"] == []
+    assert other.status_code == 200 and other.json()["items"] == []
     # The owner finds it.
     assert own in listed_ids(db_client, people["reporter"], own_reference)
 
 
 @requires_database
-def test_q_total_counts_only_the_matches(db_client, people):
+def test_q_returns_only_the_matches(db_client, people):
     case_id = create_case_via_api(db_client, people["reporter"])
     reference = db_client(people["reporter"]).get(f"/api/v1/cases/{case_id}").json()["reference"]
     body = db_client(people["triager"]).get("/api/v1/cases", params={"limit": 200, "q": reference}).json()
-    assert body["total"] == len(body["items"]) == 1
+    assert len(body["items"]) == 1
+    assert body["next_cursor"] is None
     assert body["items"][0]["id"] == case_id
 
 
@@ -1217,9 +1243,9 @@ def test_q_treats_like_wildcards_as_plain_text_and_ignores_titles(db_client, peo
     for query in ("%", "_", "SAFE-%", marker):
         response = db_client(people["triager"]).get("/api/v1/cases", params={"limit": 200, "q": query})
         assert response.status_code == 200
-        assert response.json()["total"] == 0, query
+        assert response.json()["items"] == [], query
     # A blank q is no filter at all.
     plain = db_client(people["triager"]).get("/api/v1/cases?limit=200").json()
     blank = db_client(people["triager"]).get("/api/v1/cases", params={"limit": 200, "q": "  "}).json()
-    assert blank["total"] == plain["total"]
+    assert blank["items"] == plain["items"]
 

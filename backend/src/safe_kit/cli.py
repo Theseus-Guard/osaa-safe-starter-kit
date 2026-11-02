@@ -414,25 +414,26 @@ def _print_case(case: dict) -> None:
 def _print_case_page(page: dict) -> None:
     items = page["items"]
     if not items:
-        print(f"No cases to show. Total: {page['total']}")
-        return
-    rows = [("REFERENCE", "STATUS", "AWARENESS (UTC)", "NEXT DEADLINE (UTC)", "LAST UPDATED (UTC)", "RISK", "TITLE")]
-    rows += [
-        (
-            item["reference"],
-            item["status"],
-            item["awareness_time"],
-            item["next_deadline"] or "None",
-            item["updated_at"],
-            _format_risk(item["risk_score"]),
-            item["title"],
-        )
-        for item in items
-    ]
-    _print_table(rows)
-    first = page["offset"] + 1
-    last = page["offset"] + len(items)
-    print(f"Showing {first}-{last} of {page['total']}")
+        print("No cases to show.")
+    else:
+        rows = [
+            ("REFERENCE", "STATUS", "AWARENESS (UTC)", "NEXT DEADLINE (UTC)", "LAST UPDATED (UTC)", "RISK", "TITLE")
+        ]
+        rows += [
+            (
+                item["reference"],
+                item["status"],
+                item["awareness_time"],
+                item["next_deadline"] or "None",
+                item["updated_at"],
+                _format_risk(item["risk_score"]),
+                item["title"],
+            )
+            for item in items
+        ]
+        _print_table(rows)
+    if page["next_cursor"] is not None:
+        print(f"Next page: --cursor {page['next_cursor']}")
 
 
 def _case_create(base_url: str, args: argparse.Namespace) -> None:
@@ -479,14 +480,26 @@ def _check_paging(args: argparse.Namespace) -> None:
         raise UsageError("--offset must be 0 or more")
 
 
+CURSOR_INVALID_TEXT = "the cursor is not valid. Run 'case list' again without --cursor to start from the first page"
+
+
 def _case_list(base_url: str, args: argparse.Namespace) -> None:
-    _check_paging(args)
-    query: dict = {"limit": args.limit, "offset": args.offset}
+    if not 1 <= args.limit <= MAX_PAGE_SIZE:
+        raise UsageError(f"--limit must be between 1 and {MAX_PAGE_SIZE}")
+    query: dict = {"limit": args.limit}
+    if args.cursor is not None:
+        query["cursor"] = args.cursor
     if args.status is not None:
         query["status"] = args.status
 
     def action(base: str, token: str) -> None:
-        raw = _call(base, "GET", "/api/v1/cases", token=token, query=query)
+        try:
+            raw = _call(base, "GET", "/api/v1/cases", token=token, query=query)
+        except RequestFailed as error:
+            detail = error.detail
+            if error.status == 400 and isinstance(detail, dict) and detail.get("status") == "invalid_cursor":
+                raise RequestFailed(CURSOR_INVALID_TEXT, status=error.status, detail=detail) from None
+            raise
         if args.json:
             _print_json(raw)
         else:
@@ -2438,7 +2451,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     listing = case_commands.add_parser("list", help="List your cases, newest first")
     listing.add_argument("--limit", type=int, default=DEFAULT_PAGE_SIZE, help="Cases per page (1 to 200)")
-    listing.add_argument("--offset", type=int, default=0, help="Number of cases to skip")
+    listing.add_argument(
+        "--cursor", default=None, metavar="CURSOR", help="Continue from the cursor printed as 'Next page'"
+    )
     listing.add_argument(
         "--status", choices=CASE_STATUS_CHOICES, default=None, help="Only cases with this status (default: all)"
     )

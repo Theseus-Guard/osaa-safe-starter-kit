@@ -35,7 +35,7 @@ const BASE_ITEM = {
 };
 
 beforeEach(() => {
-  list.mockReset().mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
+  list.mockReset().mockResolvedValue({ items: [], next_cursor: null });
 });
 
 describe("CasesPage", () => {
@@ -59,9 +59,7 @@ describe("CasesPage", () => {
         { id: "case-1", ...item, risk_score: 3.7, impact_c: 4, impact_b: 3, impact_a: 4 },
         { id: "case-2", ...item, reference: "SAFE-2026-000002", risk_score: null, impact_c: null, impact_b: null, impact_a: null },
       ],
-      total: 2,
-      limit: 20,
-      offset: 0,
+      next_cursor: null,
     });
     render(<CasesPage permissions={["cases:read_all"]} />);
 
@@ -73,7 +71,7 @@ describe("CasesPage", () => {
   });
 
   it("keeps the existing columns and adds Next deadline and Last updated", async () => {
-    list.mockResolvedValue({ items: [{ ...BASE_ITEM, id: "case-1" }], total: 1, limit: 20, offset: 0 });
+    list.mockResolvedValue({ items: [{ ...BASE_ITEM, id: "case-1" }], next_cursor: null });
     render(<CasesPage permissions={["cases:read_all"]} />);
 
     const table = await screen.findByRole("table");
@@ -89,9 +87,7 @@ describe("CasesPage", () => {
         { ...BASE_ITEM, id: "case-2", reference: "SAFE-2026-000002", next_deadline: PAST },
         { ...BASE_ITEM, id: "case-3", reference: "SAFE-2026-000003", next_deadline: null },
       ],
-      total: 3,
-      limit: 20,
-      offset: 0,
+      next_cursor: null,
     });
     render(<CasesPage permissions={["cases:read_all"]} />);
 
@@ -106,7 +102,7 @@ describe("CasesPage", () => {
   });
 
   it("shows the last update of each case", async () => {
-    list.mockResolvedValue({ items: [{ ...BASE_ITEM, id: "case-1" }], total: 1, limit: 20, offset: 0 });
+    list.mockResolvedValue({ items: [{ ...BASE_ITEM, id: "case-1" }], next_cursor: null });
     render(<CasesPage permissions={["cases:read_all"]} />);
 
     const table = await screen.findByRole("table");
@@ -121,12 +117,12 @@ describe("CasesPage", () => {
     await screen.findByText("You have not opened any cases yet.");
     const filter = screen.getByRole("combobox", { name: "Filter by status" });
     expect(filter).toHaveTextContent("All statuses");
-    expect(list).toHaveBeenLastCalledWith(20, 0, "", undefined);
+    expect(list).toHaveBeenLastCalledWith(20, undefined, "", undefined);
 
     await user.click(filter);
     await user.click(await screen.findByRole("option", { name: "Closed" }));
 
-    await waitFor(() => expect(list).toHaveBeenLastCalledWith(20, 0, "", "closed"));
+    await waitFor(() => expect(list).toHaveBeenLastCalledWith(20, undefined, "", "closed"));
     expect(screen.getByRole("combobox", { name: "Filter by status" })).toHaveTextContent("Closed");
     expect(await screen.findByText("No cases have this status.")).toBeInTheDocument();
   });
@@ -138,7 +134,55 @@ describe("CasesPage", () => {
     await screen.findByText("You have not opened any cases yet.");
     await user.type(screen.getByRole("searchbox", { name: "Search cases" }), "  SAFE-2026 ");
 
-    await waitFor(() => expect(list).toHaveBeenLastCalledWith(20, 0, "SAFE-2026", undefined));
+    await waitFor(() => expect(list).toHaveBeenLastCalledWith(20, undefined, "SAFE-2026", undefined));
     expect(await screen.findByText("No cases match this search.")).toBeInTheDocument();
+  });
+
+  it("pages forward with next_cursor and back with Previous, and disables the buttons with nothing to go to", async () => {
+    const user = userEvent.setup();
+    list
+      .mockResolvedValueOnce({ items: [{ ...BASE_ITEM, id: "case-1", reference: "SAFE-2026-000001" }], next_cursor: "cursor-2" })
+      .mockResolvedValueOnce({ items: [{ ...BASE_ITEM, id: "case-2", reference: "SAFE-2026-000002" }], next_cursor: null })
+      .mockResolvedValue({ items: [{ ...BASE_ITEM, id: "case-1", reference: "SAFE-2026-000001" }], next_cursor: "cursor-2" });
+    render(<CasesPage permissions={["cases:read_all"]} />);
+
+    expect(await screen.findByRole("link", { name: "SAFE-2026-000001" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Next" }));
+
+    expect(await screen.findByRole("link", { name: "SAFE-2026-000002" })).toBeInTheDocument();
+    expect(list).toHaveBeenLastCalledWith(20, "cursor-2", "", undefined);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Previous" })).toBeEnabled());
+    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Previous" }));
+
+    expect(await screen.findByRole("link", { name: "SAFE-2026-000001" })).toBeInTheDocument();
+    expect(list).toHaveBeenLastCalledWith(20, undefined, "", undefined);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled());
+  });
+
+  it("starts again at the first page when the search or the status filter changes", async () => {
+    const user = userEvent.setup();
+    list.mockResolvedValue({ items: [{ ...BASE_ITEM, id: "case-1" }], next_cursor: "cursor-2" });
+    render(<CasesPage permissions={["cases:read_all"]} />);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(list).toHaveBeenLastCalledWith(20, "cursor-2", "", undefined));
+
+    await user.click(screen.getByRole("combobox", { name: "Filter by status" }));
+    await user.click(await screen.findByRole("option", { name: "Closed" }));
+    await waitFor(() => expect(list).toHaveBeenLastCalledWith(20, undefined, "", "closed"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled());
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(list).toHaveBeenLastCalledWith(20, "cursor-2", "", "closed"));
+
+    await user.type(screen.getByRole("searchbox", { name: "Search cases" }), "SAFE");
+    await waitFor(() => expect(list).toHaveBeenLastCalledWith(20, undefined, "SAFE", "closed"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled());
   });
 });

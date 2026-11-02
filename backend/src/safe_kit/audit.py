@@ -40,6 +40,7 @@ CASE_REVIEW_CONFLICT_RECORDED = "case.review_conflict_recorded"
 CASE_REVIEW_RECUSAL_RECORDED = "case.review_recusal_recorded"
 CASE_REVIEW_APPEAL_RECORDED = "case.review_appeal_recorded"
 CASE_DEADLINE_UPDATE = "case.deadline_updated"
+CASE_TITLE_UPDATE = "case.title_updated"
 # Case record (safe_kit.case_records). Free text is never written here, only its length.
 CASE_AWARENESS_RECORDED = "case.awareness_recorded"
 CASE_IMPACT_CHANGE = "case.impact_changed"

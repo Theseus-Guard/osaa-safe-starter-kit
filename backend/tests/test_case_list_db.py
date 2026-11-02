@@ -221,7 +221,6 @@ def test_a_case_the_caller_cannot_see_is_not_listed_and_its_deadline_does_not_le
     response = stranger.get("/api/v1/cases?status=open")
 
     assert response.status_code == 200
-    assert response.json()["total"] == 0
     assert response.json()["items"] == []
     assert case_id not in response.text
     assert deadline_text not in response.text
@@ -237,20 +236,24 @@ def test_status_filter_combines_with_search_and_paging():
     new_case(reporter, "Other C")
     close_in_database(closed["id"], reporter.user_id)
 
-    assert reporter.get("/api/v1/cases?status=closed").json()["total"] == 1
+    assert len(reporter.get("/api/v1/cases?status=closed").json()["items"]) == 1
     open_page = reporter.get("/api/v1/cases?status=open").json()
-    assert open_page["total"] == 2
-    assert reporter.get("/api/v1/cases").json()["total"] == 3
+    assert len(open_page["items"]) == 2
+    assert len(reporter.get("/api/v1/cases").json()["items"]) == 3
 
     # The search narrows inside the status: the reference of the open case matches, the reference of the closed one does not.
     by_reference = reporter.get(f"/api/v1/cases?status=open&q={wanted['reference']}").json()
     assert [item["id"] for item in by_reference["items"]] == [wanted["id"]]
-    assert reporter.get(f"/api/v1/cases?status=closed&q={wanted['reference']}").json()["total"] == 0
+    assert reporter.get(f"/api/v1/cases?status=closed&q={wanted['reference']}").json()["items"] == []
 
-    page = reporter.get("/api/v1/cases?status=open&limit=1&offset=1").json()
-    assert page["total"] == 2
-    assert len(page["items"]) == 1
-    assert page["items"][0]["status"] == "open"
+    first_page = reporter.get("/api/v1/cases?status=open&limit=1").json()
+    assert len(first_page["items"]) == 1
+    assert first_page["items"][0]["status"] == "open"
+    assert first_page["next_cursor"] is not None
+    second_page = reporter.get(f"/api/v1/cases?status=open&limit=1&cursor={first_page['next_cursor']}").json()
+    assert len(second_page["items"]) == 1
+    assert second_page["items"][0]["id"] != first_page["items"][0]["id"]
+    assert second_page["next_cursor"] is None
 
 
 def test_status_filter_refuses_an_unknown_value():
