@@ -36,6 +36,7 @@ const config = {
         title: "SAFE-Starter-Kit",
         items: [
           { type: "doc", docId: "overview", position: "left", label: "Overview" },
+          { type: "doc", docId: "user-guide/index", position: "left", label: "User guide" },
           { type: "doc", docId: "roadmap", position: "left", label: "Roadmap" },
           { type: "doc", docId: "changelog", position: "left", label: "Changelog" },
           {

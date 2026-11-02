@@ -25,6 +25,7 @@ frontend/dist/
 !CONTRIBUTING.md
 !CODE_OF_CONDUCT.md
 !/.github/**/*.md
+!/docs/user-guide/*.md
 
 # Documentation site: built output, dependencies, and documents copied from the repository root at build time.
 /website/node_modules/

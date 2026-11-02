@@ -1,13 +1,16 @@
 // Copies the public repository documents into docs/ so the site cannot drift from them.
 // Relative links are rewritten to the GitHub blob URL, because the site does not contain the other repository files.
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+// The user guide pages (docs/user-guide in the repository) are copied into docs/user-guide. Links between them stay
+// relative, so Docusaurus resolves them. Links to any other repository file are rewritten to the GitHub blob URL.
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "..", "..");
 const docsDir = join(here, "..", "docs");
 const blobBase = "https://github.com/Theseus-Guard/osaa-safe-starter-kit/blob/main/";
+const guideSourceDir = "docs/user-guide";
 
 const pages = [
   { source: "README.md", target: "overview.md", title: "Overview", slug: "/", position: 1 },
@@ -23,6 +26,23 @@ function rewriteLinks(markdown) {
     if (/^(https?:|mailto:|#|\/)/.test(href)) return match;
     return `](${blobBase}${href})`;
   });
+}
+
+// A link to another guide page is a bare file name, or ./file.md, and stays relative. Any other relative link is
+// resolved from docs/user-guide and points at the GitHub file.
+function rewriteGuideLinks(markdown) {
+  return markdown.replace(/\]\(([^)\s]+)\)/g, (match, href) => {
+    if (/^(https?:|mailto:|#|\/)/.test(href)) return match;
+    const [path, anchor] = href.split("#");
+    if (/^(\.\/)?[^/]+\.md$/.test(path)) return match;
+    const repoPath = posix.normalize(posix.join(guideSourceDir, path));
+    return `](${blobBase}${repoPath}${anchor === undefined ? "" : `#${anchor}`})`;
+  });
+}
+
+function titleOf(markdown, fallback) {
+  const heading = markdown.match(/^# (.+)$/m);
+  return heading ? heading[1].trim() : fallback;
 }
 
 rmSync(docsDir, { recursive: true, force: true });
@@ -41,4 +61,19 @@ for (const page of pages) {
   ].join("\n");
   writeFileSync(join(docsDir, page.target), frontMatter + body);
 }
-console.log(`Synced ${pages.length} documents into docs/.`);
+
+const guideFiles = readdirSync(join(repoRoot, guideSourceDir))
+  .filter((name) => name.endsWith(".md"))
+  .sort();
+if (guideFiles.length === 0) {
+  throw new Error(`No user guide pages found in ${guideSourceDir}.`);
+}
+const guideTargetDir = join(docsDir, "user-guide");
+mkdirSync(guideTargetDir, { recursive: true });
+for (const name of guideFiles) {
+  const body = rewriteGuideLinks(readFileSync(join(repoRoot, guideSourceDir, name), "utf8"));
+  const frontMatter = ["---", `title: ${JSON.stringify(titleOf(body, name))}`, "---", "", ""].join("\n");
+  writeFileSync(join(guideTargetDir, name), frontMatter + body);
+}
+
+console.log(`Synced ${pages.length} documents and ${guideFiles.length} user guide pages into docs/.`);
