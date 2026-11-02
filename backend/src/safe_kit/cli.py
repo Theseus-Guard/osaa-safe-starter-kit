@@ -140,6 +140,7 @@ HTTP_MESSAGES = {
     403: "forbidden or password change required",
     404: "case not found",
     409: "system timezone is not configured",
+    400: "check the values you entered",
     422: "check the values you entered",
 }
 
@@ -783,7 +784,7 @@ TASK_UPDATE_MESSAGES = {
     403: "forbidden: only a triager can mark a deadline not applicable or change one that is not applicable",
     404: "case or deadline task not found, or its case is not available to your account",
     409: "the case is closed, so its deadlines cannot change",
-    422: "the reason is missing or too long: a not applicable deadline needs a reason of 1 to 1000 characters",
+    400: "the reason is missing or too long: a not applicable deadline needs a reason of 1 to 1000 characters",
 }
 TASK_RESTORE_MESSAGES = {
     403: "forbidden: only a triager can restore a deadline that is not applicable",
@@ -1139,6 +1140,7 @@ MODEL_RECORD_MESSAGES = {
     403: "forbidden: recording needs evidence:write and evidence:read, and the case must be visible to you",
     404: "case, evidence item or review round not found",
     409: "the case is closed, so no model record can be recorded",
+    400: "the model record was refused: check the identifiers and the reasoning options",
     422: "the model record was refused: check the identifiers and the reasoning options",
 }
 MODEL_LIST_MESSAGES = {404: "case not found"}
@@ -1146,7 +1148,7 @@ MODEL_REVOKE_MESSAGES = {
     403: "forbidden: revoking needs evidence:write and evidence:read, and the case must be visible to you",
     404: "case or model record not found",
     409: "the case is closed, or the model record is already revoked",
-    422: "the revocation was refused: give a reason of 1 to 1000 characters",
+    400: "the revocation was refused: give a reason of 1 to 1000 characters",
 }
 
 
@@ -1418,12 +1420,13 @@ CONFLICT_MESSAGES = {
     403: "forbidden: declaring a conflict needs reviews:write, and you must be assigned to the case",
     404: "review round not found",
     409: "the case is closed, your conflict is already declared, there is nothing to withdraw, or --supersedes is not your current entry. Check the round with 'case review list' first",
-    422: "the description is missing or too long",
+    400: "the description is missing or too long",
 }
 RECUSAL_MESSAGES = {
     403: "forbidden: withdrawing needs reviews:write, and you must be assigned to the case",
     404: "review round not found",
     409: "the case is closed, you have already withdrawn (to correct it, pass --supersedes with your current recusal), or --supersedes is not your current entry",
+    400: "the replacement must be the identifier of a user",
     422: "the replacement must be another active, assigned user who holds reviews:write, has no declared conflict on this round, and has not withdrawn from it",
 }
 APPEAL_MESSAGES = {

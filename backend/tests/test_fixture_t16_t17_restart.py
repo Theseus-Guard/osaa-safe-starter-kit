@@ -180,7 +180,7 @@ def test_readiness_is_503_when_the_database_cannot_be_reached_and_liveness_stays
     live = client.get("/api/v1/health/live")
 
     assert ready.status_code == 503
-    assert ready.json() == {"detail": {"status": "unavailable"}}
+    assert ready.json()["detail"] == {"status": "unavailable"}
     assert live.status_code == 200
     assert live.json() == {"status": "ok"}
 

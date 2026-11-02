@@ -15,7 +15,12 @@ from safe_kit import api, cases, system_timezone
 
 
 # The token and session settings are required in every process (no defaults). Tests use the values that compose.yaml sets.
-TOKEN_SETTINGS = {"SAFE_ACCESS_TTL_MINUTES": "60", "SAFE_REFRESH_TTL_MINUTES": "60", "SAFE_SESSION_MAX_HOURS": "12"}
+TOKEN_SETTINGS = {
+    "SAFE_ACCESS_TTL_MINUTES": "60",
+    "SAFE_REFRESH_TTL_MINUTES": "60",
+    "SAFE_SESSION_MAX_HOURS": "12",
+    "SAFE_RETENTION_YEARS": "5",
+}
 
 
 @pytest.fixture(autouse=True)

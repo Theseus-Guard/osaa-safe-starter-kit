@@ -257,7 +257,7 @@ def test_a_verification_run_needs_every_field(client, no_domain, missing):
         json=body,
         headers=idem(),
     )
-    assert response.status_code == 422
+    assert response.status_code == 400
     assert any(error["loc"][-1] == missing for error in response.json()["detail"])
 
 
@@ -267,7 +267,7 @@ def test_a_verification_result_is_one_of_three_values(client, no_domain):
         json=run_body(result="verified"),
         headers=idem(),
     )
-    assert response.status_code == 422
+    assert response.status_code == 400
 
 
 def test_a_blank_verification_field_is_refused(client, no_domain):
@@ -276,7 +276,7 @@ def test_a_blank_verification_field_is_refused(client, no_domain):
         json=run_body(scope="   "),
         headers=idem(),
     )
-    assert response.status_code == 422
+    assert response.status_code == 400
 
 
 def test_a_recommendation_cannot_carry_a_verified_flag_or_result(client, no_domain):
@@ -286,7 +286,7 @@ def test_a_recommendation_cannot_carry_a_verified_flag_or_result(client, no_doma
             json=recommendation_body(**extra),
             headers=idem(),
         )
-        assert response.status_code == 422, extra
+        assert response.status_code == 400, extra
 
 
 def test_a_recommendation_due_time_needs_a_time_zone(client, no_domain):
@@ -295,7 +295,7 @@ def test_a_recommendation_due_time_needs_a_time_zone(client, no_domain):
         json=recommendation_body(due_at="2026-12-01T09:00:00"),
         headers=idem(),
     )
-    assert response.status_code == 422
+    assert response.status_code == 400
 
 
 def test_an_entry_linked_to_an_unknown_run_is_refused(monkeypatch, client):
@@ -361,7 +361,7 @@ def test_an_operation_on_an_entry_needs_its_required_fields(
     response = client.post(
         f"/api/v1/catalog/entries/{ENTRY_ID}/{path}", json=body, headers=idem()
     )
-    assert response.status_code == 422
+    assert response.status_code == 400
 
 
 @pytest.mark.parametrize(
@@ -384,7 +384,7 @@ def test_a_blank_reason_or_a_bad_identifier_is_refused(client, no_domain, path, 
     response = client.post(
         f"/api/v1/catalog/entries/{ENTRY_ID}/{path}", json=body, headers=idem()
     )
-    assert response.status_code == 422
+    assert response.status_code == 400
 
 
 def test_a_stale_version_is_a_conflict_with_only_the_current_version(

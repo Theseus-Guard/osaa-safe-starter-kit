@@ -475,7 +475,7 @@ def test_impacts_are_listed_in_full_even_when_nothing_is_assessed(client, caller
 def test_impact_put_refuses_an_unknown_area(client, caller):
     as_role(caller, TRIAGER_ID, "triager")
     body = {"severity": "low", "scope": "s"}
-    assert client.put(f"/api/v1/cases/{CASE_ID}/impacts/made_up", json=body, headers=idem()).status_code == 422
+    assert client.put(f"/api/v1/cases/{CASE_ID}/impacts/made_up", json=body, headers=idem()).status_code == 400
 
 
 def test_impact_put_answers_404_for_an_invisible_case(client, caller, monkeypatch):
@@ -524,9 +524,7 @@ def test_classification_put_answers_409_with_the_current_version(client, caller,
     as_role(caller, TRIAGER_ID, "triager")
     response = client.put(f"/api/v1/cases/{CASE_ID}/classification", json={"expected_version": 1}, headers=idem())
     assert response.status_code == 409
-    assert response.json() == {
-        "detail": {"status": "classification_version_conflict", "current_version": 3},
-    }
+    assert response.json()["detail"] == {"status": "classification_version_conflict", "current_version": 3}
 
 
 def test_investigator_cannot_store_a_classification(client, caller):
@@ -552,7 +550,7 @@ def test_classification_put_refuses_the_case_wide_internal_option(client, caller
     )
     as_role(caller, TRIAGER_ID, "triager")
     body = {"expected_version": 0, "internal_incident_option": True}
-    assert client.put(f"/api/v1/cases/{CASE_ID}/classification", json=body, headers=idem()).status_code == 422
+    assert client.put(f"/api/v1/cases/{CASE_ID}/classification", json=body, headers=idem()).status_code == 400
 
 
 def test_preliminary_report_is_for_read_all_callers_only(client, caller, monkeypatch):

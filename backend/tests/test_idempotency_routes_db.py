@@ -27,6 +27,7 @@ from safe_kit.migrate import main as migrate
 from test_case_import import example_record, envelope
 from test_evidence import MemoryStorage, write_kek
 from safe_kit.evidence_keys import LocalFileKeyProvider
+from error_body import without_request_id
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("SAFE_TEST_DATABASE") != "1",
@@ -344,11 +345,11 @@ def test_missing_or_invalid_key_is_refused_with_400(world, name):
     scenario = SCENARIOS[name](world)
     response = scenario.send(None)
     assert response.status_code == 400, response.text
-    assert response.json() == {"detail": {"status": "idempotency_key_required"}}
+    assert response.json()["detail"] == {"status": "idempotency_key_required"}
     for invalid in ("two words", "k" * 129, "tab\tkey"):
         response = scenario.send(invalid)
         assert response.status_code == 400, response.text
-        assert response.json() == {"detail": {"status": "idempotency_key_invalid"}}
+        assert response.json()["detail"] == {"status": "idempotency_key_invalid"}
 
 
 @pytest.mark.parametrize("name", list(SCENARIOS))
@@ -360,7 +361,7 @@ def test_first_request_stores_and_the_same_request_replays_without_writing(world
     before = audit_count()
     replay = scenario.send(key)
     assert replay.status_code == first.status_code
-    assert replay.json() == first.json()
+    assert without_request_id(replay) == without_request_id(first)
     assert audit_count() == before
 
 
@@ -372,7 +373,7 @@ def test_the_same_key_with_another_request_is_409_and_writes_nothing(world, name
     before = audit_count()
     response = scenario.send_other(key)
     assert response.status_code == 409, response.text
-    assert response.json() == {"detail": {"status": "idempotency_key_reused"}}
+    assert response.json()["detail"] == {"status": "idempotency_key_reused"}
     assert audit_count() == before
 
 

@@ -117,7 +117,7 @@ def test_validation_error_does_not_echo_the_submitted_password(client, store):
 
     response = client.post("/api/v1/auth/token", json={"username": "alice", "password": too_long})
 
-    assert response.status_code == 422
+    assert response.status_code == 400
     assert too_long not in response.text
 
 

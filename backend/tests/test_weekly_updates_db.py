@@ -220,7 +220,7 @@ def test_an_update_of_another_case_is_not_found_under_this_case(people):
     response = people["triager"].get(f"/api/v1/cases/{case_b}/weekly-updates/{update_of_a}")
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "weekly update not found"}
+    assert response.json()["detail"] == "weekly update not found"
 
 
 def test_unknown_case_answers_404_for_the_same_reason_as_a_hidden_one(people):
@@ -229,7 +229,7 @@ def test_unknown_case_answers_404_for_the_same_reason_as_a_hidden_one(people):
     listed = people["triager"].get(f"/api/v1/cases/{unknown}/weekly-updates")
 
     assert listed.status_code == 404
-    assert listed.json() == {"detail": "case not found"}
+    assert listed.json()["detail"] == "case not found"
 
 
 def test_document_follows_the_schema_and_holds_no_free_text(people):

@@ -375,7 +375,7 @@ def test_download_of_a_non_available_item_is_409_and_reads_nothing(api, provider
     api.monkeypatch.setattr(evidence, "read_original", must_not_read)
     response = api.client.get(download_url(stored))
     assert response.status_code == 409
-    assert response.json() == {"detail": "evidence is not available"}
+    assert response.json()["detail"] == "evidence is not available"
     assert api.recorder.downloads == [] and api.recorder.failures == []
 
 
@@ -400,7 +400,7 @@ def test_integrity_failure_on_download_is_500_with_custody_and_no_content(api, p
     api.monkeypatch.setattr(evidence, "find_stored", lambda evidence_id, scope: stored)
     response = api.client.get(download_url(stored))
     assert response.status_code == 500
-    assert response.json() == {"detail": "evidence failed its integrity check"}
+    assert response.json()["detail"] == "evidence failed its integrity check"
     assert PDF[:20] not in response.content
     assert api.recorder.failures == [(stored.id, READER.id, reason)]
     assert api.recorder.downloads == []

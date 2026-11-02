@@ -18,6 +18,7 @@ from safe_kit.cases import (
 from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS
 from safe_kit.system_timezone import TimezoneNotConfigured
 from safe_kit.users import User
+from error_body import without_request_id
 
 REPORTER_ID = "11111111-1111-1111-1111-111111111111"
 OTHER_ID = "22222222-2222-2222-2222-222222222222"
@@ -168,20 +169,20 @@ def test_reporter_submits_a_case_and_gets_its_deadlines(client, store):
 
 def test_title_is_stripped_and_blank_titles_are_rejected(client, store):
     assert client.post("/api/v1/cases", json=valid_body(title="  Leak  "), headers=idem()).json()["title"] == "Leak"
-    assert client.post("/api/v1/cases", json=valid_body(title="   "), headers=idem()).status_code == 422
-    assert client.post("/api/v1/cases", json=valid_body(title=""), headers=idem()).status_code == 422
-    assert client.post("/api/v1/cases", json=valid_body(title="x" * 201), headers=idem()).status_code == 422
+    assert client.post("/api/v1/cases", json=valid_body(title="   "), headers=idem()).status_code == 400
+    assert client.post("/api/v1/cases", json=valid_body(title=""), headers=idem()).status_code == 400
+    assert client.post("/api/v1/cases", json=valid_body(title="x" * 201), headers=idem()).status_code == 400
 
 
 def test_naive_awareness_time_is_rejected(client, store):
     response = client.post("/api/v1/cases", json=valid_body(awareness_time="2026-10-30T09:00:00"), headers=idem())
-    assert response.status_code == 422
+    assert response.status_code == 400
     assert store["created"] == []
 
 
 def test_future_awareness_time_is_rejected(client, store):
     future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
-    assert client.post("/api/v1/cases", json=valid_body(awareness_time=future), headers=idem()).status_code == 422
+    assert client.post("/api/v1/cases", json=valid_body(awareness_time=future), headers=idem()).status_code == 400
     assert store["created"] == []
 
 
@@ -205,11 +206,12 @@ def test_other_users_case_looks_exactly_like_a_missing_one(client, caller, store
     other = client.get(f"/api/v1/cases/{CASE_ID}")
     missing = client.get("/api/v1/cases/88888888-8888-8888-8888-888888888888")
     assert other.status_code == missing.status_code == 404
-    assert other.json() == missing.json()
+    # The request ID is different on every request. Everything else must be the same.
+    assert without_request_id(other) == without_request_id(missing)
 
 
 def test_case_id_must_be_a_uuid(client, store):
-    assert client.get("/api/v1/cases/not-a-uuid").status_code == 422
+    assert client.get("/api/v1/cases/not-a-uuid").status_code == 400
 
 
 def test_list_returns_only_the_callers_cases_with_paging(client, caller, store):
@@ -224,9 +226,9 @@ def test_list_returns_only_the_callers_cases_with_paging(client, caller, store):
 
 
 def test_list_paging_bounds_are_enforced(client, store):
-    assert client.get("/api/v1/cases?limit=0").status_code == 422
-    assert client.get("/api/v1/cases?limit=201").status_code == 422
-    assert client.get("/api/v1/cases?offset=-1").status_code == 422
+    assert client.get("/api/v1/cases?limit=0").status_code == 400
+    assert client.get("/api/v1/cases?limit=201").status_code == 400
+    assert client.get("/api/v1/cases?offset=-1").status_code == 400
 
 
 def set_fields(store, case_id, **fields):
@@ -250,7 +252,7 @@ def test_list_filters_by_status(client, store):
 @pytest.mark.parametrize("value", ["archived", "OPEN", "all", ""])
 def test_list_refuses_an_unknown_status_with_422(client, store, value):
     response = client.get("/api/v1/cases", params={"status": value})
-    assert response.status_code == 422
+    assert response.status_code == 400
     assert store["list_calls"] == []
 
 
@@ -371,5 +373,5 @@ def test_case_cannot_be_created_before_the_system_timezone_is_set(timezone_db):
 def test_api_refuses_case_creation_without_a_system_timezone(client, timezone_db):
     response = client.post("/api/v1/cases", json=valid_body(), headers=idem())
     assert response.status_code == 409
-    assert response.json() == {"detail": "system timezone is not configured"}
+    assert response.json()["detail"] == "system timezone is not configured"
     assert timezone_db.case_rows == []

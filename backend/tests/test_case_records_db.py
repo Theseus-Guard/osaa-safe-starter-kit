@@ -375,8 +375,8 @@ def test_legal_duty_patch_refuses_nulls_and_unknown_duties(people):
     triager = people["triager"]
     duty = {"kind": "statutory", "description": "d", "source_reference": "s", "due_at": future_free()}
     duty_id = triager.post(f"/api/v1/cases/{case_id}/legal-duties", json=duty, headers=idem()).json()["id"]
-    assert triager.patch(f"/api/v1/cases/{case_id}/legal-duties/{duty_id}", json={"description": None}).status_code == 422
-    assert triager.patch(f"/api/v1/cases/{case_id}/legal-duties/{duty_id}", json={}).status_code == 422
+    assert triager.patch(f"/api/v1/cases/{case_id}/legal-duties/{duty_id}", json={"description": None}).status_code == 400
+    assert triager.patch(f"/api/v1/cases/{case_id}/legal-duties/{duty_id}", json={}).status_code == 400
     unknown = str(uuid.uuid4())
     assert triager.patch(f"/api/v1/cases/{case_id}/legal-duties/{unknown}", json={"status": "done"}).status_code == 404
 
@@ -394,7 +394,7 @@ def test_classification_is_stored_as_versions_with_a_conflict_check(people):
 
     stale = triager.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(0, event_kind="incident"), headers=idem())
     assert stale.status_code == 409
-    assert stale.json() == {"detail": {"status": "classification_version_conflict", "current_version": 1}}
+    assert stale.json()["detail"] == {"status": "classification_version_conflict", "current_version": 1}
 
     same = triager.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(1), headers=idem())
     assert same.status_code == 200 and same.json()["version"] == 1
@@ -414,7 +414,7 @@ def test_the_classification_refuses_the_case_wide_internal_option(people, value)
     deadlines_before = triager.get(f"/api/v1/cases/{case_id}").json()["deadlines"]
     body = classification_body(0, internal_incident_option=value)
     refused = triager.put(f"/api/v1/cases/{case_id}/classification", json=body, headers=idem())
-    assert refused.status_code == 422, refused.text
+    assert refused.status_code == 400, refused.text
     assert "PATCH /api/v1/cases/{case_id}/deadlines/{task_id}" in refused.text
     assert triager.get(f"/api/v1/cases/{case_id}/classification").json()["version"] == 0
     assert triager.get(f"/api/v1/cases/{case_id}").json()["deadlines"] == deadlines_before

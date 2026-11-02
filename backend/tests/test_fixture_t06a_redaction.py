@@ -25,6 +25,7 @@ from safe_kit.db import connect
 from safe_kit.reviews import RoundOutcome
 from test_evidence import MemoryStorage, db_user, evidence_count, request_as
 from test_evidence_lifecycle import PDF, provider, requires_database  # provider: fixture
+from error_body import without_request_id
 
 MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
 TEXT = b"Case notes\nFirst line about the incident\nSecret detail: account 4411\nLast line\n"
@@ -240,7 +241,7 @@ def test_only_text_evidence_is_redacted(world):
     )
     response = redact(world, "investigator", pdf.id)
     assert response.status_code == 422
-    assert response.json() == {"detail": "redaction is supported for text/plain evidence only"}
+    assert response.json()["detail"] == "redaction is supported for text/plain evidence only"
 
 
 @requires_database
@@ -248,7 +249,7 @@ def test_a_derivative_may_not_be_labelled_less_restrictively_than_its_original(w
     derived = make_derived(world, "AMBER")
     response = redact(world, "investigator", derived["derived"]["id"], "GREEN")
     assert response.status_code == 422
-    assert response.json() == {"detail": "the TLP label must be at least as restrictive as the original's label"}
+    assert response.json()["detail"] == "the TLP label must be at least as restrictive as the original's label"
 
 
 # --- T07: each access check denies on its own ----------------------------------------------------------------------
@@ -268,7 +269,7 @@ def test_case_acl_alone_denies_a_derived_item_the_label_and_role_would_allow(wor
     # The other investigator has evidence:read and the label admits everyone, but the case is not assigned to it.
     response = download(world, "other_investigator", derived)
     assert response.status_code == 404
-    assert response.json() == {"detail": "evidence not found"}
+    assert response.json()["detail"] == "evidence not found"
 
 
 @requires_database
@@ -341,7 +342,7 @@ def test_a_replayed_key_returns_the_first_answer_and_writes_nothing_again(world)
     second = redact(world, "investigator", world["original_id"], "AMBER", key=key)
 
     assert first.status_code == second.status_code == 201
-    assert second.json() == first.json()
+    assert without_request_id(second) == without_request_id(first)
     assert evidence_count(world["case_id"]) == items_before + 1
     redacted = [e for e in evidence.custody_events(world["original_id"]) if e.action == evidence.REDACTED]
     assert len(redacted) == 1
@@ -356,7 +357,7 @@ def test_a_key_used_with_another_request_is_refused_without_writing(world):
 
     reused = redact(world, "investigator", world["original_id"], "GREEN", key=key)
     assert reused.status_code == 409
-    assert reused.json() == {"detail": {"status": "idempotency_key_reused"}}
+    assert reused.json()["detail"] == {"status": "idempotency_key_reused"}
     assert evidence_count(world["case_id"]) == items_before
 
 
@@ -369,4 +370,4 @@ def test_a_request_without_a_key_is_refused(world):
         json={"removed": REMOVED, "tlp_label": "AMBER"},
     )
     assert response.status_code == 400
-    assert response.json() == {"detail": {"status": "idempotency_key_required"}}
+    assert response.json()["detail"] == {"status": "idempotency_key_required"}

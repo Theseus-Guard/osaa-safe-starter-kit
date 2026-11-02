@@ -132,7 +132,9 @@ const MESSAGES: Record<string, string> = {
   "file is empty": "The file is empty.",
   "malformed multipart body": "The upload could not be read. Try again.",
   "multipart field 'file' is required": "Choose a file to upload.",
+  http_400: "Check the values you entered.",
   http_422: "Check the values you entered.",
+  payload_too_large: "The request is larger than the server allows. Remove some content and try again.",
 };
 
 // Codes that carry a variable part after a fixed prefix.

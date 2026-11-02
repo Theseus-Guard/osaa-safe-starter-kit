@@ -153,24 +153,24 @@ def test_impact_changes_lists_only_the_values_that_differ():
 @pytest.mark.parametrize("value", [0, 6, -1, 2.5, 3.0, "3", True])
 def test_a_value_outside_one_to_five_or_not_a_whole_number_is_refused(actor, client, no_domain, value):
     response = client.post(SCORES_PATH, json=body(c=value), headers=idem())
-    assert response.status_code == 422
+    assert response.status_code == 400
 
 
 @pytest.mark.parametrize("field", ["c", "b", "a"])
 def test_each_of_the_three_values_is_checked(actor, client, no_domain, field):
     response = client.post(SCORES_PATH, json=body(**{field: 6}), headers=idem())
-    assert response.status_code == 422
+    assert response.status_code == 400
 
 
 def test_expected_version_is_required_and_not_negative(actor, client, no_domain):
     without = {"c": 4, "b": 3, "a": 4}
-    assert client.post(SCORES_PATH, json=without, headers=idem()).status_code == 422
-    assert client.post(SCORES_PATH, json=body(expected_version=-1), headers=idem()).status_code == 422
+    assert client.post(SCORES_PATH, json=without, headers=idem()).status_code == 400
+    assert client.post(SCORES_PATH, json=body(expected_version=-1), headers=idem()).status_code == 400
 
 
 def test_an_unknown_field_is_refused(actor, client, no_domain):
     response = client.post(SCORES_PATH, json=body(d=2), headers=idem())
-    assert response.status_code == 422
+    assert response.status_code == 400
 
 
 def test_a_value_left_out_or_null_is_not_set(actor, client, monkeypatch):

@@ -162,7 +162,8 @@ def normalize_triggers(triggers: Iterable[str]) -> tuple[str, ...]:
     chosen = set(triggers)
     unknown = chosen - set(TRIGGERS)
     if unknown:
-        raise ValueError("unknown trigger: " + ", ".join(sorted(unknown)))
+        # The names are not repeated: an error body never quotes the submitted values (api-draft 3.6).
+        raise ValueError("unknown trigger: choose only values from the trigger list")
     if NONE_APPLIES in chosen and len(chosen) > 1:
         raise ValueError("none_applies cannot be combined with other triggers")
     return tuple(trigger for trigger in TRIGGERS if trigger in chosen)

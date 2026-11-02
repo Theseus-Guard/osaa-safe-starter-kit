@@ -35,6 +35,7 @@ from test_fixture_p6_disclosure import (  # dworld: fixture
     grant,
 )
 from test_fixture_t06a_redaction import make_derived, world  # world: fixture
+from error_body import without_request_id
 
 REASON = "Follow-up call to the member's security contact"
 
@@ -192,9 +193,9 @@ def test_a_notice_records_the_channel_time_recipient_reference_and_recorder(dwor
 @requires_database
 def test_the_channel_is_a_closed_list_and_other_needs_a_description(dworld):
     version, _ = approved_version(dworld)
-    assert record(dworld, "approver", version["id"], payload(channel="fax")).status_code == 422
-    assert record(dworld, "approver", version["id"], payload(channel="other")).status_code == 422
-    assert record(dworld, "approver", version["id"], payload(channel="email", channel_other="x")).status_code == 422
+    assert record(dworld, "approver", version["id"], payload(channel="fax")).status_code == 400
+    assert record(dworld, "approver", version["id"], payload(channel="other")).status_code == 400
+    assert record(dworld, "approver", version["id"], payload(channel="email", channel_other="x")).status_code == 400
     assert row_count(version["id"]) == 0
 
     response = record(dworld, "approver", version["id"], payload(channel="other", channel_other="courier by hand"))
@@ -207,7 +208,7 @@ def test_the_channel_is_a_closed_list_and_other_needs_a_description(dworld):
 def test_the_recipient_reference_is_an_identifier_not_free_text(dworld, reference):
     version, _ = approved_version(dworld)
     response = record(dworld, "approver", version["id"], payload(recipient_ref=reference))
-    assert response.status_code == 422
+    assert response.status_code == 400
     assert row_count(version["id"]) == 0
 
 
@@ -262,7 +263,7 @@ def test_a_follow_up_is_required_and_then_done_and_each_step_needs_a_reason(dwor
     assert unknown.status_code == 200, unknown.text
 
     no_reason = notice_action(dworld, "approver", version["id"], notice["id"], "follow-up", {"action": "require"})
-    assert no_reason.status_code == 422
+    assert no_reason.status_code == 400
 
     required = notice_action(
         dworld, "approver", version["id"], notice["id"], "follow-up", {"action": "require", "reason": REASON}
@@ -298,7 +299,7 @@ def test_a_follow_up_cannot_be_completed_before_it_is_required(dworld):
 def test_a_cancel_needs_a_reason_and_is_refused_after_a_receipt_or_a_second_cancel(dworld):
     version, notice = recorded_notice(dworld)
     no_reason = notice_action(dworld, "approver", version["id"], notice["id"], "cancel", {})
-    assert no_reason.status_code == 422
+    assert no_reason.status_code == 400
 
     cancelled = notice_action(dworld, "approver", version["id"], notice["id"], "cancel", {"reason": "Sent to the wrong contact"})
     assert cancelled.status_code == 200, cancelled.text
@@ -341,9 +342,9 @@ def test_a_timeout_or_no_answer_is_unknown_and_a_receipt_needs_its_time(dworld, 
     assert unknown.json()["state_reason_code"] == reason_code
 
     # A received receipt without its time, and an unknown one without its reason, are refused by the request itself.
-    assert receipt(dworld, version["id"], notice["id"], {"outcome": "received"}).status_code == 422
-    assert receipt(dworld, version["id"], notice["id"], {"outcome": "unknown"}).status_code == 422
-    assert receipt(dworld, version["id"], notice["id"], {"outcome": "unknown", "reason_code": "accepted"}).status_code == 422
+    assert receipt(dworld, version["id"], notice["id"], {"outcome": "received"}).status_code == 400
+    assert receipt(dworld, version["id"], notice["id"], {"outcome": "unknown"}).status_code == 400
+    assert receipt(dworld, version["id"], notice["id"], {"outcome": "unknown", "reason_code": "accepted"}).status_code == 400
     assert revision_states(notice["id"]) == ["sent", "receipt_unknown"]
 
 
@@ -426,7 +427,7 @@ def test_the_manual_path_needs_a_reason_and_is_open_to_a_preparer_who_is_not_the
     assert normal.json()["detail"] == {"status": "manual_fallback_required"}
 
     no_reason = record(dworld, "triager", version["id"], payload(manual_fallback=True))
-    assert no_reason.status_code == 422
+    assert no_reason.status_code == 400
 
     manual = record(
         dworld,
@@ -506,7 +507,7 @@ def test_a_case_the_caller_cannot_see_answers_as_a_missing_case(dworld, monkeypa
     missing = request_as(stranger, "get", f"/api/v1/cases/{uuid.uuid4()}/disclosures/{version['id']}/notices")
     assert hidden_list.status_code == hidden_one.status_code == hidden_write.status_code == 404
     assert missing.status_code == 404
-    assert missing.json() == hidden_list.json()
+    assert without_request_id(missing) == without_request_id(hidden_list)
     assert row_count(version["id"]) == 1
 
 
@@ -536,7 +537,7 @@ def test_a_repeated_record_with_the_same_key_returns_the_first_answer_and_writes
     first = record(dworld, "approver", version["id"], values, key=key)
     again = record(dworld, "approver", version["id"], values, key=key)
     assert first.status_code == again.status_code == 201
-    assert again.json() == first.json()
+    assert without_request_id(again) == without_request_id(first)
     assert row_count(version["id"]) == 1
 
 
@@ -559,7 +560,7 @@ def test_a_repeated_receipt_with_the_same_key_is_answered_from_the_store(dworld)
     first = receipt(dworld, version["id"], notice["id"], values, key=key)
     again = receipt(dworld, version["id"], notice["id"], values, key=key)
     assert first.status_code == again.status_code == 200
-    assert again.json() == first.json()
+    assert without_request_id(again) == without_request_id(first)
     assert revision_states(notice["id"]) == ["sent", "receipt_received"]
 
 

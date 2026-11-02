@@ -53,7 +53,7 @@ def test_the_approver_may_not_change_a_deadline_and_a_triager_still_may(world):
         request_as(approver, "post", f"{url}/restore", headers=idem()),
     ):
         assert response.status_code == 403
-        assert response.json() == {"detail": "forbidden"}
+        assert response.json()["detail"] == "forbidden"
     assert request_as(triager, "patch", url, json={"status": "done"}, headers=idem()).status_code == 200
 
 
@@ -64,7 +64,7 @@ def test_the_approver_may_not_file_an_appeal(world):
         approver, "post", f"/api/v1/reviews/{uuid.uuid4()}/appeals", json={"grounds": "Wrong outcome"}, headers=idem()
     )
     assert response.status_code == 403
-    assert response.json() == {"detail": "forbidden"}
+    assert response.json()["detail"] == "forbidden"
 
 
 @requires_database
@@ -75,7 +75,7 @@ def test_the_approver_gets_the_same_refusal_as_a_triager_for_the_reporter_contac
     approver_response = request_as(approver, "get", url)
     triager_response = request_as(triager, "get", url)
     assert approver_response.status_code == triager_response.status_code == 403
-    assert approver_response.json() == triager_response.json() == {"detail": "forbidden"}
+    assert approver_response.json()["detail"] == triager_response.json()["detail"] == "forbidden"
 
 
 @requires_database
@@ -84,7 +84,7 @@ def test_the_approver_is_refused_the_audit_summary_and_the_user_list(world):
     for path in ("/api/v1/audit/summary", "/api/v1/users"):
         response = request_as(approver, "get", path)
         assert response.status_code == 403, path
-        assert response.json() == {"detail": "forbidden"}, path
+        assert response.json()["detail"] == "forbidden", path
 
 
 @requires_database

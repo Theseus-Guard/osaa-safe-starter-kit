@@ -222,7 +222,7 @@ def test_unknown_evidence_custody_and_download_are_404_not_an_empty_success(evid
 
     assert custody.status_code == 404
     assert download.status_code == 404
-    assert custody.json() == {"detail": "evidence not found"}
+    assert custody.json()["detail"] == "evidence not found"
 
 
 # --- T05: the model, runtime and reasoning record has a place in the schema ---------------------------------------------

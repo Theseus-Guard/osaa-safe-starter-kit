@@ -103,7 +103,7 @@ def test_table_without_a_creation_column_reports_no_timestamps():
 
 
 def test_inventory_has_one_item_per_catalog_entry_with_counts_and_storage():
-    items = inventory()
+    items = inventory(5)
 
     assert [item["table"] for item in items] == [entry.table for entry in CATALOG]
     for item, entry in zip(items, CATALOG, strict=True):
@@ -115,7 +115,7 @@ def test_inventory_has_one_item_per_catalog_entry_with_counts_and_storage():
 
 
 def test_inventory_row_counts_match_the_database():
-    by_table = {item["table"]: item for item in inventory()}
+    by_table = {item["table"]: item for item in inventory(5)}
 
     assert by_table["users"]["rows"]["total"] == sql_count("users")
     assert by_table["users"]["rows"]["active"] == sql_count("users", "NOT is_deleted")
@@ -126,7 +126,7 @@ def test_inventory_row_counts_match_the_database():
 
 
 def test_csv_rows_have_one_row_per_table_and_match_the_header():
-    items = inventory()
+    items = inventory(5)
     rows = inventory_csv_rows(items)
 
     assert len(rows) == len(CATALOG)
@@ -147,7 +147,7 @@ def test_csv_export_never_contains_secret_values():
         password_hash = conn.execute("SELECT password_hash FROM users WHERE id = %s", (user,)).fetchone()[0]
     token_hash = hash_refresh_token(token)
 
-    text = csv_text(inventory())
+    text = csv_text(inventory(5))
 
     assert "users" in text, "the export must contain the inventory, or the check below proves nothing"
     assert password_hash not in text

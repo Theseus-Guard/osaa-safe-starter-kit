@@ -292,7 +292,7 @@ def test_import_endpoint_refuses_without_a_system_timezone(client, service):
     service["error"] = TimezoneNotConfigured()
     response = client.post("/api/v1/cases/import", json={"import_format_version": 1, "records": []}, headers=idem())
     assert response.status_code == 409
-    assert response.json() == {"detail": "system timezone is not configured"}
+    assert response.json()["detail"] == "system timezone is not configured"
 
 
 # --- database (requires_database) ---------------------------------------------------------------------------------
@@ -535,7 +535,7 @@ def test_dry_run_endpoint_refuses_without_a_system_timezone(client, dry_service)
     dry_service["error"] = TimezoneNotConfigured()
     response = client.post(DRY_RUN, json={"import_format_version": 1, "records": []})
     assert response.status_code == 409
-    assert response.json() == {"detail": "system timezone is not configured"}
+    assert response.json()["detail"] == "system timezone is not configured"
 
 
 # --- dry run (database) -------------------------------------------------------------------------------------------

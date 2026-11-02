@@ -1211,6 +1211,8 @@ export interface PrivacyInventoryItem {
 
 export interface PrivacyInventory {
   generated_at: string;
+  // Provisional retention period in years for every table, from SAFE_RETENTION_YEARS. Awaiting legal review.
+  retention_years: number;
   items: PrivacyInventoryItem[];
 }
 

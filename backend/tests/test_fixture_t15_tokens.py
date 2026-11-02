@@ -22,7 +22,7 @@ def test_garbage_bearer_token_is_refused_on_a_case_endpoint(client, store):
     response = client.get(CASES_URL, headers=bearer_header("not-a-token"))
 
     assert response.status_code == 401
-    assert response.json() == {"detail": "invalid credentials"}
+    assert response.json()["detail"] == "invalid credentials"
 
 
 def test_missing_token_is_refused_on_a_case_endpoint(client, store):
@@ -36,7 +36,7 @@ def test_expired_token_is_refused_on_a_case_endpoint(client, store, monkeypatch)
     response = client.get(CASES_URL, headers=bearer_header(token))
 
     assert response.status_code == 401
-    assert response.json() == {"detail": "invalid credentials"}
+    assert response.json()["detail"] == "invalid credentials"
 
 
 def test_revoked_token_is_refused_on_a_case_endpoint_after_logout(client, store):
@@ -48,7 +48,7 @@ def test_revoked_token_is_refused_on_a_case_endpoint_after_logout(client, store)
 
     response = client.get(CASES_URL, headers=bearer_header(tokens["access_token"]))
     assert response.status_code == 401
-    assert response.json() == {"detail": "invalid credentials"}
+    assert response.json()["detail"] == "invalid credentials"
 
 
 def test_token_for_a_disabled_account_is_refused_on_a_case_endpoint(client, store):

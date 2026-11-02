@@ -226,13 +226,13 @@ def test_the_pair_cannot_be_linked_twice_and_the_same_case_is_refused(people):
 
     again = triager.post(f"/api/v1/cases/{first}/links", json={"linked_case_id": second}, headers=idem())
     assert again.status_code == 409
-    assert again.json() == {"detail": "cases are already linked"}
+    assert again.json()["detail"] == "cases are already linked"
     reverse = triager.post(f"/api/v1/cases/{second}/links", json={"linked_case_id": first}, headers=idem())
     assert reverse.status_code == 409
 
     same = triager.post(f"/api/v1/cases/{first}/links", json={"linked_case_id": first}, headers=idem())
     assert same.status_code == 422
-    assert same.json() == {"detail": "a case cannot be linked to itself"}
+    assert same.json()["detail"] == "a case cannot be linked to itself"
 
 
 def test_a_closed_case_on_either_side_refuses_the_link(people):
@@ -244,7 +244,7 @@ def test_a_closed_case_on_either_side_refuses_the_link(people):
     for source, linked in ((open_case, closed_case), (closed_case, open_case)):
         response = triager.post(f"/api/v1/cases/{source}/links", json={"linked_case_id": linked}, headers=idem())
         assert response.status_code == 409
-        assert response.json() == {"detail": "case is closed"}
+        assert response.json()["detail"] == "case is closed"
 
 
 def test_the_case_must_be_visible_to_add_a_link_and_is_not_found_otherwise(people):
@@ -253,7 +253,7 @@ def test_the_case_must_be_visible_to_add_a_link_and_is_not_found_otherwise(peopl
     # The triager cannot see a reporter-channel case until it is assigned, so the link is refused as not found.
     response = people["triager"].post(f"/api/v1/cases/{own}/links", json={"linked_case_id": channel}, headers=idem())
     assert response.status_code == 404
-    assert response.json() == {"detail": "case not found"}
+    assert response.json()["detail"] == "case not found"
 
 
 def test_a_link_to_a_case_the_reader_cannot_see_has_no_id_and_no_title(people):
@@ -304,7 +304,7 @@ def test_a_closed_case_refuses_removal_too(people):
     close_case_in_database(second, new_user("triager"))
     response = triager.delete(f"/api/v1/cases/{first}/links/{second}")
     assert response.status_code == 409
-    assert response.json() == {"detail": "case is closed"}
+    assert response.json()["detail"] == "case is closed"
 
 
 # --- audit ----------------------------------------------------------------------------------------------------------

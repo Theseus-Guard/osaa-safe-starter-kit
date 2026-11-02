@@ -129,7 +129,7 @@ def test_add_refusals(client, caller, monkeypatch, outcome, status, detail):
     monkeypatch.setattr(case_links_api, "add_link", lambda *args, **kwargs: (outcome, None))
     response = client.post(f"/api/v1/cases/{CASE_ID}/links", json={"linked_case_id": OTHER_ID}, headers=idem())
     assert response.status_code == status
-    assert response.json() == {"detail": detail}
+    assert response.json()["detail"] == detail
 
 
 def test_add_success_is_201_with_the_linked_case_id_and_title(client, caller, monkeypatch):
@@ -162,7 +162,7 @@ def test_add_passes_the_actor_and_the_scope_to_the_service(client, caller, monke
 
 def test_linked_case_id_must_be_a_uuid(client, caller):
     as_role(caller, TRIAGER_ID, "triager")
-    assert client.post(f"/api/v1/cases/{CASE_ID}/links", json={"linked_case_id": "not-a-uuid"}, headers=idem()).status_code == 422
+    assert client.post(f"/api/v1/cases/{CASE_ID}/links", json={"linked_case_id": "not-a-uuid"}, headers=idem()).status_code == 400
 
 
 @pytest.mark.parametrize(
@@ -178,7 +178,7 @@ def test_remove_refusals(client, caller, monkeypatch, outcome, status, detail):
     monkeypatch.setattr(case_links_api, "remove_link", lambda *args, **kwargs: outcome)
     response = client.delete(f"/api/v1/cases/{CASE_ID}/links/{OTHER_ID}")
     assert response.status_code == status
-    assert response.json() == {"detail": detail}
+    assert response.json()["detail"] == detail
 
 
 def test_remove_success_is_204(client, caller, monkeypatch):
@@ -206,7 +206,7 @@ def test_an_invisible_case_is_404_on_read(client, caller, monkeypatch):
     monkeypatch.setattr(case_links_api, "list_links", lambda case_id, scope: None)
     response = client.get(f"/api/v1/cases/{CASE_ID}/links")
     assert response.status_code == 404
-    assert response.json() == {"detail": "case not found"}
+    assert response.json()["detail"] == "case not found"
 
 
 def test_a_link_to_a_case_the_caller_cannot_see_carries_no_id_and_no_title(client, caller, monkeypatch):

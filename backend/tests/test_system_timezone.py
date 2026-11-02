@@ -56,7 +56,7 @@ def test_valid_iana_names_are_accepted(name):
 @pytest.mark.parametrize("name", ["Mars/Olympus", "", "Europe", "../etc/passwd", "/etc/passwd", "UTC+3", "x" * 65])
 def test_invalid_names_are_rejected_with_422(client, timezone_db, name):
     response = put(client, name, current=None)
-    assert response.status_code == 422
+    assert response.status_code == 400
     assert timezone_db.timezone_rows == []
     assert timezone_db.audit_rows == []
 
@@ -93,7 +93,7 @@ def test_change_without_confirmation_is_rejected_with_422(client, timezone_db):
     put(client, ISTANBUL, current=None)
     response = put(client, AUCKLAND, current=ISTANBUL, confirm=False)
     assert response.status_code == 422
-    assert response.json() == {"detail": "confirmation required"}
+    assert response.json()["detail"] == "confirmation required"
     assert len(timezone_db.timezone_rows) == 1
     assert len(timezone_db.audit_rows) == 1
 
@@ -102,7 +102,7 @@ def test_change_with_a_stale_current_value_is_rejected_with_409(client, timezone
     put(client, ISTANBUL, current=None)
     response = put(client, AUCKLAND, current="Europe/Berlin", confirm=True)
     assert response.status_code == 409
-    assert response.json() == {"detail": "timezone changed by someone else; reload"}
+    assert response.json()["detail"] == "timezone changed by someone else; reload"
     assert len(timezone_db.timezone_rows) == 1
 
 
@@ -146,7 +146,7 @@ def test_client_cannot_supply_the_effective_time(client, timezone_db):
 
 def test_current_is_required_so_the_client_states_what_it_replaces(client):
     response = client.put("/api/v1/system/timezone", json={"timezone": ISTANBUL})
-    assert response.status_code == 422
+    assert response.status_code == 400
 
 
 def test_put_requires_users_manage(client, caller, timezone_db):

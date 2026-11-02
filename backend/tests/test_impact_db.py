@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from safe_kit import api, auth, users
 from safe_kit.db import connect
 from safe_kit.migrate import main as migrate
+from error_body import without_request_id
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("SAFE_TEST_DATABASE") != "1",
@@ -223,7 +224,7 @@ def test_a_repeated_request_with_the_same_key_returns_the_first_answer_and_write
     first = triager.post(scores_path(case_id), json=values(0, 1, 1, 1), headers=key)
     again = triager.post(scores_path(case_id), json=values(0, 1, 1, 1), headers=key)
     assert first.status_code == again.status_code == 200
-    assert again.json() == first.json()
+    assert without_request_id(again) == without_request_id(first)
     assert stored_versions(case_id) == [(1, 1, 1, 1)]
     assert len(audit_rows(case_id)) == 1
 

@@ -46,6 +46,7 @@ from test_case_access import (  # fixtures and helpers from the case access test
 from test_evidence import evidence_world, multipart
 from test_evidence import request_as as evidence_request_as
 from test_evidence_lifecycle import PDF, provider  # the sample PDF and the local key provider
+from error_body import without_request_id
 
 # Roles that the default seed gives no evidence:read, and no evidence:write, and no cases:submit.
 ROLES_WITHOUT_EVIDENCE_READ = ("reporter", "admin", "auditor", "disclosure_approver")
@@ -105,7 +106,7 @@ def test_a_role_without_evidence_read_gets_403_on_list_download_and_custody(clie
     response = client.get(url_template.format(uuid.uuid4()))
 
     assert response.status_code == 403
-    assert response.json() == {"detail": "forbidden"}
+    assert response.json()["detail"] == "forbidden"
 
 
 # --- intake, without a database --------------------------------------------------------------------------------------
@@ -147,7 +148,7 @@ def test_an_unassigned_investigator_gets_the_same_404_as_a_missing_case(db_clien
         hidden = investigator.get(f"/api/v1/cases/{case_id}{suffix}")
         absent = investigator.get(f"/api/v1/cases/{missing}{suffix}")
         assert hidden.status_code == absent.status_code == 404, suffix
-        assert hidden.json() == absent.json(), suffix
+        assert without_request_id(hidden) == without_request_id(absent), suffix
 
 
 @requires_database
@@ -174,4 +175,4 @@ def test_an_unassigned_investigator_gets_the_same_404_for_evidence_as_for_a_miss
         hidden = evidence_request_as(other, "get", hidden_url)
         absent = evidence_request_as(other, "get", absent_url)
         assert hidden.status_code == absent.status_code == 404, hidden_url
-        assert hidden.json() == absent.json(), hidden_url
+        assert without_request_id(hidden) == without_request_id(absent), hidden_url

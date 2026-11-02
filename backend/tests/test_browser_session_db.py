@@ -90,7 +90,7 @@ def test_cookie_login_write_and_logout_against_postgresql():
     body = {"title": "Cookie session case", "awareness_time": past()}
     refused = browser.post("/api/v1/cases", json=body, headers=idem())
     assert refused.status_code == 403
-    assert refused.json() == {"detail": "csrf_token_invalid"}
+    assert refused.json()["detail"] == "csrf_token_invalid"
 
     created = browser.post("/api/v1/cases", json=body, headers={**idem(), "X-CSRF-Token": csrf_value})
     assert created.status_code == 201, created.text

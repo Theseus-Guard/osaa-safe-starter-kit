@@ -153,7 +153,7 @@ def test_the_disclosure_approver_reads_appeals_but_may_not_file_one(client, call
     body = {"grounds": "Wrong outcome"}
     response = client.post(APPEAL_URL, headers=idem(), json=body)
     assert response.status_code == 403
-    assert response.json() == {"detail": "forbidden"}
+    assert response.json()["detail"] == "forbidden"
     assert client.get(APPEAL_URL).status_code == 200
 
 
@@ -194,7 +194,7 @@ def test_each_side_effect_post_requires_an_idempotency_key(client, caller, monke
     )
     missing = client.post(url, json=body)
     assert missing.status_code == 400
-    assert missing.json() == {"detail": {"status": "idempotency_key_required"}}
+    assert missing.json()["detail"] == {"status": "idempotency_key_required"}
 
 
 @pytest.mark.parametrize("key", ["has space", "x" * 129, ""])
@@ -203,7 +203,7 @@ def test_the_idempotency_key_must_be_1_to_128_visible_ascii(client, caller, monk
     monkeypatch.setattr(review_independence_api, "declare_conflict", forbid("declare_conflict"))
     response = client.post(CONFLICT_URL, headers={"Idempotency-Key": key}, json={"kind": "withdrawn"})
     assert response.status_code == 400
-    assert response.json() == {"detail": {"status": "idempotency_key_invalid"}}
+    assert response.json()["detail"] == {"status": "idempotency_key_invalid"}
 
 
 def test_the_key_scope_uses_the_principal_route_template_and_key(client, caller, monkeypatch):
@@ -273,7 +273,7 @@ def test_a_key_used_with_another_request_is_refused_without_its_content(client, 
     )
     response = client.post(url, headers={"Idempotency-Key": "k-1"}, json=body)
     assert response.status_code == 409
-    assert response.json() == {"detail": {"status": "idempotency_key_reused"}}
+    assert response.json()["detail"] == {"status": "idempotency_key_reused"}
 
 
 # --- validation --------------------------------------------------------------------------------------------------------
@@ -286,43 +286,43 @@ def test_a_declared_conflict_needs_a_description_and_a_withdrawal_does_not(clien
         "declare_conflict",
         lambda *args, **kwargs: (IndependenceOutcome.NO_DECLARED_CONFLICT, None, None),
     )
-    assert client.post(CONFLICT_URL, headers=idem(), json={"kind": "declared"}).status_code == 422
-    assert client.post(CONFLICT_URL, headers=idem(), json={"kind": "declared", "description": "   "}).status_code == 422
+    assert client.post(CONFLICT_URL, headers=idem(), json={"kind": "declared"}).status_code == 400
+    assert client.post(CONFLICT_URL, headers=idem(), json={"kind": "declared", "description": "   "}).status_code == 400
     assert client.post(CONFLICT_URL, headers=idem(), json={"kind": "withdrawn"}).status_code == 409
 
 
 def test_conflict_kind_must_be_declared_or_withdrawn(client, caller, monkeypatch):
     as_role(caller, REVIEWER_ID, "reviewer")
     monkeypatch.setattr(review_independence_api, "declare_conflict", forbid("declare_conflict"))
-    assert client.post(CONFLICT_URL, headers=idem(), json={"kind": "resolved"}).status_code == 422
+    assert client.post(CONFLICT_URL, headers=idem(), json={"kind": "resolved"}).status_code == 400
 
 
 def test_description_is_limited_to_1000_characters(client, caller, monkeypatch):
     as_role(caller, REVIEWER_ID, "reviewer")
     monkeypatch.setattr(review_independence_api, "declare_conflict", forbid("declare_conflict"))
     body = {"kind": "declared", "description": "x" * 1001}
-    assert client.post(CONFLICT_URL, headers=idem(), json=body).status_code == 422
+    assert client.post(CONFLICT_URL, headers=idem(), json=body).status_code == 400
 
 
 def test_supersedes_must_be_an_identifier(client, caller, monkeypatch):
     as_role(caller, REVIEWER_ID, "reviewer")
     monkeypatch.setattr(review_independence_api, "declare_conflict", forbid("declare_conflict"))
     body = {"kind": "declared", "description": "x", "supersedes_id": "not-a-uuid"}
-    assert client.post(CONFLICT_URL, headers=idem(), json=body).status_code == 422
+    assert client.post(CONFLICT_URL, headers=idem(), json=body).status_code == 400
 
 
 def test_the_replacement_is_required_and_must_be_an_identifier(client, caller, monkeypatch):
     as_role(caller, REVIEWER_ID, "reviewer")
     monkeypatch.setattr(review_independence_api, "record_recusal", forbid("record_recusal"))
-    assert client.post(RECUSAL_URL, headers=idem(), json={"reason": "x"}).status_code == 422
-    assert client.post(RECUSAL_URL, headers=idem(), json={"replacement_id": "someone"}).status_code == 422
+    assert client.post(RECUSAL_URL, headers=idem(), json={"reason": "x"}).status_code == 400
+    assert client.post(RECUSAL_URL, headers=idem(), json={"replacement_id": "someone"}).status_code == 400
 
 
 def test_appeal_grounds_are_required_and_limited(client, caller, monkeypatch):
     as_role(caller, REVIEWER_ID, "reviewer")
     monkeypatch.setattr(review_independence_api, "file_appeal", forbid("file_appeal"))
-    assert client.post(APPEAL_URL, headers=idem(), json={"grounds": "  "}).status_code == 422
-    assert client.post(APPEAL_URL, headers=idem(), json={"grounds": "x" * 2001}).status_code == 422
+    assert client.post(APPEAL_URL, headers=idem(), json={"grounds": "  "}).status_code == 400
+    assert client.post(APPEAL_URL, headers=idem(), json={"grounds": "x" * 2001}).status_code == 400
 
 
 @pytest.mark.parametrize("reviewer", [OTHER_REVIEWER_ID, "nobody", None])
@@ -331,7 +331,7 @@ def test_an_appeal_that_names_a_reviewer_is_refused(client, caller, monkeypatch,
     as_role(caller, REVIEWER_ID, "reviewer")
     monkeypatch.setattr(review_independence_api, "file_appeal", forbid("file_appeal"))
     response = client.post(APPEAL_URL, headers=idem(), json={"grounds": "x", "independent_reviewer_id": reviewer})
-    assert response.status_code == 422
+    assert response.status_code == 400
     assert any(error["loc"][-1] == "independent_reviewer_id" for error in response.json()["detail"])
 
 
@@ -354,7 +354,7 @@ def test_conflict_refusals_map_to_their_status_codes(client, caller, monkeypatch
     monkeypatch.setattr(review_independence_api, "declare_conflict", lambda *args, **kwargs: (outcome, None, None))
     response = client.post(CONFLICT_URL, headers=idem(), json={"kind": "declared", "description": "x"})
     assert response.status_code == status
-    assert response.json() == detail
+    assert response.json()["detail"] == detail["detail"]
 
 
 @pytest.mark.parametrize(
@@ -483,7 +483,7 @@ def test_the_lists_answer_404_for_a_round_the_caller_may_not_see(client, caller,
     for url in (CONFLICT_URL, RECUSAL_URL, APPEAL_URL):
         response = client.get(url)
         assert response.status_code == 404
-        assert response.json() == {"detail": "review not found"}
+        assert response.json()["detail"] == "review not found"
 
 
 def test_the_list_routes_pass_the_caller_scope_to_the_service(client, caller, monkeypatch):
@@ -507,7 +507,7 @@ def test_the_list_routes_need_a_case_read_permission(client, caller, monkeypatch
 
 def test_the_round_path_must_be_a_uuid(client, caller):
     as_role(caller, REVIEWER_ID, "reviewer")
-    assert client.get("/api/v1/reviews/not-a-uuid/conflicts").status_code == 422
+    assert client.get("/api/v1/reviews/not-a-uuid/conflicts").status_code == 400
 
 
 # --- the layer refusals of reviews_api ---------------------------------------------------------------------------------
@@ -527,4 +527,4 @@ def test_a_declared_conflict_or_a_withdrawal_blocks_setting_a_layer(client, call
         f"/api/v1/reviews/{ROUND_ID}/layers/model", json={"outcome": "pass", "expected_revision": 1}, headers=idem()
     )
     assert response.status_code == 403
-    assert response.json() == {"detail": detail}
+    assert response.json()["detail"] == detail

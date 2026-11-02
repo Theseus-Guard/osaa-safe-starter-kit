@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from safe_kit import api, auth
+from safe_kit import api, auth, privacy
 from safe_kit.privacy import CATALOG, CSV_COLUMNS, inventory_csv_rows
 from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS
 from safe_kit.users import User
@@ -38,9 +38,25 @@ def test_every_entry_is_complete():
             assert not entry.personal_fields, entry.table
 
 
-def test_undefined_retention_is_marked_as_undefined():
-    undefined = [entry.table for entry in CATALOG if not entry.retention_defined]
-    assert "users" in undefined and "rate_limits" in undefined
+def test_every_table_has_a_retention_period_shown_from_the_setting(monkeypatch):
+    # The period comes from SAFE_RETENTION_YEARS for every table. Nothing reports "undefined" any more.
+    monkeypatch.setattr(privacy, "table_stats", lambda entry: privacy.RowStats(0, 0, 0, None, None))
+    items = privacy.inventory(5)
+
+    assert len(items) == len(CATALOG)
+    for item in items:
+        assert item["retention_years"] == 5, item["table"]
+        assert item["retention_defined"] is True, item["table"]
+        assert item["retention"].startswith("5 years, provisional and awaiting legal review."), item["table"]
+        assert "undefined" not in item["retention"].lower(), item["table"]
+        assert "not defined" not in item["retention"].lower(), item["table"]
+
+
+def test_retention_period_uses_the_singular_for_one_year(monkeypatch):
+    monkeypatch.setattr(privacy, "table_stats", lambda entry: privacy.RowStats(0, 0, 0, None, None))
+    items = privacy.inventory(1)
+
+    assert all(item["retention"].startswith("1 year, provisional") for item in items)
 
 
 def test_csv_rows_match_the_header():
@@ -77,7 +93,7 @@ def client(monkeypatch):
     )}
     api.app.dependency_overrides[auth.current_user] = lambda: actor["user"]
     monkeypatch.setattr(auth, "permissions_for_role", lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()))
-    monkeypatch.setattr(api, "inventory", lambda: [_full_item(entry) for entry in CATALOG])
+    monkeypatch.setattr(api, "inventory", lambda years: [_full_item(entry) for entry in CATALOG])
     yield TestClient(api.app), actor
     api.app.dependency_overrides.clear()
 
@@ -87,6 +103,12 @@ def test_admin_reads_inventory(client):
     response = test_client.get("/api/v1/privacy/inventory")
     assert response.status_code == 200
     assert response.json()["items"][0]["table"] == "users"
+
+
+def test_inventory_reports_the_retention_period_from_the_setting(client):
+    test_client, _ = client
+    body = test_client.get("/api/v1/privacy/inventory").json()
+    assert body["retention_years"] == 5
 
 
 def test_inventory_export_json(client):
@@ -107,7 +129,7 @@ def test_inventory_export_csv(client):
 
 def test_export_rejects_unknown_format(client):
     test_client, _ = client
-    assert test_client.get("/api/v1/privacy/inventory/export?format=xml").status_code == 422
+    assert test_client.get("/api/v1/privacy/inventory/export?format=xml").status_code == 400
 
 
 def test_non_admin_cannot_read_inventory(client):
