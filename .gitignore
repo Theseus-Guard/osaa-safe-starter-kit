@@ -32,3 +32,6 @@ frontend/dist/
 /website/build/
 /website/.docusaurus/
 /website/docs/
+
+# Local machine override (demo mode for the owner's stack). Never committed.
+/compose.override.yaml
