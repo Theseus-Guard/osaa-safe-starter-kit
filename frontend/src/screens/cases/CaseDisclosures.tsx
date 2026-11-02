@@ -4,8 +4,10 @@ import {
   DisclosurePreview,
   DisclosureVersion,
   approveDisclosure,
+  exportDisclosure,
   getDisclosurePreview,
   listDisclosures,
+  saveBlob,
 } from "../../api";
 import { describeError } from "../../messages";
 import { humanize } from "./case-format";
@@ -50,6 +52,7 @@ export function CaseDisclosures({ caseId, closed, canApprove }: Props) {
   const [digest, setDigest] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     let stale = false;
@@ -97,6 +100,25 @@ export function CaseDisclosures({ caseId, closed, canApprove }: Props) {
     : selected !== null && !selected.is_latest
       ? "A newer version of this package exists. Approve the latest version."
       : undefined;
+
+  // Only an approved version can be exported. An earlier version that was approved is exported as history.
+  const exportReason =
+    selected !== null && selected.approval === null
+      ? "Only an approved version can be exported. Approve it first."
+      : undefined;
+
+  async function exportSelected() {
+    if (selected === null) return;
+    setExporting(true);
+    try {
+      const blob = await exportDisclosure(caseId, selected.id);
+      saveBlob(blob, `disclosure-version-${selected.version}.json`);
+    } catch (caught) {
+      toast.error(describeError(caught));
+    } finally {
+      setExporting(false);
+    }
+  }
 
   async function approve() {
     if (selectedId === null) return;
@@ -248,6 +270,23 @@ export function CaseDisclosures({ caseId, closed, canApprove }: Props) {
             <p className="text-sm">
               Approval: <span className="font-medium">{APPROVAL_TEXT[preview.approval_state]}</span>
             </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <DisabledHint reason={exportReason}>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={exportReason !== undefined || selected === null || exporting}
+                  onClick={() => void exportSelected()}
+                >
+                  Export JSON
+                </Button>
+              </DisabledHint>
+              {selected !== null && selected.approval !== null && !selected.is_latest && (
+                <p className="text-xs text-muted-foreground">
+                  An earlier approved version. Its export is marked as superseded history.
+                </p>
+              )}
+            </div>
           </section>
         )}
 

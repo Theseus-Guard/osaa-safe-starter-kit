@@ -31,6 +31,7 @@ from safe_kit.users import User
 PACKAGES_ROUTE = "/api/v1/cases/{case_id}/disclosures"
 VERSION_ROUTE = "/api/v1/cases/{case_id}/disclosures/{version_id}"
 PREVIEW_ROUTE = "/api/v1/cases/{case_id}/disclosures/{version_id}/preview"
+EXPORT_ROUTE = "/api/v1/cases/{case_id}/disclosures/{version_id}/export"
 APPROVALS_ROUTE = "/api/v1/cases/{case_id}/disclosures/{version_id}/approvals"
 DEFAULT_PAGE = 50
 MAX_PAGE = 200
@@ -299,6 +300,29 @@ def preview_disclosure_version(
     if version is None:
         raise HTTPException(status_code=404, detail="disclosure version not found")
     return disclosure.preview(version, tlp.recipient_for(actor))
+
+
+@disclosure_router.get(EXPORT_ROUTE)
+def export_disclosure_version(
+    case_id: uuid.UUID,
+    version_id: uuid.UUID,
+    actor: User = Depends(require_permission("disclosures:read")),
+) -> dict[str, Any]:
+    """The approved version as the versioned export (schemas/disclosure-export.v0.json). It is refused for a version
+    without an approval, and each export is written to the audit log without its content."""
+    result = disclosure.export_version(
+        str(case_id), str(version_id), _scope(actor), tlp.recipient_for(actor)
+    )
+    if result.outcome is Outcome.NOT_FOUND:
+        raise HTTPException(status_code=404, detail="case not found")
+    if result.outcome is Outcome.VERSION_NOT_FOUND:
+        raise HTTPException(status_code=404, detail="disclosure version not found")
+    if result.outcome is Outcome.NOT_APPROVED:
+        raise HTTPException(status_code=409, detail={"status": "version_not_approved"})
+    if result.outcome is Outcome.INTEGRITY_FAILED:
+        raise HTTPException(status_code=409, detail={"status": "digest_mismatch"})
+    assert result.outcome is Outcome.OK and result.value is not None
+    return result.value
 
 
 @disclosure_router.post(APPROVALS_ROUTE, status_code=201)

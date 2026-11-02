@@ -1406,6 +1406,15 @@ export function getDisclosurePreview(caseId: string, versionId: string): Promise
   );
 }
 
+// The versioned export of one approved version (schemas/disclosure-export.v0.json). The API refuses a version that has
+// no approval. The body holds no evidence content and is saved as a file by the caller.
+export function exportDisclosure(caseId: string, versionId: string): Promise<Blob> {
+  return request<Blob>(
+    `/cases/${encodeURIComponent(caseId)}/disclosures/${encodeURIComponent(versionId)}/export`,
+    { responseType: "blob" },
+  );
+}
+
 // The approver confirms the recipient, purpose and digest of the version. The API refuses any other value.
 export function approveDisclosure(
   caseId: string,
