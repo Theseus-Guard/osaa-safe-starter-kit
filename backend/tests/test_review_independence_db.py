@@ -142,10 +142,10 @@ def appeal(db_client, people: dict, who: str, round_id: str, grounds: str = "The
 def set_layer(
     db_client, people: dict, who: str, round_id: str, revision: int, outcome: str = "fail", reason="Reviewed for this test"
 ):
-    body = {"outcome": outcome, "expected_revision": revision}
+    body = {"outcome": outcome}
     if reason is not None:
         body["reason"] = reason
-    return db_client(people[who]).patch(f"/api/v1/reviews/{round_id}/layers/model", json=body, headers=idem())
+    return db_client(people[who]).patch(f"/api/v1/reviews/{round_id}/layers/model", json=body, headers={**idem(), "If-Match": f'"{revision}"'})
 
 
 def count(sql: str, params: tuple) -> int:

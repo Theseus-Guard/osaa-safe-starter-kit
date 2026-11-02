@@ -56,7 +56,7 @@ REVIEW_LAYERS = (
     "authorization-and-commitment",
     "workflow-composition",
 )
-REVIEW_REVISION_CONFLICT = "revision_conflict"
+REVIEW_PRECONDITION_FAILED = "precondition_failed"
 CLASSIFICATION_TRIGGERS = (
     "unauthorized_access_or_change",
     "boundary_escape",
@@ -1328,9 +1328,9 @@ def _review_list(base_url: str, args: argparse.Namespace) -> None:
 
 
 def _review_conflict_revision(error: RequestFailed) -> int | None:
-    """The current round revision from a stale-write 409, or None for any other failure."""
+    """The current round revision from a stale-write 412, or None for any other failure."""
     detail = error.detail
-    if error.status != 409 or not isinstance(detail, dict) or detail.get("status") != REVIEW_REVISION_CONFLICT:
+    if error.status != 412 or not isinstance(detail, dict) or detail.get("status") != REVIEW_PRECONDITION_FAILED:
         return None
     revision = detail.get("current_revision")
     if isinstance(revision, int) and not isinstance(revision, bool):
@@ -1356,7 +1356,6 @@ def _review_record(base_url: str, args: argparse.Namespace) -> None:
         "outcome": args.outcome,
         "reason": reason,
         "evidence_ids": evidence_ids,
-        "expected_revision": args.revision,
     }
 
     def action(base: str, token: str) -> None:
@@ -1375,7 +1374,8 @@ def _review_record(base_url: str, args: argparse.Namespace) -> None:
                 token=token,
                 payload=payload,
                 messages=REVIEW_MESSAGES,
-                extra_headers={"Idempotency-Key": key},
+                # The revision read with 'review list' travels as the ETag in If-Match (D-16).
+                extra_headers={"Idempotency-Key": key, "If-Match": f'"{args.revision}"'},
             )
         except RequestFailed as error:
             current = _review_conflict_revision(error)

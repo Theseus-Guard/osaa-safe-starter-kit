@@ -126,7 +126,7 @@ def test_the_disclosure_approver_reads_rounds_but_may_not_open_or_record_one(cli
     assert client.get("/api/v1/reviews", params={"case_id": CASE_ID}).status_code == 200
     assert client.post("/api/v1/reviews", headers=idem(), json={"case_id": CASE_ID}).status_code == 403
     response = client.patch(
-        f"/api/v1/reviews/{ROUND_ID}/layers/model", json={"outcome": "pass", "expected_revision": 1}, headers=idem()
+        f"/api/v1/reviews/{ROUND_ID}/layers/model", json={"outcome": "pass"}, headers={**idem(), "If-Match": '"1"'}
     )
     assert response.status_code == 403
 
@@ -140,7 +140,7 @@ def test_roles_without_case_permissions_get_403(client, caller, monkeypatch, rol
     assert client.get(f"/api/v1/reviews/{ROUND_ID}").status_code == 403
     assert client.post("/api/v1/reviews", headers=idem(), json={"case_id": CASE_ID}).status_code == 403
     response = client.patch(
-        f"/api/v1/reviews/{ROUND_ID}/layers/model", json={"outcome": "pass", "expected_revision": 1}, headers=idem()
+        f"/api/v1/reviews/{ROUND_ID}/layers/model", json={"outcome": "pass"}, headers={**idem(), "If-Match": '"1"'}
     )
     assert response.status_code == 403
 
@@ -309,10 +309,10 @@ def test_open_round_needs_a_case_id(client, caller):
 def test_layer_must_be_one_of_the_eleven_template_layers(client, caller, monkeypatch):
     as_role(caller, REVIEWER_ID, "reviewer")
     monkeypatch.setattr(reviews_api, "set_layer", lambda *args, **kwargs: pytest.fail("must not reach the service"))
-    body = {"outcome": "pass", "expected_revision": 1}
-    assert client.patch(f"/api/v1/reviews/{ROUND_ID}/layers/unknown", json=body, headers=idem()).status_code == 400
+    body = {"outcome": "pass"}
+    assert client.patch(f"/api/v1/reviews/{ROUND_ID}/layers/unknown", json=body, headers={**idem(), "If-Match": '"1"'}).status_code == 400
     # The URL keys are the plan names; the storage name of a migrated entry is not a layer a caller can set.
-    assert client.patch(f"/api/v1/reviews/{ROUND_ID}/layers/legacy-case-review", json=body, headers=idem()).status_code == 400
+    assert client.patch(f"/api/v1/reviews/{ROUND_ID}/layers/legacy-case-review", json=body, headers={**idem(), "If-Match": '"1"'}).status_code == 400
 
 
 @pytest.mark.parametrize("outcome", ["fail", "insufficient_evidence", "not_applicable"])
@@ -320,9 +320,9 @@ def test_reason_is_required_for_every_outcome_except_pass(client, caller, monkey
     as_role(caller, REVIEWER_ID, "reviewer")
     monkeypatch.setattr(reviews_api, "set_layer", lambda *args, **kwargs: pytest.fail("must not reach the service"))
     url = f"/api/v1/reviews/{ROUND_ID}/layers/model"
-    assert client.patch(url, headers=idem(), json={"outcome": outcome, "expected_revision": 1}).status_code == 400
+    assert client.patch(url, headers={**idem(), "If-Match": '"1"'}, json={"outcome": outcome}).status_code == 400
     assert client.patch(
-        url, json={"outcome": outcome, "reason": "   ", "expected_revision": 1}, headers=idem()
+        url, json={"outcome": outcome, "reason": "   "}, headers={**idem(), "If-Match": '"1"'}
     ).status_code == 400
 
 
@@ -331,10 +331,10 @@ def test_pass_needs_evidence_and_is_refused_without_it(client, caller):
     as_role(caller, REVIEWER_ID, "reviewer")
     url = f"/api/v1/reviews/{ROUND_ID}/layers/model"
     for body in (
-        {"outcome": "pass", "expected_revision": 1},
-        {"outcome": "pass", "reason": "Checked", "evidence_ids": [], "expected_revision": 1},
+        {"outcome": "pass"},
+        {"outcome": "pass", "reason": "Checked", "evidence_ids": []},
     ):
-        response = client.patch(url, json=body, headers=idem())
+        response = client.patch(url, json=body, headers={**idem(), "If-Match": '"1"'})
         assert response.status_code == 422
         assert response.json()["detail"] == "a pass needs at least one evidence item of this case"
 
@@ -350,16 +350,28 @@ def test_set_layer_refuses_a_pass_without_evidence_before_the_database_is_used(m
     assert review is None
 
 
-def test_expected_revision_is_required(client, caller, monkeypatch):
+def test_if_match_is_required_and_must_be_a_quoted_revision(client, caller, monkeypatch):
     as_role(caller, REVIEWER_ID, "reviewer")
     monkeypatch.setattr(reviews_api, "set_layer", lambda *args, **kwargs: pytest.fail("must not reach the service"))
-    assert client.patch(f"/api/v1/reviews/{ROUND_ID}/layers/model", json={"outcome": "pass"}, headers=idem()).status_code == 400
+    url = f"/api/v1/reviews/{ROUND_ID}/layers/model"
+    body = {"outcome": "fail", "reason": REASON}
+    # Missing: 428. The body field expected_revision is gone, so a client that still sends it is refused as invalid.
+    missing = client.patch(url, json=body, headers=idem())
+    assert missing.status_code == 428
+    assert missing.json()["detail"] == {"status": "precondition_required"}
+    legacy = client.patch(url, json={**body, "expected_revision": 1}, headers={**idem(), "If-Match": '"1"'})
+    assert legacy.status_code == 400
+    # Malformed: 400. An unquoted number, a wildcard, text and an empty value are not revisions.
+    for value in ("1", "*", '"abc"', '""', '"1.5"', 'W/"1"', '"-1"'):
+        response = client.patch(url, json=body, headers={**idem(), "If-Match": value})
+        assert response.status_code == 400, value
+        assert response.json()["detail"] == {"status": "invalid_if_match"}, value
 
 
 def test_reason_is_limited_to_1000_characters(client, caller):
     as_role(caller, REVIEWER_ID, "reviewer")
-    body = {"outcome": "fail", "reason": "x" * 1001, "expected_revision": 1}
-    assert client.patch(f"/api/v1/reviews/{ROUND_ID}/layers/model", json=body, headers=idem()).status_code == 400
+    body = {"outcome": "fail", "reason": "x" * 1001}
+    assert client.patch(f"/api/v1/reviews/{ROUND_ID}/layers/model", json=body, headers={**idem(), "If-Match": '"1"'}).status_code == 400
 
 
 def test_evidence_references_are_passed_through_as_identifiers(client, caller, monkeypatch):
@@ -375,7 +387,7 @@ def test_evidence_references_are_passed_through_as_identifiers(client, caller, m
     monkeypatch.setattr(reviews_api, "set_layer", fake_set_layer)
     response = client.patch(
         f"/api/v1/reviews/{ROUND_ID}/layers/model",
-        json={"outcome": "fail", "reason": f"  {REASON}  ", "evidence_ids": [evidence], "expected_revision": 2}, headers=idem(),
+        json={"outcome": "fail", "reason": f"  {REASON}  ", "evidence_ids": [evidence]}, headers={**idem(), "If-Match": '"2"'},
     )
     assert response.status_code == 200
     assert seen == {
@@ -384,7 +396,7 @@ def test_evidence_references_are_passed_through_as_identifiers(client, caller, m
         "outcome": "fail",
         "reason": REASON,  # trimmed
         "evidence_ids": [evidence],
-        "expected_revision": 2,
+        "expected_revision": 2,  # from If-Match
     }
 
 
@@ -393,47 +405,64 @@ def test_the_setter_gets_back_its_own_reason_and_the_other_layers_stay_hidden(cl
     monkeypatch.setattr(reviews_api, "set_layer", lambda *args, **kwargs: (RoundOutcome.OK, fake_round(revision=2)))
     response = client.patch(
         f"/api/v1/reviews/{ROUND_ID}/layers/model",
-        json={"outcome": "fail", "reason": REASON, "expected_revision": 1}, headers=idem(),
+        json={"outcome": "fail", "reason": REASON}, headers={**idem(), "If-Match": '"1"'},
     )
     assert response.status_code == 200
     assert response.json()["layers"][0]["reason"] == REASON
 
 
-def test_stale_revision_returns_409_with_the_current_revision_only(client, caller, monkeypatch):
+def test_stale_revision_returns_412_with_the_current_revision_only(client, caller, monkeypatch):
     as_role(caller, REVIEWER_ID, "reviewer")
     monkeypatch.setattr(
         reviews_api, "set_layer", lambda *args, **kwargs: (RoundOutcome.REVISION_CONFLICT, fake_round(revision=4))
     )
     response = client.patch(
         f"/api/v1/reviews/{ROUND_ID}/layers/model",
-        json={"outcome": "fail", "reason": REASON, "expected_revision": 1}, headers=idem(),
+        json={"outcome": "fail", "reason": REASON}, headers={**idem(), "If-Match": '"1"'},
     )
-    assert response.status_code == 409
-    # The refused write returns the current revision and nothing else: no layers, no reasons.
-    assert response.json()["detail"] == {"status": "revision_conflict", "current_revision": 4}
+    assert response.status_code == 412
+    # The refused write returns the current revision and nothing else: no layers, no reasons. The ETag is the same.
+    assert response.json()["detail"] == {"status": "precondition_failed", "current_revision": 4}
+    assert response.headers["ETag"] == '"4"'
+
+
+def test_success_returns_the_new_etag_and_a_read_returns_the_round_etag(client, caller, monkeypatch):
+    as_role(caller, REVIEWER_ID, "reviewer")
+    monkeypatch.setattr(reviews_api, "set_layer", lambda *args, **kwargs: (RoundOutcome.OK, fake_round(revision=2)))
+    changed = client.patch(
+        f"/api/v1/reviews/{ROUND_ID}/layers/model",
+        json={"outcome": "fail", "reason": REASON}, headers={**idem(), "If-Match": '"1"'},
+    )
+    assert changed.status_code == 200
+    assert changed.headers["ETag"] == '"2"'
+    monkeypatch.setattr(reviews_api, "get_round", lambda *args, **kwargs: fake_round(revision=2))
+    read = client.get(f"/api/v1/reviews/{ROUND_ID}")
+    assert read.status_code == 200
+    assert read.headers["ETag"] == '"2"'
+    assert read.json()["revision"] == 2
 
 
 def test_layer_refusals_map_to_their_status_codes(client, caller, monkeypatch):
     as_role(caller, REVIEWER_ID, "reviewer")
-    body = {"outcome": "pass", "expected_revision": 1}
+    body = {"outcome": "pass"}
     url = f"/api/v1/reviews/{ROUND_ID}/layers/model"
 
     monkeypatch.setattr(reviews_api, "set_layer", lambda *args, **kwargs: (RoundOutcome.NOT_ASSIGNED, None))
-    response = client.patch(url, headers=idem(), json=body)
+    response = client.patch(url, headers={**idem(), "If-Match": '"1"'}, json=body)
     assert response.status_code == 403
     assert response.json()["detail"] == "only an assigned reviewer can record a review"
 
     monkeypatch.setattr(reviews_api, "set_layer", lambda *args, **kwargs: (RoundOutcome.CLOSED, None))
-    assert client.patch(url, headers=idem(), json=body).json()["detail"] == "case is closed"
+    assert client.patch(url, headers={**idem(), "If-Match": '"1"'}, json=body).json()["detail"] == "case is closed"
 
     monkeypatch.setattr(reviews_api, "set_layer", lambda *args, **kwargs: (RoundOutcome.ROUND_CLOSED, None))
-    assert client.patch(url, headers=idem(), json=body).json()["detail"] == "review round is closed"
+    assert client.patch(url, headers={**idem(), "If-Match": '"1"'}, json=body).json()["detail"] == "review round is closed"
 
     monkeypatch.setattr(reviews_api, "set_layer", lambda *args, **kwargs: (RoundOutcome.NOT_FOUND, None))
-    assert client.patch(url, headers=idem(), json=body).json()["detail"] == "review not found"
+    assert client.patch(url, headers={**idem(), "If-Match": '"1"'}, json=body).json()["detail"] == "review not found"
 
     monkeypatch.setattr(reviews_api, "set_layer", lambda *args, **kwargs: (RoundOutcome.UNKNOWN_EVIDENCE, None))
-    assert client.patch(url, headers=idem(), json=body).json()["detail"] == "evidence is not available on this case"
+    assert client.patch(url, headers={**idem(), "If-Match": '"1"'}, json=body).json()["detail"] == "evidence is not available on this case"
 
 
 # --- database --------------------------------------------------------------------------------------------------------
@@ -552,13 +581,13 @@ def test_each_change_increments_the_revision_and_a_stale_write_changes_nothing(d
     review_id = open_round(db_client, people, case_id)["id"]
     url = f"/api/v1/reviews/{review_id}/layers/model"
 
-    first = reviewer.patch(url, json={"outcome": "fail", "reason": "first", "expected_revision": 1}, headers=idem())
+    first = reviewer.patch(url, json={"outcome": "fail", "reason": "first"}, headers={**idem(), "If-Match": '"1"'})
     assert first.status_code == 200, first.text
     assert first.json()["revision"] == 2
 
-    stale = reviewer.patch(url, json={"outcome": "fail", "reason": "stale", "expected_revision": 1}, headers=idem())
-    assert stale.status_code == 409
-    assert stale.json()["detail"] == {"status": "revision_conflict", "current_revision": 2}
+    stale = reviewer.patch(url, json={"outcome": "fail", "reason": "stale"}, headers={**idem(), "If-Match": '"1"'})
+    assert stale.status_code == 412
+    assert stale.json()["detail"] == {"status": "precondition_failed", "current_revision": 2}
 
     current = db_client(people["triager"]).get(f"/api/v1/reviews/{review_id}").json()
     assert current["revision"] == 2
@@ -566,11 +595,11 @@ def test_each_change_increments_the_revision_and_a_stale_write_changes_nothing(d
     assert layer(current, "model")["reason"] == "first"
 
     # A request that changes nothing stores nothing and keeps the revision.
-    unchanged = reviewer.patch(url, json={"outcome": "fail", "reason": "first", "expected_revision": 2}, headers=idem())
+    unchanged = reviewer.patch(url, json={"outcome": "fail", "reason": "first"}, headers={**idem(), "If-Match": '"2"'})
     assert unchanged.status_code == 200
     assert unchanged.json()["revision"] == 2
 
-    second = reviewer.patch(url, json={"outcome": "fail", "reason": "second", "expected_revision": 2}, headers=idem())
+    second = reviewer.patch(url, json={"outcome": "fail", "reason": "second"}, headers={**idem(), "If-Match": '"2"'})
     assert second.status_code == 200
     assert second.json()["revision"] == 3
     assert layer(second.json(), "model")["reason"] == "second"
@@ -585,19 +614,19 @@ def test_reason_rules_on_the_stored_layer(db_client, people):
     url = f"/api/v1/reviews/{review_id}/layers/tools"
 
     for outcome in ("insufficient_evidence", "not_applicable"):
-        assert reviewer.patch(url, json={"outcome": outcome, "expected_revision": 1}, headers=idem()).status_code == 400
+        assert reviewer.patch(url, json={"outcome": outcome}, headers={**idem(), "If-Match": '"1"'}).status_code == 400
     assert reviewer.patch(
-        url, json={"outcome": "not_applicable", "reason": "  ", "expected_revision": 1}, headers=idem()
+        url, json={"outcome": "not_applicable", "reason": "  "}, headers={**idem(), "If-Match": '"1"'}
     ).status_code == 400
 
-    refused = reviewer.patch(url, json={"outcome": "pass", "expected_revision": 1}, headers=idem())
+    refused = reviewer.patch(url, json={"outcome": "pass"}, headers={**idem(), "If-Match": '"1"'})
     assert refused.status_code == 422
     assert refused.json()["detail"] == "a pass needs at least one evidence item of this case"
     assert layer(review_body(db_client, people["reviewer"], review_id), "tools")["outcome"] is None
 
     evidence_id = insert_evidence(case_id, people["investigator"], "available")
     passed = reviewer.patch(
-        url, json={"outcome": "pass", "evidence_ids": [evidence_id], "expected_revision": 1}, headers=idem()
+        url, json={"outcome": "pass", "evidence_ids": [evidence_id]}, headers={**idem(), "If-Match": '"1"'}
     )
     assert passed.status_code == 200
     assert layer(passed.json(), "tools")["outcome"] == "pass"
@@ -618,7 +647,7 @@ def test_a_pass_must_cite_an_available_item_of_its_own_case(db_client, people):
     }
     for label, evidence_id in refused_for.items():
         response = reviewer.patch(
-            url, json={"outcome": "pass", "evidence_ids": [evidence_id], "expected_revision": 1}, headers=idem()
+            url, json={"outcome": "pass", "evidence_ids": [evidence_id]}, headers={**idem(), "If-Match": '"1"'}
         )
         assert response.status_code == 422, label
         assert response.json()["detail"] == "evidence is not available on this case", label
@@ -661,8 +690,8 @@ def test_evidence_reference_must_be_an_available_item_of_the_case(db_client, peo
     assign_reviewer(db_client, people, case_id)
     reviewer = db_client(people["reviewer"])
     review_id = open_round(db_client, people, case_id)["id"]
-    body = {"outcome": "fail", "reason": REASON, "evidence_ids": [str(uuid.uuid4())], "expected_revision": 1}
-    response = reviewer.patch(f"/api/v1/reviews/{review_id}/layers/model", json=body, headers=idem())
+    body = {"outcome": "fail", "reason": REASON, "evidence_ids": [str(uuid.uuid4())]}
+    response = reviewer.patch(f"/api/v1/reviews/{review_id}/layers/model", json=body, headers={**idem(), "If-Match": '"1"'})
     assert response.status_code == 422
     assert response.json()["detail"] == "evidence is not available on this case"
 
@@ -677,7 +706,7 @@ def test_reads_follow_the_case_visibility_and_the_reason_rule(db_client, people)
     review_id = open_round(db_client, people, case_id)["id"]
     db_client(people["reviewer"]).patch(
         f"/api/v1/reviews/{review_id}/layers/model",
-        json={"outcome": "insufficient_evidence", "reason": "sensitive reason", "expected_revision": 1}, headers=idem(),
+        json={"outcome": "insufficient_evidence", "reason": "sensitive reason"}, headers={**idem(), "If-Match": '"1"'},
     )
 
     expected_reasons = {
@@ -725,8 +754,8 @@ def test_an_unassigned_reviewer_cannot_open_a_round_or_set_a_layer(db_client, pe
     investigator = db_client(people["investigator"])
     assert investigator.patch(
         f"/api/v1/reviews/{review_id}/layers/model",
-        json={"outcome": "fail", "reason": "Reviewed for this test", "expected_revision": 1},
-        headers=idem(),
+        json={"outcome": "fail", "reason": "Reviewed for this test"},
+        headers={**idem(), "If-Match": '"1"'},
     ).status_code == 403
 
 

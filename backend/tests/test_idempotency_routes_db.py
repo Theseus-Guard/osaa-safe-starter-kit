@@ -66,7 +66,8 @@ class Actor:
         return self.client.request(method, url, **kwargs)
 
     def ok(self, method: str, url: str, expect: int, **kwargs) -> dict:
-        response = self.send(method, url, headers={"Idempotency-Key": new_key()}, **kwargs)
+        extra = kwargs.pop("headers", {})
+        response = self.send(method, url, headers={"Idempotency-Key": new_key(), **extra}, **kwargs)
         assert response.status_code == expect, response.text
         return response.json() if response.content else {}
 
@@ -125,7 +126,8 @@ def closable_case(world: World) -> dict:
         "PATCH",
         f"/api/v1/reviews/{round_['id']}/layers/model",
         200,
-        json={"outcome": "fail", "reason": "Gap found", "expected_revision": round_["revision"]},
+        json={"outcome": "fail", "reason": "Gap found"},
+        headers={"If-Match": f'"{round_["revision"]}"'},
     )
     settle_deadlines(world, case)
     return case
@@ -145,9 +147,13 @@ class Scenario:
     other_url: str | None = None
     files: dict | None = None
     other_files: dict | None = None
+    # Sent as If-Match (the revision a review layer change was made against).
+    if_match: str | None = None
 
     def _request(self, key: str | None, url: str, body, files):
         headers = {} if key is None else {"Idempotency-Key": key}
+        if self.if_match is not None:
+            headers["If-Match"] = self.if_match
         if files is not None:
             return self.actor.send(self.method, url, headers=headers, files=files)
         return self.actor.send(self.method, url, headers=headers, json=body)
@@ -316,8 +322,9 @@ def scenario_review_layer(world: World) -> Scenario:
     round_ = world.reviewer.ok("POST", "/api/v1/reviews", 201, json={"case_id": case["id"]})
     return Scenario(
         world.reviewer, "PATCH", f"/api/v1/reviews/{round_['id']}/layers/model", 200,
-        body={"outcome": "fail", "reason": "Gap", "expected_revision": round_["revision"]},
-        other_body={"outcome": "fail", "reason": "Other gap", "expected_revision": round_["revision"]},
+        body={"outcome": "fail", "reason": "Gap"},
+        other_body={"outcome": "fail", "reason": "Other gap"},
+        if_match=f'"{round_["revision"]}"',
     )
 
 

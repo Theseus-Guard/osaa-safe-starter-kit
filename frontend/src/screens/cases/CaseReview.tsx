@@ -266,16 +266,20 @@ function LayerForm({
     }
     setBusy(true);
     try {
-      await setReviewLayer(active.round.id, active.layer.layer, {
-        outcome,
-        reason: trimmed.length > 0 ? trimmed : null,
-        evidence_ids: evidenceIds,
-        expected_revision: active.round.revision,
-      });
+      await setReviewLayer(
+        active.round.id,
+        active.layer.layer,
+        {
+          outcome,
+          reason: trimmed.length > 0 ? trimmed : null,
+          evidence_ids: evidenceIds,
+        },
+        active.round.revision,
+      );
       toast.success("Review layer saved.");
       onSaved();
     } catch (caught) {
-      if (caught instanceof ApiError && caught.code === "revision_conflict") {
+      if (caught instanceof ApiError && caught.code === "precondition_failed") {
         onConflict(caught.currentRevision);
         return;
       }

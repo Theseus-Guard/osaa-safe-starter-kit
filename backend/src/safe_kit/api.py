@@ -108,6 +108,7 @@ from safe_kit.rbac import (
 )
 from safe_kit.idempotency import KeyReused, Replayed, checked_key, key_scope
 from safe_kit.reporter_channel import ContactOutcome, hide_reporter, read_reporter_contact, submit_report
+from safe_kit.revisions import etag_for, if_match_revision
 from safe_kit.security import (
     MIN_PASSWORD_LENGTH,
     access_token_ttl,
@@ -1122,18 +1123,6 @@ CASE_NOT_FOUND = HTTPException(status_code=404, detail="case not found")
 CASE_CLOSED = HTTPException(status_code=409, detail="case is closed")
 
 
-def _etag(revision: int) -> str:
-    return f'"{revision}"'
-
-
-def _if_match_revision(value: str | None) -> int:
-    """The revision a change was made against. Missing is refused with 428; a value that is not a quoted whole number with 400."""
-    if value is None:
-        raise HTTPException(status_code=428, detail={"status": "precondition_required"})
-    match = re.fullmatch(r'"([0-9]+)"', value.strip())
-    if match is None:
-        raise HTTPException(status_code=400, detail={"status": "invalid_if_match"})
-    return int(match.group(1))
 TEXT_LIMIT = 1000
 
 
@@ -1464,7 +1453,7 @@ def get_case(
     # A case the caller may not see gets the same 404 as a missing one, so existence is not revealed.
     scope = _scope(actor)
     case = _visible_case_or_404(case_id, scope)
-    response.headers["ETag"] = _etag(case.revision)
+    response.headers["ETag"] = etag_for(case.revision)
     return _case_response(case, scope)
 
 
@@ -1490,7 +1479,7 @@ def update_case(
     # The ETag the caller read (see GET). Required: a change without it is refused with 428.
     if_match: str | None = Header(default=None, alias="If-Match"),
 ) -> CaseResponse:
-    expected_revision = _if_match_revision(if_match)
+    expected_revision = if_match_revision(if_match)
     scope = _scope(actor)
     scope_key = key_scope(
         actor.id,
@@ -1516,10 +1505,10 @@ def update_case(
         raise HTTPException(
             status_code=412,
             detail={"status": "precondition_failed"},
-            headers={"ETag": _etag(revision)},
+            headers={"ETag": etag_for(revision)},
         )
     case = _visible_case_or_404(case_id, scope)
-    response.headers["ETag"] = _etag(case.revision)
+    response.headers["ETag"] = etag_for(case.revision)
     return _case_response(case, scope)
 
 

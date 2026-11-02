@@ -287,8 +287,8 @@ def test_triager_cannot_open_a_review_round_or_set_a_layer(client, caller):
     as_role(caller, TRIAGER_ID, "triager")
     assert client.post("/api/v1/reviews", headers=idem(), json={"case_id": CASE_ID}).status_code == 403
     round_id = str(uuid.uuid4())
-    body = {"outcome": "pass", "expected_revision": 1}
-    assert client.patch(f"/api/v1/reviews/{round_id}/layers/model", json=body, headers=idem()).status_code == 403
+    body = {"outcome": "pass"}
+    assert client.patch(f"/api/v1/reviews/{round_id}/layers/model", json=body, headers={**idem(), "If-Match": '"1"'}).status_code == 403
 
 
 @pytest.mark.parametrize(
@@ -348,33 +348,33 @@ def test_unassign_success_is_204(client, caller, monkeypatch):
 def test_layer_outcome_must_be_a_known_value(client, caller):
     as_role(caller, REVIEWER_ID, "reviewer")
     round_id = str(uuid.uuid4())
-    body = {"outcome": "maybe", "expected_revision": 1}
-    assert client.patch(f"/api/v1/reviews/{round_id}/layers/model", json=body, headers=idem()).status_code == 400
+    body = {"outcome": "maybe"}
+    assert client.patch(f"/api/v1/reviews/{round_id}/layers/model", json=body, headers={**idem(), "If-Match": '"1"'}).status_code == 400
 
 
 def test_layer_reason_is_limited_to_1000_characters(client, caller):
     as_role(caller, REVIEWER_ID, "reviewer")
     round_id = str(uuid.uuid4())
-    body = {"outcome": "pass", "reason": "x" * 1001, "expected_revision": 1}
-    assert client.patch(f"/api/v1/reviews/{round_id}/layers/model", json=body, headers=idem()).status_code == 400
+    body = {"outcome": "pass", "reason": "x" * 1001}
+    assert client.patch(f"/api/v1/reviews/{round_id}/layers/model", json=body, headers={**idem(), "If-Match": '"1"'}).status_code == 400
 
 
 def test_layer_refusals_map_to_their_status_codes(client, caller, monkeypatch):
     as_role(caller, REVIEWER_ID, "reviewer")
     round_id = str(uuid.uuid4())
-    body = {"outcome": "pass", "expected_revision": 1}
+    body = {"outcome": "pass"}
     url = f"/api/v1/reviews/{round_id}/layers/model"
 
     monkeypatch.setattr(reviews_api, "set_layer", lambda *args, **kwargs: (RoundOutcome.NOT_ASSIGNED, None))
-    response = client.patch(url, headers=idem(), json=body)
+    response = client.patch(url, headers={**idem(), "If-Match": '"1"'}, json=body)
     assert response.status_code == 403
     assert response.json()["detail"] == "only an assigned reviewer can record a review"
 
     monkeypatch.setattr(reviews_api, "set_layer", lambda *args, **kwargs: (RoundOutcome.CLOSED, None))
-    assert client.patch(url, headers=idem(), json=body).json()["detail"] == "case is closed"
+    assert client.patch(url, headers={**idem(), "If-Match": '"1"'}, json=body).json()["detail"] == "case is closed"
 
     monkeypatch.setattr(reviews_api, "set_layer", lambda *args, **kwargs: (RoundOutcome.NOT_FOUND, None))
-    assert client.patch(url, headers=idem(), json=body).json()["detail"] == "review not found"
+    assert client.patch(url, headers={**idem(), "If-Match": '"1"'}, json=body).json()["detail"] == "review not found"
 
 
 def test_layer_blank_reason_is_stored_as_no_reason(client, caller, monkeypatch):
@@ -388,7 +388,7 @@ def test_layer_blank_reason_is_stored_as_no_reason(client, caller, monkeypatch):
     monkeypatch.setattr(reviews_api, "set_layer", fake_set_layer)
     client.patch(
         f"/api/v1/reviews/{uuid.uuid4()}/layers/model",
-        json={"outcome": "pass", "reason": "   ", "expected_revision": 1}, headers=idem(),
+        json={"outcome": "pass", "reason": "   "}, headers={**idem(), "If-Match": '"1"'},
     )
     assert seen["reason"] is None  # a pass needs no reason, and a blank one is stored as none
 
@@ -724,10 +724,10 @@ def open_and_set_review(client, case_id: str, outcome: str = "pass", reason: str
     opened = client.post("/api/v1/reviews", headers=idem(), json={"case_id": case_id})
     assert opened.status_code == 201, opened.text
     review = opened.json()
-    body = {"outcome": outcome, "expected_revision": review["revision"]}
+    body = {"outcome": outcome}
     if reason is not None:
         body["reason"] = reason
-    return client.patch(f"/api/v1/reviews/{review['id']}/layers/model", json=body, headers=idem())
+    return client.patch(f"/api/v1/reviews/{review['id']}/layers/model", json=body, headers={**idem(), "If-Match": f'"{review["revision"]}"'})
 
 
 @requires_database

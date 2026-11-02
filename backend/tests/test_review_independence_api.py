@@ -524,7 +524,7 @@ def test_a_declared_conflict_or_a_withdrawal_blocks_setting_a_layer(client, call
     as_role(caller, REVIEWER_ID, "reviewer")
     monkeypatch.setattr(reviews_api, "set_layer", lambda *args, **kwargs: (outcome, None))
     response = client.patch(
-        f"/api/v1/reviews/{ROUND_ID}/layers/model", json={"outcome": "pass", "expected_revision": 1}, headers=idem()
+        f"/api/v1/reviews/{ROUND_ID}/layers/model", json={"outcome": "pass"}, headers={**idem(), "If-Match": '"1"'}
     )
     assert response.status_code == 403
     assert response.json()["detail"] == detail

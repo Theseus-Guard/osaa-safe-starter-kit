@@ -15,14 +15,15 @@ import uuid
 from datetime import datetime
 from typing import Literal, get_args
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from safe_kit.auth import permissions_of, require_any_permission, require_permission
 from safe_kit.case_records_api import CASE_READ_PERMISSIONS_FOR_RECORDS
 from safe_kit.cases import CaseScope
-from safe_kit.idempotency import KeyScope, checked_key, fingerprint, key_scope, valid_key
+from safe_kit.idempotency import KeyScope, Replayed, checked_key, fingerprint, key_scope, valid_key
+from safe_kit.revisions import etag_for, if_match_revision
 from safe_kit.reviews import (
     MAX_EVIDENCE_REFERENCES,
     REASON_LIMIT,
@@ -76,13 +77,15 @@ class OpenRoundRequest(BaseModel):
 
 
 class LayerUpdateRequest(BaseModel):
+    # extra="forbid": a client that still sends expected_revision gets a 422, not a silently ignored field. The revision
+    # travels in If-Match (D-16).
+    model_config = ConfigDict(extra="forbid")
+
     outcome: Literal["pass", "fail", "insufficient_evidence", "not_applicable"]
     reason: str | None = None
     evidence_ids: list[uuid.UUID] = Field(
         default_factory=list, max_length=MAX_EVIDENCE_REFERENCES
     )
-    # The revision the caller read. A different current revision is refused with 409 and nothing is stored.
-    expected_revision: int = Field(ge=1)
 
     @field_validator("reason")
     @classmethod
@@ -216,12 +219,15 @@ def list_review_rounds(
 @reviews_router.get("/api/v1/reviews/{review_id}", response_model=ReviewRoundResponse)
 def get_review_round(
     review_id: uuid.UUID,
+    response: Response,
     actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS_FOR_RECORDS)),
 ) -> ReviewRoundResponse:
     scope = _scope(actor)
     review = get_round(str(review_id), scope)
     if review is None:
         raise ROUND_NOT_FOUND
+    # The round revision is the ETag. A layer change sends it back in If-Match.
+    response.headers["ETag"] = etag_for(review.revision)
     return _round_response(review, scope)
 
 
@@ -232,9 +238,13 @@ def set_review_layer(
     review_id: uuid.UUID,
     layer: LayerName,
     body: LayerUpdateRequest,
+    response: Response,
     actor: User = Depends(require_permission("reviews:write")),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    # The ETag of the round the caller read (the round revision). Required: a change without it is refused with 428.
+    if_match: str | None = Header(default=None, alias="If-Match"),
 ) -> ReviewRoundResponse:
+    expected_revision = if_match_revision(if_match)
     scope = _scope(actor)
     # Checked after the permission check, like the other side-effect routes.
     scope_key = key_scope(
@@ -245,17 +255,26 @@ def set_review_layer(
         f"/api/v1/reviews/{review_id}/layers/{layer}",
         body.model_dump(mode="json"),
     )
-    outcome, review = set_layer(
-        str(review_id),
-        layer,
-        body.outcome,
-        body.reason,
-        [str(evidence_id) for evidence_id in body.evidence_ids],
-        body.expected_revision,
-        scope,
-        idempotency=scope_key,
-        render=lambda changed: _round_response(changed, scope, own_layer=layer).model_dump(mode="json"),
-    )
+    try:
+        outcome, review = set_layer(
+            str(review_id),
+            layer,
+            body.outcome,
+            body.reason,
+            [str(evidence_id) for evidence_id in body.evidence_ids],
+            expected_revision,
+            scope,
+            idempotency=scope_key,
+            render=lambda changed: _round_response(changed, scope, own_layer=layer).model_dump(mode="json"),
+        )
+    except Replayed as replayed:
+        # The same request again: the first answer, with its status and body, and the ETag it carried.
+        stored = replayed.stored
+        return JSONResponse(
+            status_code=stored.status_code,
+            content=stored.body,
+            headers={"ETag": etag_for(stored.body["revision"])},
+        )
     if outcome is RoundOutcome.NOT_FOUND:
         raise ROUND_NOT_FOUND
     if outcome is RoundOutcome.CLOSED:
@@ -270,10 +289,11 @@ def set_review_layer(
         raise WITHDRAWN
     if outcome is RoundOutcome.REVISION_CONFLICT:
         assert review is not None
-        # Only the current revision. The caller learns nothing else from a refused write.
+        # Only the current revision, in the body and as the ETag. The caller learns nothing else from a refused write.
         raise HTTPException(
-            status_code=409,
-            detail={"status": "revision_conflict", "current_revision": review.revision},
+            status_code=412,
+            detail={"status": "precondition_failed", "current_revision": review.revision},
+            headers={"ETag": etag_for(review.revision)},
         )
     if outcome is RoundOutcome.REASON_REQUIRED:
         raise HTTPException(
@@ -288,4 +308,5 @@ def set_review_layer(
             status_code=422, detail="evidence is not available on this case"
         )
     assert review is not None
+    response.headers["ETag"] = etag_for(review.revision)
     return _round_response(review, scope, own_layer=layer)
