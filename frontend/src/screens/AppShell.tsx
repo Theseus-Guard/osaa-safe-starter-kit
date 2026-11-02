@@ -64,11 +64,12 @@ export function AppShell({ profile, page, onLogout, children, heading }: Props) 
           <span className="font-semibold tracking-tight">SAFE-Starter-Kit</span>
         </div>
         {canSearchCases && (
-          <div className="order-last w-full md:order-none md:w-auto md:max-w-[38rem] md:flex-1">
+          <div className="order-last w-full min-w-0 md:order-none md:w-auto md:max-w-[38rem] md:flex-1">
             <CaseSearch />
           </div>
         )}
-        <div className="flex min-w-0 items-center justify-end gap-3 md:flex-1">
+        {/* The right side keeps its full width, so the clock and the user menu never run under the search box. */}
+        <div className="flex shrink-0 items-center justify-end gap-3 md:flex-1">
           {/* The clock is hidden on phones, where the header has no room for it next to the user menu. */}
           <div className="hidden sm:block">
             <SystemClock />
