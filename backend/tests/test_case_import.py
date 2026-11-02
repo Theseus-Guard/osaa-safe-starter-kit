@@ -7,6 +7,7 @@ Three layers, as in test_case_access.py:
   settings. They create rows and never remove them, so use a throwaway database.
 """
 
+import copy
 import json
 import os
 import uuid
@@ -24,12 +25,15 @@ from safe_kit.case_import import (
     MAX_IMPORT_BYTES,
     MAX_IMPORT_RECORDS,
     MAX_MESSAGE_LENGTH,
+    DryRunResult,
     RecordRejected,
     RecordResult,
     fingerprint,
     import_records,
     parse_import_file,
+    preview_records,
     prepare_record,
+    received_format_version,
     validate_record,
 )
 from safe_kit.cases import CaseScope
@@ -432,3 +436,163 @@ def test_endpoint_imports_through_the_real_service(client, caller):
     assert body["imported"] == 1
     assert body["results"][0]["reference"].startswith("SAFE-")
     assert len(registry_rows(record["case_id"])) == 1
+
+
+# --- dry run (HTTP, service replaced) -----------------------------------------------------------------------------
+
+DRY_RUN = "/api/v1/cases/import/dry-run"
+COMMIT = "/api/v1/cases/import"
+
+
+@pytest.fixture
+def dry_service(monkeypatch):
+    state = {"calls": [], "results": None, "error": None}
+
+    def fake_preview(records, scope):
+        state["calls"].append((len(records), scope.user_id))
+        if state["error"] is not None:
+            raise state["error"]
+        if state["results"] is not None:
+            return state["results"]
+        return [DryRunResult(index=i, status="would_import", title="t", awareness_time=NOW) for i in range(len(records))]
+
+    monkeypatch.setattr(api, "preview_records", fake_preview)
+    return state
+
+
+def test_dry_run_endpoint_reports_each_record_and_writes_nothing(client, dry_service):
+    dry_service["results"] = [
+        DryRunResult(index=0, status="would_import", title="System: out_of_scope", awareness_time=NOW),
+        DryRunResult(index=1, status="duplicate", source_case_id="a", case_id="c1", reference="SAFE-2026-000001"),
+        DryRunResult(index=2, status="conflict", source_case_id="b"),
+        DryRunResult(index=3, status="rejected", errors=("/record_schema_version: '0.2.0' was expected",)),
+    ]
+    # No Idempotency-Key: a dry run writes nothing, so it needs none.
+    response = client.post(DRY_RUN, content=envelope([example_record()] * 4), headers={"content-type": "application/json"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["written"] is False
+    assert (body["would_import"], body["duplicate"], body["conflict"], body["rejected"]) == (1, 1, 1, 1)
+    assert body["file_errors"] == []
+    assert body["import_format_version"] == {"supported": 1, "received": 1, "accepted": True}
+    assert body["record_schema_version"] == "0.1.0"
+    assert body["results"][0]["awareness_time"] == NOW.isoformat()
+    assert body["results"][1]["reference"] == "SAFE-2026-000001"
+    assert body["results"][3]["errors"] == ["/record_schema_version: '0.2.0' was expected"]
+    assert dry_service["calls"] == [(4, REPORTER_ID)]
+
+
+@pytest.mark.parametrize(
+    ("document", "received"),
+    [({"import_format_version": 9, "records": []}, 9), ({"import_format_version": "1", "records": []}, "1")],
+)
+def test_dry_run_endpoint_reports_a_wrong_format_version_and_checks_no_record(client, dry_service, document, received):
+    document["records"] = [example_record()]
+    response = client.post(DRY_RUN, json=document)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["file_errors"] == ["unsupported import_format_version; this version reads 1"]
+    assert body["import_format_version"] == {"supported": 1, "received": received, "accepted": False}
+    assert (body["would_import"], body["duplicate"], body["conflict"], body["rejected"]) == (0, 0, 0, 0)
+    assert body["results"] == []
+    assert dry_service["calls"] == []  # the records are not read when the file is refused
+
+
+def test_dry_run_endpoint_reports_a_file_that_is_not_json(client, dry_service):
+    response = client.post(DRY_RUN, content=b"{not json", headers={"content-type": "application/json"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["file_errors"] == ["the request body is not valid JSON"]
+    assert body["import_format_version"] == {"supported": 1, "received": None, "accepted": False}
+    assert dry_service["calls"] == []
+
+
+def test_received_format_version_shows_only_a_short_value():
+    assert received_format_version(b'{"import_format_version": 1}') == 1
+    assert received_format_version(b'{"import_format_version": [1, 2]}') is None
+    assert received_format_version(b"[]") is None
+    assert received_format_version(b'{"import_format_version": "' + b"x" * 5000 + b'"}') == "x" * (MAX_MESSAGE_LENGTH - 3) + "..."
+
+
+def test_dry_run_endpoint_refuses_a_body_over_the_size_limit(client, dry_service):
+    body = b" " * (MAX_IMPORT_BYTES + 1)
+    response = client.post(DRY_RUN, content=body, headers={**idem(), "content-type": "application/json"})
+    assert response.status_code == 413
+    assert dry_service["calls"] == []
+
+
+def test_dry_run_endpoint_needs_the_case_submit_permission(client, caller, dry_service):
+    caller["user"] = make_user(ADMIN_ID, "admin")
+    response = client.post(DRY_RUN, json={"import_format_version": 1, "records": []})
+    assert response.status_code == 403
+    assert dry_service["calls"] == []
+
+
+def test_dry_run_endpoint_refuses_without_a_system_timezone(client, dry_service):
+    dry_service["error"] = TimezoneNotConfigured()
+    response = client.post(DRY_RUN, json={"import_format_version": 1, "records": []})
+    assert response.status_code == 409
+    assert response.json() == {"detail": "system timezone is not configured"}
+
+
+# --- dry run (database) -------------------------------------------------------------------------------------------
+
+
+def table_counts() -> dict[str, int]:
+    """The row count of every table, including the ones that hold no case data (audit, idempotency keys)."""
+    with connect() as conn:
+        tables = [
+            row[0]
+            for row in conn.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"
+            ).fetchall()
+        ]
+        return {table: conn.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0] for table in tables}
+
+
+@requires_database
+def test_dry_run_writes_nothing_and_reports_duplicates_conflicts_and_rejections():
+    actor = new_reporter()
+    stored = example_record()
+    [first] = import_records([stored], scope_for(actor))
+    assert first.status == "imported"
+    conflicting = example_record()
+    conflicting["case_id"] = stored["case_id"]
+    conflicting["timeline"]["awareness_time"]["value"] = "2026-10-29T09:00:00Z"
+    rejected = example_record()
+    del rejected["record_schema_version"]
+    fresh = example_record()
+    before = table_counts()
+
+    report = preview_records([fresh, copy.deepcopy(stored), conflicting, rejected, fresh], scope_for(actor))
+
+    assert table_counts() == before  # no row in any table, audit rows included
+    assert [result.status for result in report] == ["would_import", "duplicate", "conflict", "rejected", "duplicate"]
+    assert report[0].title and report[0].awareness_time is not None
+    assert report[1].case_id == first.case_id and report[1].reference == first.reference
+    assert report[3].errors and "record_schema_version" in report[3].errors[0]
+    assert registry_rows(fresh["case_id"]) == []
+
+
+@requires_database
+def test_dry_run_endpoint_writes_nothing_and_the_commit_route_still_stores(client, caller):
+    actor = new_reporter()
+    caller["user"] = make_user(actor, "reporter")
+    record = example_record()
+    before = table_counts()
+
+    dry = client.post(DRY_RUN, content=envelope([record]), headers={"content-type": "application/json"})
+
+    assert dry.status_code == 200
+    assert dry.json()["would_import"] == 1
+    assert table_counts() == before
+
+    commit = client.post(COMMIT, json={"import_format_version": 1, "records": [record]}, headers=idem())
+
+    assert commit.status_code == 200
+    assert commit.json()["imported"] == 1
+    assert len(registry_rows(record["case_id"])) == 1
+    assert table_counts()["cases"] == before["cases"] + 1

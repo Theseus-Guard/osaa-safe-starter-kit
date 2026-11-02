@@ -14,6 +14,9 @@ Each record is handled on its own, in its own transaction, so a record is either
 
 Only some fields map onto the case row (see prepare_record). The whole record is kept in case_import_records.payload,
 so no field is dropped silently. Evidence items and the other sections wait for the domain tables planned for F1/F2.
+
+preview_records is the dry run: it applies the same validation and the same duplicate and conflict rules as
+import_records, reads only, and writes nothing (no case, registry row, audit row or idempotency record).
 """
 
 import hashlib
@@ -191,6 +194,92 @@ def import_records(
             assert render is not None
             remember(conn, idempotency, 200, render(results))
     return results
+
+
+@dataclass(frozen=True)
+class DryRunResult:
+    index: int
+    # would_import: the record would be stored. duplicate and conflict: the source case ID is already stored, or an
+    # earlier record of the same file holds it. rejected: the record fails the schema or a mapping rule.
+    status: str
+    source_case_id: str | None = None
+    case_id: str | None = None
+    reference: str | None = None
+    title: str | None = None
+    awareness_time: datetime | None = None
+    errors: tuple[str, ...] = ()
+
+
+def received_format_version(raw: bytes) -> int | str | None:
+    """The import_format_version that the file declares, for the dry-run report.
+
+    An integer or a string is returned (a string clipped to the message limit). Anything else, and a file that is not a
+    JSON object with that field, gives None, so a bad file cannot make the report carry a large value.
+    """
+    try:
+        document = json.loads(raw, parse_constant=_reject_constant)
+    except ValueError:
+        return None
+    if not isinstance(document, dict):
+        return None
+    value = document.get("import_format_version")
+    if type(value) is int:
+        return value
+    if isinstance(value, str):
+        return _clip(value)
+    return None
+
+
+def preview_records(records: list[Any], scope: CaseScope) -> list[DryRunResult]:
+    """Report what import_records would do with these records, without storing anything.
+
+    Records that would be stored count for the duplicate and conflict rules of the records after them, as they would
+    in a real import, so a file that holds one source case twice is reported the same way the commit would store it.
+    """
+    with connect() as conn:
+        if system_timezone.read_current(conn) is None:
+            raise TimezoneNotConfigured()
+        now = datetime.now(UTC)
+        would_store: dict[str, str] = {}
+        return [
+            _preview_one(conn, index, record, scope, now, would_store) for index, record in enumerate(records)
+        ]
+
+
+def _preview_one(
+    conn, index: int, record: Any, scope: CaseScope, now: datetime, would_store: dict[str, str]
+) -> DryRunResult:
+    try:
+        prepared = prepare_record(record, now)
+    except RecordRejected as rejected:
+        return DryRunResult(index=index, status="rejected", errors=tuple(rejected.errors))
+    source = prepared.source_case_id
+    if source in would_store:
+        status = "duplicate" if would_store[source] == prepared.fingerprint else "conflict"
+        return DryRunResult(index=index, status=status, source_case_id=source)
+    existing = conn.execute(
+        """
+        SELECT r.case_id::text, c.reference, r.content_sha256 FROM case_import_records r
+        JOIN cases c ON c.id = r.case_id
+        WHERE r.source_case_id = %s AND NOT r.is_deleted
+        """,
+        (source,),
+    ).fetchone()
+    if existing is not None:
+        status = "duplicate" if existing[2] == prepared.fingerprint else "conflict"
+        if not cases.is_visible_on(conn, existing[0], scope):
+            return DryRunResult(index=index, status=status, source_case_id=source)
+        return DryRunResult(
+            index=index, status=status, source_case_id=source, case_id=existing[0], reference=existing[1]
+        )
+    would_store[source] = prepared.fingerprint
+    return DryRunResult(
+        index=index,
+        status="would_import",
+        source_case_id=source,
+        title=prepared.title,
+        awareness_time=prepared.awareness_time,
+    )
 
 
 def _import_one(index: int, record: Any, scope: CaseScope, now: datetime) -> RecordResult:

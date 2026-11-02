@@ -4,12 +4,15 @@ The service functions are replaced, so the HTTP mapping, the access rules, the v
 are checked here. The versioning and the database rules are checked in tests/test_catalog_db.py.
 """
 
+import copy
 import json
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from jsonschema import Draft202012Validator
 
 from safe_kit import api, auth, catalog, catalog_api
 from safe_kit.catalog import (
@@ -49,7 +52,13 @@ DOMAIN_FUNCTIONS = (
     "change_entry",
     "get_entry",
     "list_entries",
+    "public_export",
 )
+
+ROOT = Path(__file__).resolve().parents[2]
+EXPORT_SCHEMA = ROOT / "schemas" / "catalog-export.v0.json"
+EXPORT_EXAMPLE = ROOT / "schemas" / "examples" / "catalog-export-valid.json"
+EXPORT_PATH = "/api/v1/catalog/export"
 
 
 def make_user(user_id: str, role: str) -> User:
@@ -162,6 +171,7 @@ def test_anonymous_requests_are_refused_and_never_reach_the_catalog(
     client = TestClient(api.app)
     assert client.get("/api/v1/catalog/entries").status_code == 401
     assert client.get(f"/api/v1/catalog/entries/{ENTRY_ID}").status_code == 401
+    assert client.get(EXPORT_PATH).status_code == 401
     assert (
         client.post(
             "/api/v1/catalog/recommendations",
@@ -184,6 +194,7 @@ def test_a_role_without_catalog_permission_is_refused(caller, client, no_domain)
     caller["user"] = make_user(USER_ID, "reporter")
     assert client.get("/api/v1/catalog/entries").status_code == 403
     assert client.get(f"/api/v1/catalog/entries/{ENTRY_ID}").status_code == 403
+    assert client.get(EXPORT_PATH).status_code == 403
     assert (
         client.post(
             "/api/v1/catalog/recommendations",
@@ -807,3 +818,80 @@ def test_the_public_export_never_reads_restricted_references_and_omits_internal_
         "run_id",
     ):
         assert internal not in text
+
+
+# --- export endpoint and schema (T11-A, R14) ----------------------------------------------------------------------
+
+
+def export_errors(document) -> list[str]:
+    """Every schema error of an export document, as 'location: message'. An empty list means it is valid."""
+    validator = Draft202012Validator(json.loads(EXPORT_SCHEMA.read_text(encoding="utf-8")))
+    return [
+        f"/{'/'.join(str(part) for part in error.absolute_path)}: {error.message}"
+        for error in validator.iter_errors(document)
+    ]
+
+
+def export_rows() -> list[tuple]:
+    """The two public version rows of one superseded entry, in the column order of the public export query."""
+    run_id = RUN_ID
+    first = (
+        ENTRY_ID, 1, "create", "active", "Deny unscoped tool calls", "Refuse calls outside scope.",
+        None, None, USER_ID, NOW, run_id, "gateway scope", "replay", "pass", NOW,
+    )
+    second = (
+        ENTRY_ID, 2, "supersession", "superseded", "Deny unscoped tool calls", "Refuse calls outside scope.",
+        "replaced", REPLACEMENT_ID, USER_ID, NOW, None, None, None, None, None,
+    )
+    return [first, second]
+
+
+def test_the_export_schema_is_a_valid_draft_2020_12_schema_and_its_example_validates():
+    Draft202012Validator.check_schema(json.loads(EXPORT_SCHEMA.read_text(encoding="utf-8")))
+    example = json.loads(EXPORT_EXAMPLE.read_text(encoding="utf-8"))
+    assert export_errors(example) == []
+    assert example["catalog_export_schema_version"] == "0.1.0"
+
+
+def test_the_export_schema_refuses_a_hidden_link_or_digest_field():
+    """The schema allows no field beyond the public ones. A reference or digest added to a version fails it."""
+    example = json.loads(EXPORT_EXAMPLE.read_text(encoding="utf-8"))
+    with_digest = copy.deepcopy(example)
+    with_digest["catalog_export"]["entries"][0]["versions"][0]["digest"] = digest_of(HIDDEN_LINK)
+    with_reference = copy.deepcopy(example)
+    with_reference["catalog_export"]["entries"][0]["versions"][0]["restricted"] = {
+        "reference": HIDDEN_LINK,
+        "digest": digest_of(HIDDEN_LINK),
+    }
+    assert export_errors(with_digest) != []
+    assert export_errors(with_reference) != []
+
+
+def test_the_export_endpoint_returns_a_schema_valid_document_identical_across_two_calls(
+    client, monkeypatch, caller
+):
+    connection = _RecordingConnection([ENTRY_ID], export_rows())
+    monkeypatch.setattr(catalog, "connect", lambda: _Connect(connection))
+
+    first = client.get(EXPORT_PATH)
+    second = client.get(EXPORT_PATH)
+
+    assert first.status_code == 200
+    assert first.content == second.content
+    document = first.json()
+    assert export_errors(document) == []
+    assert document["catalog_export_schema_version"] == "0.1.0"
+    assert HIDDEN_LINK not in first.text
+    assert digest_of(HIDDEN_LINK) not in first.text
+    assert "created_by" not in first.text
+    assert "run_id" not in first.text
+
+
+def test_the_export_is_the_same_for_every_caller_with_catalog_read(
+    client, monkeypatch, caller
+):
+    connection = _RecordingConnection([ENTRY_ID], export_rows())
+    monkeypatch.setattr(catalog, "connect", lambda: _Connect(connection))
+    reviewer_export = client.get(EXPORT_PATH).content
+    caller["user"] = make_user(USER_ID, "auditor")
+    assert client.get(EXPORT_PATH).content == reviewer_export

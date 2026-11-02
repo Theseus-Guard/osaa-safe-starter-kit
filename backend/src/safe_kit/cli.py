@@ -457,7 +457,50 @@ def _print_import_summary(summary: dict) -> None:
             print(f"    {error}")
 
 
+def _print_dry_run_summary(summary: dict) -> None:
+    print(
+        f"Dry run finished: {summary['would_import']} would be imported, {summary['duplicate']} duplicate, "
+        f"{summary['conflict']} conflict, {summary['rejected']} rejected. Nothing was written."
+    )
+    for error in summary["file_errors"]:
+        print(f"  file: {error}")
+    for result in summary["results"]:
+        position = f"records[{result['index']}]"
+        status = result["status"]
+        if status == "would_import":
+            print(f"  {position}: would be imported as \"{result['title']}\"")
+        elif status == "duplicate":
+            print(f"  {position}: duplicate of {result['reference'] or 'a stored case'}, nothing written")
+        elif status == "conflict":
+            print(f"  {position}: same case ID as {result['reference'] or 'a stored case'} with different content")
+        else:
+            print(f"  {position}: rejected, nothing written")
+        for error in result["errors"]:
+            print(f"    {error}")
+
+
+def _case_import_dry_run(base_url: str, payload: dict, args: argparse.Namespace) -> None:
+    def action(base: str, token: str) -> None:
+        raw = _call(base, "POST", "/api/v1/cases/import/dry-run", token=token, payload=payload)
+        summary = _json_object(raw)
+        if args.json:
+            _print_json(raw)
+        else:
+            _print_dry_run_summary(summary)
+        # Duplicates are expected on a repeated import. A file the server does not accept, a rejected record, or a
+        # conflict would stop the commit too, so the dry run fails for each of them.
+        if summary["file_errors"]:
+            raise RequestFailed("the import file is not accepted; see the report above")
+        blocked = summary["rejected"] + summary["conflict"]
+        if blocked:
+            raise RequestFailed(f"{blocked} record(s) would not be stored; see the report above")
+
+    _with_session(base_url, args, action)
+
+
 def _case_import(base_url: str, args: argparse.Namespace) -> None:
+    if args.dry_run and args.idempotency_key:
+        raise UsageError("--idempotency-key does not apply to --dry-run, which writes nothing")
     raw = _read_import_file(args.file)
     try:
         payload = json.loads(raw)
@@ -465,6 +508,9 @@ def _case_import(base_url: str, args: argparse.Namespace) -> None:
         raise UsageError(f"{args.file} is not valid JSON") from None
     if not isinstance(payload, dict):
         raise UsageError(f"{args.file} must hold a JSON object with import_format_version and records")
+    if args.dry_run:
+        _case_import_dry_run(base_url, payload, args)
+        return
 
     key = args.idempotency_key or str(uuid.uuid4())
 
@@ -488,6 +534,25 @@ def _case_import(base_url: str, args: argparse.Namespace) -> None:
             raise RequestFailed(f"{not_stored} record(s) were not stored; see the results above")
 
     _with_session(base_url, args, action)
+
+
+def _catalog_export(base_url: str, args: argparse.Namespace) -> None:
+    captured: dict[str, bytes] = {}
+
+    def action(base: str, token: str) -> None:
+        captured["raw"] = _call(base, "GET", "/api/v1/catalog/export", token=token)
+
+    _with_session(base_url, args, action)
+    raw = captured["raw"]
+    if args.out is None:
+        _print_json(raw)
+        return
+    body = raw if raw.endswith(b"\n") else raw + b"\n"
+    try:
+        with open(args.out, "wb") as handle:
+            handle.write(body)
+    except OSError as error:
+        raise UsageError(f"cannot write {args.out}: {error.strerror or 'unknown error'}") from None
 
 
 def _print_evidence(item: dict) -> None:
@@ -1723,6 +1788,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     imported = case_commands.add_parser("import", help="Import case records from a JSON file in the project format")
     imported.add_argument("file", metavar="FILE", help='JSON file: {"import_format_version": 1, "records": [...]}')
+    imported.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Check the file and report what the import would do. Nothing is written",
+    )
     _add_idempotency_option(imported)
     _add_auth_options(imported)
     imported.set_defaults(handler=_case_import)
@@ -1777,6 +1847,17 @@ def build_parser() -> argparse.ArgumentParser:
     _add_idempotency_option(task_restore)
     _add_auth_options(task_restore)
     task_restore.set_defaults(handler=_task_restore)
+
+    catalog = subcommands.add_parser("catalog", help="Export the public catalog")
+    catalog_commands = catalog.add_subparsers(dest="catalog_command", required=True)
+    catalog_export = catalog_commands.add_parser(
+        "export", help="Export the public catalog as versioned JSON. Needs catalog:read"
+    )
+    catalog_export.add_argument(
+        "--out", metavar="FILE", default=None, help="Write the JSON to FILE instead of printing it"
+    )
+    _add_auth_options(catalog_export, json_output=False)
+    catalog_export.set_defaults(handler=_catalog_export)
     return parser
 
 
