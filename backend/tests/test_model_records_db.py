@@ -12,7 +12,7 @@ from datetime import datetime
 import psycopg
 import pytest
 
-from safe_kit import api
+from safe_kit import api, rbac, users
 from safe_kit.db import connect
 from safe_kit.migrate import main as migrate
 from test_case_links_db import ActingClient, idem, new_case, new_user
@@ -342,3 +342,135 @@ def test_a_revocation_keeps_the_recorded_time_and_names_the_user_who_revoked(peo
     assert current["written_by"] == people["investigator_id"]
     assert current["revoked_at"] is not None
     assert datetime.fromisoformat(current["revoked_at"]) >= datetime.fromisoformat(created["recorded_at"])
+
+
+def record_rows(record_id: str) -> list[tuple]:
+    """The stored versions of one record, read straight from the table, not through the API."""
+    with connect() as conn:
+        return conn.execute(
+            "SELECT case_id::text, version, model_name, model_version, runtime, provider_alias, reasoning_mode, "
+            "reasoning_effort, reasoning_budget_tokens, revoked, created_by::text, recorded_at IS NOT NULL "
+            "FROM model_records WHERE record_id = %s ORDER BY version",
+            (record_id,),
+        ).fetchall()
+
+
+def test_the_stored_row_holds_every_field_the_configuration_needs(people):
+    case_id = people["case_id"]
+    created = record(people["investigator"], case_id).json()
+
+    assert record_rows(created["record_id"]) == [
+        (case_id, 1, "model-a", "2026-10", "runtime/1.4", "provider-main", "enabled", "high", 8000, False,
+         people["investigator_id"], True),
+    ]
+
+
+def test_a_configuration_without_reasoning_is_replayed_without_effort_or_budget(people):
+    case_id = people["case_id"]
+    disabled = {"mode": "disabled", "effort": None, "budget_tokens": None}
+    original = record(people["investigator"], case_id, reasoning=disabled).json()
+    assert original["configuration"]["reasoning"] == disabled
+    read = people["investigator"].get(f"/api/v1/cases/{case_id}/model-records/{original['record_id']}").json()
+
+    replayed = people["investigator"].post(
+        f"/api/v1/cases/{case_id}/model-records", json=record_body(**read["configuration"]), headers=idem()
+    )
+
+    assert replayed.status_code == 201, replayed.text
+    assert replayed.json()["configuration"] == read["configuration"]
+    assert replayed.json()["configuration"]["reasoning"] == disabled
+
+
+def test_the_list_and_the_single_read_return_the_same_content(people):
+    case_id = people["case_id"]
+    created = record(people["investigator"], case_id).json()
+
+    listed = people["investigator"].get(f"/api/v1/cases/{case_id}/model-records").json()
+    single = people["investigator"].get(f"/api/v1/cases/{case_id}/model-records/{created['record_id']}").json()
+
+    assert listed == [single]
+
+
+def test_a_revoked_record_stays_readable_by_id_for_the_investigator_and_leaves_the_current_listing(people):
+    case_id = people["case_id"]
+    record_id = record(people["investigator"], case_id).json()["record_id"]
+    people["investigator"].post(
+        f"/api/v1/cases/{case_id}/model-records/{record_id}/revoke", json={"reason": "superseded"}, headers=idem()
+    )
+
+    after = people["investigator"].get(f"/api/v1/cases/{case_id}/model-records/{record_id}")
+    current = people["investigator"].get(f"/api/v1/cases/{case_id}/model-records?current_only=true")
+
+    assert after.status_code == 200
+    assert after.json()["configuration"] == CONFIG
+    assert after.json()["revoked"] is True
+    assert after.json()["usable_as_current"] is False
+    # Without cases:read_all the reason is not returned, but the revocation itself is visible.
+    assert after.json()["revocation_reason"] is None
+    assert current.json() == []
+
+
+def test_a_record_cannot_be_revoked_through_another_case(people):
+    case_id = people["case_id"]
+    record_id = record(people["investigator"], case_id).json()["record_id"]
+    other_case = new_case(people["reporter"], title="Other case")
+    assigned = people["triager"].post(
+        f"/api/v1/cases/{other_case}/assignments", json={"user_id": people["investigator_id"]}, headers=idem()
+    )
+    assert assigned.status_code == 201, assigned.text
+
+    response = people["investigator"].post(
+        f"/api/v1/cases/{other_case}/model-records/{record_id}/revoke", json={"reason": "wrong case"}, headers=idem()
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "model record not found"}
+    assert [row[9] for row in record_rows(record_id)] == [False]
+
+
+def test_revoking_an_unknown_record_is_not_found_and_writes_nothing(people):
+    case_id = people["case_id"]
+    unknown = str(uuid.uuid4())
+
+    response = people["investigator"].post(
+        f"/api/v1/cases/{case_id}/model-records/{unknown}/revoke", json={"reason": "x"}, headers=idem()
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "model record not found"}
+    assert record_count(case_id) == 0
+
+
+def test_only_the_investigator_role_may_write_model_records_by_default():
+    # A write needs evidence:write and evidence:read. The live role matrix decides, so this pins the current grants.
+    writers = {role for role in users.ROLES if {"evidence:read", "evidence:write"} <= rbac.permissions_for_role(role)}
+    assert writers == {"investigator"}
+
+
+@pytest.mark.parametrize("role", sorted(users.ROLES))
+def test_each_role_gets_exactly_the_access_the_matrix_gives(people, role):
+    case_id = people["case_id"]
+    permissions = rbac.permissions_for_role(role)
+    writer = {"evidence:read", "evidence:write"} <= permissions
+    reader = "evidence:read" in permissions
+
+    created = record(people["investigator"], case_id).json()
+    actor_id = new_user(role)
+    if "cases:assignable" in permissions:
+        # A role that can be assigned must see the case through an assignment, so the 403 or 201 is about permission.
+        assigned = people["triager"].post(
+            f"/api/v1/cases/{case_id}/assignments", json={"user_id": actor_id}, headers=idem()
+        )
+        assert assigned.status_code == 201, assigned.text
+    actor = ActingClient(actor_id)
+
+    listed = actor.get(f"/api/v1/cases/{case_id}/model-records")
+    assert listed.status_code == (200 if reader else 403), listed.text
+    written = record(actor, case_id)
+    assert written.status_code == (201 if writer else 403), written.text
+    revoked = actor.post(
+        f"/api/v1/cases/{case_id}/model-records/{created['record_id']}/revoke",
+        json={"reason": "matrix check"},
+        headers=idem(),
+    )
+    assert revoked.status_code == (200 if writer else 403), revoked.text

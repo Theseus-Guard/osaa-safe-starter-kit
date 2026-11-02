@@ -8,6 +8,7 @@ Use a throwaway database: the tests create rows and never remove them (rows are 
 import os
 import re
 import uuid
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -332,14 +333,63 @@ def test_every_password_write_is_recorded_as_an_argon2_hash():
     assert password_history_temporary_flags(target) == [True, False, True]
 
 
-def test_bootstrap_admin_records_its_password_as_temporary():
-    # The bootstrap needs a database with no admin. Other tests in the session create admins, so this runs only
-    # when it is the first to do so (for example, run alone on a fresh database).
-    if users.admin_exists():
-        pytest.skip("the bootstrap needs a database with no admin")
-    username = "t-" + uuid.uuid4().hex[:12]
-    user_id = users.bootstrap_admin(username, "bootstrap passphrase", f"{username}@example.com")
-    assert password_history_temporary_flags(user_id) == [True]
+@contextmanager
+def _inside_open_transaction(conn):
+    """Stands in for connect() in one function: its work joins the open transaction, and nothing is committed here."""
+    yield conn
+
+
+def test_bootstrap_admin_records_its_password_as_temporary(monkeypatch):
+    # The bootstrap is refused while an admin exists, and other tests in this session create admins (one of them a
+    # protected admin, which no update can hide). So, inside one transaction that is rolled back, the existing admins
+    # are soft-deleted with the protected-admin trigger switched off for that transaction only (SET LOCAL needs a
+    # superuser, as the throwaway test database has). The bootstrap then runs in the same transaction. The test passes
+    # in any order and leaves the database as it found it.
+    conn = connect()
+    try:
+        conn.execute("SET LOCAL session_replication_role = replica")
+        conn.execute(
+            "UPDATE users SET is_deleted = true, deleted_at = now(), is_protected = false "
+            "WHERE role = 'admin' AND NOT is_deleted"
+        )
+        monkeypatch.setattr(users, "connect", lambda: _inside_open_transaction(conn))
+        username = "t-" + uuid.uuid4().hex[:12]
+        user_id = users.bootstrap_admin(username, "bootstrap passphrase", f"{username}@example.com")
+
+        flags = [
+            row[0]
+            for row in conn.execute(
+                "SELECT is_temporary FROM password_history WHERE user_id = %s AND NOT is_deleted ORDER BY created_at",
+                (user_id,),
+            ).fetchall()
+        ]
+        assert flags == [True]
+        bootstrap_audit = conn.execute(
+            "SELECT details FROM audit_events WHERE action = %s AND target_id = %s AND NOT is_deleted",
+            (audit.USER_CREATE, user_id),
+        ).fetchall()
+        assert bootstrap_audit == [({"role": "admin", "bootstrap": True},)]
+    finally:
+        conn.rollback()
+        conn.close()
+
+
+def test_bootstrap_admin_is_refused_while_an_admin_exists(monkeypatch):
+    # An admin is created inside one transaction that is rolled back, so the refusal is checked on every run.
+    conn = connect()
+    try:
+        monkeypatch.setattr(users, "connect", lambda: _inside_open_transaction(conn))
+        users.create_user("t-" + uuid.uuid4().hex[:12], "temporary passphrase", "admin")
+        username = "t-" + uuid.uuid4().hex[:12]
+
+        with pytest.raises(users.AdminAlreadyExists):
+            users.bootstrap_admin(username, "bootstrap passphrase", f"{username}@example.com")
+
+        count = conn.execute("SELECT count(*) FROM users WHERE username = %s", (username,)).fetchone()[0]
+        assert count == 0
+    finally:
+        conn.rollback()
+        conn.close()
 
 
 def test_profile_account_creation_records_the_temporary_password():
