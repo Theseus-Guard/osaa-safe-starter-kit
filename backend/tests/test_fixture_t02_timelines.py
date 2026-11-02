@@ -23,12 +23,12 @@ The database tests use the helpers of tests/test_case_records_db.py and are skip
 """
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from pydantic import ValidationError
 
-from safe_kit import api, audit, system_timezone
+from safe_kit import api, audit, cases, system_timezone
 from safe_kit.case_records import LegalDuty, build_preliminary_report
 from safe_kit.case_records_api import AwarenessEventRequest
 from safe_kit.cases import WEEKLY_NOT_SIGNIFICANT_REASON, Case, calendar_for, deadline_tasks_for
@@ -120,6 +120,15 @@ def test_a_legal_duty_is_not_a_safe_deadline_and_does_not_change_the_report():
     assert [item["due_at"] for item in with_duty["legal_duties"]] == [(t0 + timedelta(hours=24)).isoformat()]
 
 
+def test_the_holidays_of_the_calendar_in_use_skip_business_days(monkeypatch):
+    # The case calendar is calendar_for(tz), which reads CALENDAR_HOLIDAYS. A holiday there must move the 4-day deadline.
+    monkeypatch.setattr(cases, "CALENDAR_HOLIDAYS", frozenset({date(2026, 11, 3)}))
+    t0 = datetime(2026, 11, 2, 6, 0, tzinfo=UTC)  # Monday 09:00 in Istanbul
+    due = {task.kind: task.due_at for task in deadline_tasks_for(t0, calendar_for("Europe/Istanbul"))}
+    # Tuesday 3 is a holiday: Wed(1), Thu(2), Fri(3), Mon 9(4) -> Monday 09:00 Istanbul, 06:00 UTC
+    assert due["preliminary_safe_report"] == datetime(2026, 11, 9, 6, 0, tzinfo=UTC)
+
+
 # --- with a database ------------------------------------------------------------------------------------------------
 
 
@@ -194,6 +203,47 @@ def test_an_earlier_operator_event_moves_t0_and_the_deadlines(timeline_people):
         ).fetchone()[0]
     assert details["deadline_start"] == earlier.isoformat()
     assert set(details["deadlines"]) == set(SAFE_KINDS)
+
+
+@requires_database
+def test_a_later_operator_event_never_moves_t0_or_the_deadlines(timeline_people):
+    reporter, triager = timeline_people["reporter"], timeline_people["triager"]
+    awareness = datetime.now(UTC) - timedelta(hours=3)
+    case_id = open_case(reporter, awareness)
+    before = triager.get(f"/api/v1/cases/{case_id}").json()
+
+    recorded = triager.post(
+        f"/api/v1/cases/{case_id}/awareness-events",
+        json={
+            "awareness_kind": "operator",
+            "event_kind": "incident",
+            "occurred_at": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
+            "basis": "monitoring alert",
+        }, headers=idem(),
+    )
+
+    assert recorded.status_code == 201, recorded.text
+    after = triager.get(f"/api/v1/cases/{case_id}").json()
+    assert after["awareness_time"] == before["awareness_time"]
+    assert after["deadlines"] == before["deadlines"]
+    assert audit_count(audit.CASE_DEADLINE_UPDATE, case_id) == 0
+    with connect() as conn:
+        details = conn.execute(
+            "SELECT details FROM audit_events WHERE action = %s AND target_id = %s AND NOT is_deleted "
+            "ORDER BY created_at DESC LIMIT 1",
+            (audit.CASE_AWARENESS_RECORDED, case_id),
+        ).fetchone()[0]
+    assert "deadline_start" not in details
+    assert "deadlines" not in details
+
+
+@requires_database
+def test_a_case_stores_the_calendar_version_its_deadlines_were_computed_with(timeline_people):
+    case_id = open_case(timeline_people["reporter"], datetime.now(UTC) - timedelta(hours=1))
+
+    body = timeline_people["triager"].get(f"/api/v1/cases/{case_id}").json()
+
+    assert body["calendar_version"] == cases.CALENDAR_VERSION
 
 
 @requires_database
