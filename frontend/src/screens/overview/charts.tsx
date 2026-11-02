@@ -56,8 +56,9 @@ function configFor(series: Series[]): ChartConfig {
 }
 
 // The legend is shown only when there is more than one series to tell apart.
+// Items wrap onto more lines rather than running past the card edge.
 function legendFor(series: Series[]) {
-  return series.length > 1 ? <ChartLegend content={<ChartLegendContent />} /> : null;
+  return series.length > 1 ? <ChartLegend content={<ChartLegendContent className="flex-wrap gap-x-4 gap-y-1" />} /> : null;
 }
 
 function seriesRows(points: SeriesPoint[], key: string): Row[] {
