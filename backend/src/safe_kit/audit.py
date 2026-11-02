@@ -61,9 +61,19 @@ EVIDENCE_DOWNLOADED = "evidence.downloaded"
 # Redaction creates a derived item (target: the derived evidence ID). Details hold IDs and counts, never removed text.
 EVIDENCE_REDACTED = "evidence.redacted"
 EVIDENCE_RELEASE_APPROVED = "evidence.release_approved"
+# Model records (safe_kit.model_records). Details hold IDs, versions and the reason's length, never the reason itself.
+CASE_MODEL_RECORD_ADD = "case.model_record_added"
+CASE_MODEL_RECORD_REVOKE = "case.model_record_revoked"
 # Case history omits these actions for callers without evidence:read.
 EVIDENCE_AUDIT_ACTIONS = frozenset(
-    {EVIDENCE_UPLOADED, EVIDENCE_DOWNLOADED, EVIDENCE_REDACTED, EVIDENCE_RELEASE_APPROVED}
+    {
+        EVIDENCE_UPLOADED,
+        EVIDENCE_DOWNLOADED,
+        EVIDENCE_REDACTED,
+        EVIDENCE_RELEASE_APPROVED,
+        CASE_MODEL_RECORD_ADD,
+        CASE_MODEL_RECORD_REVOKE,
+    }
 )
 # Written for every successful read of a reporter contact. The row targets the case, so the case history shows it.
 REPORTER_CONTACT_READ = "reporter_contact.read"
