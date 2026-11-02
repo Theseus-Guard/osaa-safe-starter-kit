@@ -45,7 +45,8 @@ const OTHER_COLOR = "var(--muted-foreground)";
 
 // Height of a time-series chart. Margins keep the first and last labels inside the plot.
 const TIME_CHART_CLASS = "h-64 w-full";
-const TIME_CHART_MARGIN = { top: 8, right: 12, left: 0, bottom: 0 };
+// The right margin keeps the last date label, which is centred on the last point, inside the card.
+const TIME_CHART_MARGIN = { top: 8, right: 24, left: 0, bottom: 0 };
 
 function isAllZero(rows: Row[], keys: string[]): boolean {
   return rows.every((row) => keys.every((key) => row[key] === 0));
