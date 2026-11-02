@@ -44,6 +44,29 @@ const MESSAGES: Record<string, string> = {
   "review round is closed": "This review is closed, so its layers cannot change.",
   "review not found": "That review does not exist, or your account cannot see its case.",
   revision_conflict: "The review was changed by someone else. Reload it, check the current revision and save again.",
+  "a conflict is declared on this review round, so this reviewer cannot set a layer":
+    "A conflict is declared on this review round, so you cannot set its layers.",
+  "this reviewer has withdrawn from this review round, so cannot set a layer":
+    "You have withdrawn from this review round, so you cannot set its layers.",
+  "only an assigned reviewer can declare a conflict": "Only an assigned reviewer can declare a conflict on this review round.",
+  "only an assigned reviewer can withdraw from a review round":
+    "Only an assigned reviewer can withdraw from this review round.",
+  conflict_already_declared: "You have already declared a conflict on this review round. Reload the round before you change it.",
+  no_declared_conflict: "You have no declared conflict on this review round to withdraw.",
+  already_recused: "You have already withdrawn from this review round.",
+  supersedes_mismatch: "The entry you are correcting is no longer the current one. Reload the round and try again.",
+  "a reviewer cannot name themselves as the replacement": "Choose another person as the replacement.",
+  "the replacement must be an active, assigned user who holds reviews:write":
+    "The replacement must be an active reviewer assigned to this case.",
+  "the replacement has a declared conflict on this review round": "The replacement has a declared conflict on this review round.",
+  "the replacement has withdrawn from this review round": "The replacement has withdrawn from this review round.",
+  "the independent reviewer cannot be the person who files the appeal":
+    "The independent reviewer must be someone other than you.",
+  "the independent reviewer must be an active, assigned user who holds reviews:write":
+    "The independent reviewer must be an active reviewer assigned to this case.",
+  "the independent reviewer took part in this review round": "The independent reviewer took part in this review round.",
+  "the independent reviewer has a declared conflict on this review round":
+    "The independent reviewer has a declared conflict on this review round.",
   "evidence is not available on this case": "One of the evidence items is not available on this case.",
   idempotency_key_required: "The request needs an Idempotency-Key. Try again.",
   idempotency_key_invalid: "The Idempotency-Key is not valid. Try again.",

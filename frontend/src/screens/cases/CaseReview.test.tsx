@@ -7,7 +7,19 @@ import { CaseReview } from "./CaseReview";
 
 vi.mock("../../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../api")>();
-  return { ...actual, listReviewRounds: vi.fn(), openReviewRound: vi.fn(), setReviewLayer: vi.fn() };
+  return {
+    ...actual,
+    listReviewRounds: vi.fn(),
+    openReviewRound: vi.fn(),
+    setReviewLayer: vi.fn(),
+    // The conflict, recusal and appeal lists of each round. Empty unless a test sets them.
+    listReviewConflicts: vi.fn().mockResolvedValue([]),
+    listReviewRecusals: vi.fn().mockResolvedValue([]),
+    listReviewAppeals: vi.fn().mockResolvedValue([]),
+    declareReviewConflict: vi.fn(),
+    recuseFromReviewRound: vi.fn(),
+    fileReviewAppeal: vi.fn(),
+  };
 });
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));

@@ -971,6 +971,147 @@ def _review_record(base_url: str, args: argparse.Namespace) -> None:
     _with_session(base_url, args, action)
 
 
+def _optional_uuid(text: str | None, option: str) -> str | None:
+    return None if text is None else _uuid_arg(text, option)
+
+
+def _render_conflict(raw: bytes) -> None:
+    entry = _json_object(raw)
+    print("Conflict declared." if entry["kind"] == "declared" else "Conflict withdrawn.")
+    print(f"  ID:               {entry['id']}")
+    print(f"  Round ID:         {entry['round_id']}")
+    print(f"  Reviewer ID:      {entry['reviewer_id']}")
+    print(f"  Description:      {entry['description'] or '-'}")
+    print(f"  Corrects:         {entry['supersedes_id'] or '-'}")
+
+
+def _render_recusal(raw: bytes) -> None:
+    entry = _json_object(raw)
+    print("Recusal recorded. The replacement is named on the round.")
+    print(f"  ID:               {entry['id']}")
+    print(f"  Round ID:         {entry['round_id']}")
+    print(f"  Reviewer ID:      {entry['reviewer_id']}")
+    print(f"  Replacement ID:   {entry['replacement_id']}")
+    print(f"  Reason:           {entry['reason'] or '-'}")
+    print(f"  Corrects:         {entry['supersedes_id'] or '-'}")
+
+
+def _render_appeal(raw: bytes) -> None:
+    entry = _json_object(raw)
+    print("Appeal filed. It is assigned to the independent reviewer; the product does not decide it.")
+    print(f"  ID:               {entry['id']}")
+    print(f"  Round ID:         {entry['round_id']}")
+    print(f"  Filed by:         {entry['filed_by']}")
+    print(f"  Independent ID:   {entry['independent_reviewer_id']}")
+    print(f"  Grounds:          {entry['grounds'] or '-'}")
+
+
+CONFLICT_MESSAGES = {
+    403: "forbidden: declaring a conflict needs reviews:write, and you must be assigned to the case",
+    404: "review round not found",
+    409: "the case is closed, your conflict is already declared, there is nothing to withdraw, or --supersedes is not your current entry. Check the round with 'case review list' first",
+    422: "the description is missing or too long",
+}
+RECUSAL_MESSAGES = {
+    403: "forbidden: withdrawing needs reviews:write, and you must be assigned to the case",
+    404: "review round not found",
+    409: "the case is closed, you have already withdrawn (to correct it, pass --supersedes with your current recusal), or --supersedes is not your current entry",
+    422: "the replacement must be another active, assigned user who holds reviews:write, has no declared conflict on this round, and has not withdrawn from it",
+}
+APPEAL_MESSAGES = {
+    403: "forbidden: filing an appeal needs a case read permission",
+    404: "review round not found, or its case is not available to your account",
+    422: "the independent reviewer must be another active, assigned user who holds reviews:write, did not take part in this round, and has no declared conflict on it",
+}
+
+
+def _review_conflict(base_url: str, args: argparse.Namespace) -> None:
+    """Declare, withdraw or correct your own conflict on a review round. Without a key, each run gets a new one."""
+    round_id = _uuid_arg(args.round_id, "ROUND_ID")
+    if args.kind == "declared" and (args.description is None or not args.description.strip()):
+        raise UsageError("a description is required for a declared conflict: pass --description TEXT")
+    payload = {
+        "kind": args.kind,
+        "description": args.description,
+        "supersedes_id": _optional_uuid(args.supersedes, "--supersedes"),
+    }
+    key = args.idempotency_key or str(uuid.uuid4())
+
+    def action(base: str, token: str) -> None:
+        raw = _call(
+            base,
+            "POST",
+            f"/api/v1/reviews/{round_id}/conflicts",
+            token=token,
+            payload=payload,
+            messages=CONFLICT_MESSAGES,
+            extra_headers={"Idempotency-Key": key},
+        )
+        if args.json:
+            _print_json(raw)
+        else:
+            _render_conflict(raw)
+
+    _with_session(base_url, args, action)
+
+
+def _review_recuse(base_url: str, args: argparse.Namespace) -> None:
+    """Withdraw from a review round and name the replacement. Without a key, each run gets a new one."""
+    round_id = _uuid_arg(args.round_id, "ROUND_ID")
+    payload = {
+        "replacement_id": _uuid_arg(args.replacement, "--replacement"),
+        "reason": args.reason,
+        "supersedes_id": _optional_uuid(args.supersedes, "--supersedes"),
+    }
+    key = args.idempotency_key or str(uuid.uuid4())
+
+    def action(base: str, token: str) -> None:
+        raw = _call(
+            base,
+            "POST",
+            f"/api/v1/reviews/{round_id}/recusals",
+            token=token,
+            payload=payload,
+            messages=RECUSAL_MESSAGES,
+            extra_headers={"Idempotency-Key": key},
+        )
+        if args.json:
+            _print_json(raw)
+        else:
+            _render_recusal(raw)
+
+    _with_session(base_url, args, action)
+
+
+def _review_appeal(base_url: str, args: argparse.Namespace) -> None:
+    """File an appeal against a review round for an independent reviewer. Without a key, each run gets a new one."""
+    round_id = _uuid_arg(args.round_id, "ROUND_ID")
+    if not args.grounds.strip():
+        raise UsageError("--grounds must not be blank")
+    payload = {
+        "grounds": args.grounds,
+        "independent_reviewer_id": _uuid_arg(args.independent, "--independent"),
+    }
+    key = args.idempotency_key or str(uuid.uuid4())
+
+    def action(base: str, token: str) -> None:
+        raw = _call(
+            base,
+            "POST",
+            f"/api/v1/reviews/{round_id}/appeals",
+            token=token,
+            payload=payload,
+            messages=APPEAL_MESSAGES,
+            extra_headers={"Idempotency-Key": key},
+        )
+        if args.json:
+            _print_json(raw)
+        else:
+            _render_appeal(raw)
+
+    _with_session(base_url, args, action)
+
+
 def _classification_conflict_version(error: RequestFailed) -> int | None:
     """The current classification version from a stale-save 409, or None for any other failure."""
     detail = error.detail
@@ -1409,7 +1550,10 @@ def _add_case_update_commands(case_commands) -> None:
     _add_auth_options(link_remove, json_output=False)
     link_remove.set_defaults(handler=_case_link_remove)
 
-    review = case_commands.add_parser("review", help="Review rounds of a case: open, list, and record layer outcomes")
+    review = case_commands.add_parser(
+        "review",
+        help="Review rounds of a case: open, list, record layer outcomes, and declare conflicts, recusals and appeals",
+    )
     review_commands = review.add_subparsers(dest="review_command", required=True)
     review_open = review_commands.add_parser(
         "open", help="Open a review round with all eleven layers not set. You must be assigned to the case"
@@ -1449,6 +1593,69 @@ def _add_case_update_commands(case_commands) -> None:
     )
     _add_auth_options(review_record)
     review_record.set_defaults(handler=_review_record)
+    review_conflict = review_commands.add_parser(
+        "conflict",
+        help="Declare, withdraw or correct your own conflict on a review round. A declared conflict stops you "
+        "from setting its layers. You must be assigned to the case",
+    )
+    review_conflict.add_argument("round_id", metavar="ROUND_ID", help="Review round ID (UUID)")
+    review_conflict.add_argument(
+        "--kind", required=True, choices=("declared", "withdrawn"),
+        help="declared states the conflict; withdrawn states that it no longer applies",
+    )
+    review_conflict.add_argument(
+        "--description", help="What the conflict is, up to 1000 characters. Required for declared"
+    )
+    review_conflict.add_argument(
+        "--supersedes", metavar="CONFLICT_ID",
+        help="The entry this one corrects: your current conflict entry on the round. Leave out when there is none",
+    )
+    review_conflict.add_argument(
+        "--idempotency-key",
+        metavar="KEY",
+        help="Idempotency-Key, 1 to 128 visible ASCII characters. Default: a new key for this run",
+    )
+    _add_auth_options(review_conflict)
+    review_conflict.set_defaults(handler=_review_conflict)
+    review_recuse = review_commands.add_parser(
+        "recuse",
+        help="Withdraw from a review round and name the replacement reviewer. You must be assigned to the case",
+    )
+    review_recuse.add_argument("round_id", metavar="ROUND_ID", help="Review round ID (UUID)")
+    review_recuse.add_argument(
+        "--replacement", required=True, metavar="USER_ID",
+        help="User ID (UUID) of the replacement: an active, assigned user with reviews:write and no declared conflict",
+    )
+    review_recuse.add_argument("--reason", help="Why you withdraw, up to 1000 characters")
+    review_recuse.add_argument(
+        "--supersedes", metavar="RECUSAL_ID",
+        help="The recusal this one corrects: your current recusal on the round. Leave out for the first one",
+    )
+    review_recuse.add_argument(
+        "--idempotency-key",
+        metavar="KEY",
+        help="Idempotency-Key, 1 to 128 visible ASCII characters. Default: a new key for this run",
+    )
+    _add_auth_options(review_recuse)
+    review_recuse.set_defaults(handler=_review_recuse)
+    review_appeal = review_commands.add_parser(
+        "appeal",
+        help="File an appeal against a review round for an independent reviewer. No approval is needed",
+    )
+    review_appeal.add_argument("round_id", metavar="ROUND_ID", help="Review round ID (UUID)")
+    review_appeal.add_argument("--grounds", required=True, help="Grounds of the appeal, up to 2000 characters")
+    review_appeal.add_argument(
+        "--independent", required=True, metavar="USER_ID",
+        help="User ID (UUID) of the independent reviewer: an active, assigned user with reviews:write who did not take "
+        "part in the round and has no declared conflict on it",
+    )
+    review_appeal.add_argument(
+        "--idempotency-key",
+        metavar="KEY",
+        help="Idempotency-Key, 1 to 128 visible ASCII characters. Default: a new key for this run",
+    )
+    _add_auth_options(review_appeal)
+    review_appeal.set_defaults(handler=_review_appeal)
 
     classification = case_commands.add_parser("classification", help="Show and save the classification of a case")
     classification_commands = classification.add_subparsers(dest="classification_command", required=True)

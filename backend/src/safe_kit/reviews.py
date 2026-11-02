@@ -33,6 +33,7 @@ from safe_kit.idempotency import (
     lookup,
     store,
 )
+from safe_kit.review_independence import has_declared_conflict, has_withdrawn
 
 # The eleven layers of the review template, in the order the plan lists them.
 TEMPLATE_LAYERS: tuple[str, ...] = (
@@ -66,6 +67,9 @@ class RoundOutcome(Enum):
     CLOSED = "case_closed"
     ROUND_CLOSED = "round_closed"
     NOT_ASSIGNED = "not_assigned"
+    # The reviewer has a declared conflict on this round, or has withdrawn from it (review_independence).
+    CONFLICT_DECLARED = "conflict_declared"
+    WITHDRAWN = "withdrawn"
     REVISION_CONFLICT = "revision_conflict"
     REASON_REQUIRED = "reason_required"
     UNKNOWN_EVIDENCE = "unknown_evidence"
@@ -259,6 +263,11 @@ def set_layer(
             return RoundOutcome.ROUND_CLOSED, None
         if not _is_assigned(conn, case_id, scope.user_id):
             return RoundOutcome.NOT_ASSIGNED, None
+        # A declared conflict or a withdrawal blocks the layer, whatever the revision (T09).
+        if has_declared_conflict(conn, round_id, scope.user_id):
+            return RoundOutcome.CONFLICT_DECLARED, None
+        if has_withdrawn(conn, round_id, scope.user_id):
+            return RoundOutcome.WITHDRAWN, None
         if revision != expected_revision:
             return RoundOutcome.REVISION_CONFLICT, _load_rounds(
                 conn, "id = %s", (round_id,)

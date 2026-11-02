@@ -1176,6 +1176,11 @@ from safe_kit.reviews_api import reviews_router  # noqa: E402
 
 app.include_router(reviews_router)
 
+# Conflicts, recusals and appeals on review rounds (safe_kit.review_independence_api).
+from safe_kit.review_independence_api import review_independence_router  # noqa: E402
+
+app.include_router(review_independence_router)
+
 # Overview dashboard endpoints: counts and dates, gated by role (see safe_kit.overview_api).
 from safe_kit.overview_api import overview_router  # noqa: E402
 
