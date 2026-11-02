@@ -185,4 +185,52 @@ describe("CasesPage", () => {
     await waitFor(() => expect(list).toHaveBeenLastCalledWith(20, undefined, "SAFE", "closed"));
     await waitFor(() => expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled());
   });
+
+  // --- empty and error states: an empty or failed list is never shown as a clean result --------------------------------
+
+  it("never reads an empty list as a pass, a clean result or a compliance result", async () => {
+    render(<CasesPage permissions={["cases:read_all"]} />);
+
+    expect(await screen.findByText("You have not opened any cases yet.")).toBeInTheDocument();
+    expect(screen.queryByText(/\bpass(ed)?\b|\bclean\b|compliant|compliance|verified/i)).not.toBeInTheDocument();
+  });
+
+  it("says that no case has the chosen status when a filter matches nothing", async () => {
+    const user = userEvent.setup();
+    render(<CasesPage permissions={["cases:read_all"]} />);
+
+    await screen.findByText("You have not opened any cases yet.");
+    await user.click(screen.getByRole("combobox", { name: "Filter by status" }));
+    await user.click(await screen.findByRole("option", { name: "Closed" }));
+
+    expect(await screen.findByText("No cases have this status.")).toBeInTheDocument();
+  });
+
+  it("shows the refusal and no empty or loading text when the first list cannot be loaded", async () => {
+    const { ApiError } = await vi.importActual<typeof import("../../api")>("../../api");
+    list.mockRejectedValue(new ApiError(403, "forbidden"));
+    render(<CasesPage permissions={["cases:read_all"]} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("You do not have permission for this action.");
+    expect(screen.queryByText("You have not opened any cases yet.")).not.toBeInTheDocument();
+    expect(screen.queryByText("No cases match this search.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Loading cases…")).not.toBeInTheDocument();
+  });
+
+  it("does not keep the rows of an earlier filter under an error for the new filter", async () => {
+    const user = userEvent.setup();
+    const { ApiError } = await vi.importActual<typeof import("../../api")>("../../api");
+    list.mockResolvedValue({ items: [{ ...BASE_ITEM, id: "case-1" }], next_cursor: null });
+    render(<CasesPage permissions={["cases:read_all"]} />);
+    expect(await screen.findByRole("link", { name: "SAFE-2026-000001" })).toBeInTheDocument();
+
+    list.mockRejectedValue(new ApiError(500, "internal_error"));
+    await user.click(screen.getByRole("combobox", { name: "Filter by status" }));
+    await user.click(await screen.findByRole("option", { name: "Closed" }));
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "SAFE-2026-000001" })).not.toBeInTheDocument();
+    expect(screen.queryByText("No cases have this status.")).not.toBeInTheDocument();
+    expect(screen.queryByText("No cases match this search.")).not.toBeInTheDocument();
+  });
 });

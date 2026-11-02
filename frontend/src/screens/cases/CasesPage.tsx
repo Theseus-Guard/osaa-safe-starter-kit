@@ -79,7 +79,11 @@ function CaseList({ permissions }: Props) {
         setError(null);
       })
       .catch((caught: unknown) => {
-        if (!stale) setError(describeError(caught));
+        // A failed request shows no rows: the rows of an earlier filter or page would sit under the error as if current.
+        if (!stale) {
+          setPage(null);
+          setError(describeError(caught));
+        }
       })
       .finally(() => {
         if (!stale) setLoading(false);
@@ -166,10 +170,17 @@ function CaseList({ permissions }: Props) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {page === null && (
+            {page === null && error === null && (
               <TableRow>
                 <TableCell colSpan={COLUMN_COUNT} className="h-24 px-4 text-center text-muted-foreground">
                   Loading cases…
+                </TableCell>
+              </TableRow>
+            )}
+            {page === null && error !== null && (
+              <TableRow>
+                <TableCell colSpan={COLUMN_COUNT} className="h-24 px-4 text-center text-muted-foreground">
+                  The case list could not be loaded.
                 </TableCell>
               </TableRow>
             )}

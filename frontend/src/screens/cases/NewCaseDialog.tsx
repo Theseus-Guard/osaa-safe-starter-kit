@@ -11,6 +11,13 @@ import { Input } from "@/components/ui/input";
 
 const TITLE_MAX_LENGTH = 200;
 const CONTACT_MAX_LENGTH = 200;
+// The message box. The field it is about (if any) points at it with aria-describedby and is marked aria-invalid.
+const ERROR_ID = "case-form-error";
+
+interface FormError {
+  message: string;
+  field: "title" | "awareness" | null;
+}
 
 interface Props {
   open: boolean;
@@ -43,7 +50,7 @@ function NewCaseForm({ onCreated }: { onCreated: (created: CaseDetail) => void }
   const [initial] = useState(() => zonedParts(new Date(), zone));
   const [date, setDate] = useState(initial.date);
   const [time, setTime] = useState(initial.time);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<FormError | null>(null);
   const [busy, setBusy] = useState(false);
 
   const utcIso = zonedToUtcIso(date, time, zone);
@@ -54,19 +61,25 @@ function NewCaseForm({ onCreated }: { onCreated: (created: CaseDetail) => void }
     setError(null);
     const trimmed = title.trim();
     if (trimmed.length === 0) {
-      setError("Enter a title for the case.");
+      setError({ message: "Enter a title for the case.", field: "title" });
       return;
     }
     if (date === "" || time === "") {
-      setError("Enter the date and time you became aware of the incident.");
+      setError({ message: "Enter the date and time you became aware of the incident.", field: "awareness" });
       return;
     }
     if (utcIso === null) {
-      setError(`This date and time does not exist in ${zone} because of a daylight saving change. Choose another time.`);
+      setError({
+        message: `This date and time does not exist in ${zone} because of a daylight saving change. Choose another time.`,
+        field: "awareness",
+      });
       return;
     }
     if (new Date(utcIso).getTime() > Date.now()) {
-      setError("The awareness time cannot be in the future. Choose the time you became aware, not a later one.");
+      setError({
+        message: "The awareness time cannot be in the future. Choose the time you became aware, not a later one.",
+        field: "awareness",
+      });
       return;
     }
     // A blank contact is sent as null, so the reporter stays anonymous to the case team.
@@ -81,7 +94,7 @@ function NewCaseForm({ onCreated }: { onCreated: (created: CaseDetail) => void }
         }),
       );
     } catch (caught) {
-      setError(describeError(caught));
+      setError({ message: describeError(caught), field: null });
       setBusy(false);
     }
   }
@@ -102,18 +115,30 @@ function NewCaseForm({ onCreated }: { onCreated: (created: CaseDetail) => void }
               maxLength={TITLE_MAX_LENGTH}
               onChange={(event) => setTitle(event.target.value)}
               required
+              aria-invalid={error?.field === "title" ? true : undefined}
+              aria-describedby={error?.field === "title" ? ERROR_ID : undefined}
             />
           </Field>
           <Field>
             <FieldLabel htmlFor="case-date">Awareness date and time</FieldLabel>
             <div className="grid grid-cols-2 gap-2">
-              <Input id="case-date" type="date" value={date} onChange={(event) => setDate(event.target.value)} required />
+              <Input
+                id="case-date"
+                type="date"
+                value={date}
+                onChange={(event) => setDate(event.target.value)}
+                required
+                aria-invalid={error?.field === "awareness" ? true : undefined}
+                aria-describedby={error?.field === "awareness" ? ERROR_ID : undefined}
+              />
               <Input
                 type="time"
                 aria-label="Awareness time"
                 value={time}
                 onChange={(event) => setTime(event.target.value)}
                 required
+                aria-invalid={error?.field === "awareness" ? true : undefined}
+                aria-describedby={error?.field === "awareness" ? ERROR_ID : undefined}
               />
             </div>
             <FieldDescription>
@@ -133,8 +158,8 @@ function NewCaseForm({ onCreated }: { onCreated: (created: CaseDetail) => void }
           </Field>
         </FieldGroup>
         {error && (
-          <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
+          <Alert variant="destructive" id={ERROR_ID}>
+            <AlertDescription>{error.message}</AlertDescription>
           </Alert>
         )}
         <DialogFooter>

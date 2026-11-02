@@ -196,6 +196,16 @@ describe("CaseEvidence", () => {
     expect(screen.queryByText("No evidence uploaded yet.")).not.toBeInTheDocument();
   });
 
+  it("shows a pending item as Pending, not as available, and offers no download for it", async () => {
+    list.mockResolvedValue(evidencePage([{ ...ITEM, status: "pending" }]));
+    render(<CaseEvidence caseId="case-1" canRead canWrite />);
+
+    const row = (await screen.findByText("notes.txt")).closest("tr") as HTMLElement;
+    expect(within(row).getByText("Pending")).toBeInTheDocument();
+    expect(within(row).queryByText("Available")).not.toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Download" })).toBeDisabled();
+  });
+
   it("does not show the empty state when the list cannot be loaded, and names the refusal", async () => {
     const { ApiError } = await vi.importActual<typeof import("../../api")>("../../api");
     list.mockRejectedValue(new ApiError(404, "case not found"));
