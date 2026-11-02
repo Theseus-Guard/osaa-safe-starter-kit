@@ -240,8 +240,8 @@ def test_a_stale_layer_revision_gets_the_same_current_revision_from_the_api_and_
         reviewer,
         "patch",
         url,
-        json={"outcome": "fail", "reason": "Stale attempt", "evidence_ids": [], "expected_revision": stale},
-        headers={"Idempotency-Key": uuid.uuid4().hex},
+        json={"outcome": "fail", "reason": "Stale attempt", "evidence_ids": []},
+        headers={"Idempotency-Key": uuid.uuid4().hex, "If-Match": f'"{stale}"'},
     )
     code, out, err = cli_as(
         monkeypatch,
@@ -260,8 +260,8 @@ def test_a_stale_layer_revision_gets_the_same_current_revision_from_the_api_and_
         str(stale),
     )
 
-    assert api_answer.status_code == 409
-    assert api_answer.json()["detail"] == {"status": "revision_conflict", "current_revision": current}
+    assert api_answer.status_code == 412
+    assert api_answer.json()["detail"] == {"status": "precondition_failed", "current_revision": current}
     assert code == 1 and out == ""
     assert f"The current revision is {current}" in err
     assert "nothing was saved" in err
@@ -309,8 +309,8 @@ def test_a_pass_without_evidence_is_refused_by_both_clients_and_nothing_is_store
         reviewer,
         "patch",
         f"/api/v1/reviews/{round_view['id']}/layers/model",
-        json={"outcome": "pass", "reason": None, "evidence_ids": [], "expected_revision": round_view["revision"]},
-        headers={"Idempotency-Key": uuid.uuid4().hex},
+        json={"outcome": "pass", "reason": None, "evidence_ids": []},
+        headers={"Idempotency-Key": uuid.uuid4().hex, "If-Match": f'"{round_view["revision"]}"'},
     )
     code, out, err = cli_as(
         monkeypatch,

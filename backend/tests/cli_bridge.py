@@ -69,6 +69,8 @@ def install(
             headers["Authorization"] = request.get_header("Authorization")
         if request.has_header("Idempotency-key"):
             headers["Idempotency-Key"] = request.get_header("Idempotency-key")
+        if request.has_header("If-match"):
+            headers["If-Match"] = request.get_header("If-match")
         response = client.request(method, path, json=body, headers=headers)
         if response.status_code >= 400:
             raise urllib.error.HTTPError(
