@@ -27,12 +27,19 @@ case "$*" in
     exit 0 ;;
   "compose version") echo "Docker Compose version test"; exit 0 ;;
   *" run "*) cat > "$DEMO_STUB_LOG.stdin"; echo '{"id": "stub"}'; exit 0 ;;
-  *" ps"*) echo "NAME  STATE  HEALTH"; exit 0 ;;
+  *" ps"*)
+    # `ps -q` lists container IDs only; it prints one when this project's gateway runs (DEMO_STUB_GATEWAY_RUNNING=1).
+    case "$*" in
+      *" -q"*) if [ "${DEMO_STUB_GATEWAY_RUNNING:-}" = "1" ]; then echo "gateway-container-id"; fi; exit 0 ;;
+    esac
+    echo "NAME  STATE  HEALTH"; exit 0 ;;
   *) exit 0 ;;
 esac
 """
 
 FAKE_CURL = "#!/bin/sh\nexit 7\n"
+# The published loopback port answers, as it does when another Compose project holds it.
+FAKE_CURL_ANSWERS = "#!/bin/sh\nexit 0\n"
 
 # Test double for uv. Records its arguments and the variables cli-show sets for the CLI. Reads no credential.
 FAKE_UV = """#!/bin/sh
@@ -134,6 +141,34 @@ def test_status_reports_files_without_printing_a_credential(stub_env):
     assert "not ready" in output
     assert CREDENTIAL not in output
     assert CREDENTIAL not in stub_env["log"].read_text(encoding="utf-8")
+
+
+def _port_answers(stub_env) -> None:
+    # The stub curl is the first entry on PATH; rewriting it keeps its executable mode.
+    stubs = Path(stub_env["env"]["PATH"].split(os.pathsep)[0])
+    (stubs / "curl").write_text(FAKE_CURL_ANSWERS, encoding="utf-8")
+
+
+def test_status_is_not_ready_when_another_stack_answers_the_port(stub_env):
+    # The owner's stack can hold 127.0.0.1:8443 and answer the probe. Without this project's gateway, status says so.
+    _port_answers(stub_env)
+    result = _run(DEMO, ["status"], stub_env["env"])
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert "demo: not ready at https://127.0.0.1:8443" in output
+    assert "ready at" not in output.replace("not ready at", "")
+
+
+def test_status_is_ready_only_with_this_projects_running_gateway(stub_env):
+    _port_answers(stub_env)
+    env = dict(stub_env["env"], DEMO_STUB_GATEWAY_RUNNING="1")
+    result = _run(DEMO, ["status"], env)
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert "demo: ready at https://127.0.0.1:8443" in output
+    assert "not ready" not in output
 
 
 def _uv_lines(stub_env) -> list[str]:

@@ -398,6 +398,9 @@ def demo_dataset(tmp_path_factory) -> Iterator[dict]:
         os.environ.pop(CREDENTIAL_FILE, None)
         migrate()
         outcome = demo_seed.seed(os.environ)
+        # These tests read the credential files the seed writes in this run. A database that already holds the demo
+        # dataset (for example one reused from an earlier run) gets no new files, so fail here with the reason.
+        assert outcome.created, "the test database already holds the demo dataset; run the database tests on a fresh database"
         yield {"outcome": outcome, "dir": credential_dir, "env": env}
 
 
