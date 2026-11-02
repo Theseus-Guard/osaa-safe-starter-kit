@@ -1,0 +1,46 @@
+{
+  "weekly_update_schema_version": "0.1.0",
+  "weekly_update_id": "7d1c2a4e-3b5f-4e8a-9c6d-1f2e3a4b5c6d",
+  "case_id": "3f2b8c1e-6a4d-4e9b-8f1a-2c7d9e0b5a11",
+  "case_reference": "SAFE-2026-000042",
+  "sequence": 2,
+  "generated_at": "2026-11-09T08:00:00Z",
+  "next_update_due_at": "2026-11-16T08:00:00Z",
+  "significant_risks": [
+    {
+      "area": "affected_people_groups",
+      "severity": "high"
+    },
+    {
+      "area": "reversibility",
+      "severity": "critical"
+    }
+  ],
+  "deadline_tasks": [
+    {
+      "kind": "affected_customers",
+      "due_at": "2026-11-06T09:00:00Z",
+      "status": "done"
+    },
+    {
+      "kind": "preliminary_safe_report",
+      "due_at": "2026-11-06T09:00:00Z",
+      "status": "open"
+    },
+    {
+      "kind": "broader_advisory",
+      "due_at": "2026-11-13T09:00:00Z",
+      "status": "open"
+    },
+    {
+      "kind": "preliminary_public_report",
+      "due_at": "2026-12-06T09:00:00Z",
+      "status": "open"
+    },
+    {
+      "kind": "remediation_status",
+      "due_at": "2027-02-04T09:00:00Z",
+      "status": "open"
+    }
+  ]
+}

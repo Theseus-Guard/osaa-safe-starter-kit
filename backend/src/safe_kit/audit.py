@@ -45,6 +45,8 @@ CASE_CLASSIFICATION_CHANGE = "case.classification_changed"
 # Case links: a record that two cases concern the same incident. The details hold the link and the other case's ID only.
 CASE_LINK_ADD = "case.link_added"
 CASE_LINK_REMOVE = "case.link_removed"
+# Written by the worker (no actor) when it creates a weekly update. Details hold the update ID and its sequence only.
+CASE_WEEKLY_UPDATE_CREATED = "case.weekly_update_created"
 # Written against the import record (target_type "case_import"), not the case, so it stays out of the case history.
 CASE_IMPORT = "case.import"
 # Written by safe_kit.evidence against the evidence item (target_type "evidence").
