@@ -109,7 +109,7 @@ The backend `--db` mode starts a throwaway PostgreSQL container and removes it a
 
 Two export documents are versioned JSON. Both use project-defined schemas in `schemas/`. They are not official SAFE schemas, and this project makes no claim that a SAFE schema or SAFE API defines them.
 
-- Public catalog export: `GET /api/v1/catalog/export` and `safe-kit catalog export`. Schema `schemas/catalog-export.v0.json`, `catalog_export_schema_version` 0.1.0. It needs `catalog:read`. It holds no restricted reference, no digest of one, and no internal identifier.
+- Public catalog export: `GET /api/v1/catalog/export` and `safe-kit catalog export`. Schema `schemas/catalog-export.v0.json`, `catalog_export_schema_version` 0.1.0. It needs `catalog:read`. It holds no restricted reference, no digest of one, and no internal identifier. Each export is written to the audit log.
 - Approved disclosure package version: `GET /api/v1/cases/{case_id}/disclosures/{version_id}/export` and `safe-kit case disclosure export`. Schema `schemas/disclosure-export.v0.json`, `disclosure_export_schema_version` 0.1.0. Only an approved version can be exported, and each export is written to the audit log.
 
 Reading policy for these documents:
@@ -126,7 +126,7 @@ The service does not import these documents yet. The case import file (`import_f
 
 - **Errors.** Every error response has the `detail` field and an `error` object with a stable `code`, a safe `message`, the `request_id`, and `retryable`. A validation error also lists `fields`, with the path and the problem, never the rejected value. Every response carries `X-Request-ID`.
 - **Paging.** `GET /api/v1/cases` pages by cursor: `limit` (1 to 200, default 50), an opaque `cursor`, and `next_cursor`, which is null on the last page. The other list endpoints still use offset paging.
-- **Concurrency.** The case title change and the review layer changes need `If-Match` with the revision that was read (sent as the `ETag`). A missing value is refused with `428`, and a stale one with `412`. Other changes do not check a revision yet.
+- **Concurrency.** The case title change, the review layer changes, the deadline task changes, the legal duty changes and the user account changes need `If-Match` with the revision that was read (sent as the `ETag`). A missing value is refused with `428`, a malformed one with `400` (`invalid_if_match`), and a stale one with `412`, which also returns the current revision (`current_revision`). Each record has its own revision. The case ETag is the case revision, and changes to a deadline task, a legal duty or a user do not raise it. So a deadline task ETag and a case ETag are different numbers. The user list and the case's deadline and legal duty lists carry each item's revision in the body, because a list has one ETag. Some changes to a deadline task raise its revision without `If-Match`: the recalculation of SAFE due dates, the weekly update task, and the restore route, which does not check `If-Match`. Other changes do not check a revision yet.
 - **Idempotency.** Case writes that change state take an `Idempotency-Key` header.
 
 ## Versioning and SAFE compatibility
