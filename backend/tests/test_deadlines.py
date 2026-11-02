@@ -42,6 +42,28 @@ def test_business_day_keeps_wall_clock_time_across_dst_change():
     assert result.preliminary_safe_report == datetime(2027, 3, 31, 7, 0, tzinfo=UTC)
 
 
+def test_four_business_days_skip_a_weekend_and_a_holiday_together():
+    t0 = datetime(2026, 11, 5, 9, 0, tzinfo=ISTANBUL)  # Thursday, 09:00 local
+    holiday = frozenset({date(2026, 11, 6)})  # Friday
+    result = deadlines_for(t0, calendar(holidays=holiday))
+    # Fri is a holiday, Sat and Sun are weekend: Mon(1), Tue(2), Wed(3), Thu(4) -> Thursday 09:00 local
+    assert result.preliminary_safe_report == datetime(2026, 11, 12, 6, 0, tzinfo=UTC)
+
+
+def test_business_day_keeps_wall_clock_time_across_the_autumn_dst_change():
+    # Berlin switches back to standard time on 2026-10-25.
+    t0 = datetime(2026, 10, 22, 9, 0, tzinfo=BERLIN)  # Thursday, 09:00 CEST = 07:00 UTC
+    result = deadlines_for(t0, calendar(tz=BERLIN))
+    # Fri 23(1), Mon 26(2), Tue 27(3), Wed 28(4) -> 09:00 CET = 08:00 UTC
+    assert result.preliminary_safe_report == datetime(2026, 10, 28, 8, 0, tzinfo=UTC)
+
+
+def test_hour_deadline_is_elapsed_time_across_a_dst_change():
+    t0 = datetime(2026, 10, 23, 9, 0, tzinfo=BERLIN)  # 07:00 UTC, before the change on 2026-10-25
+    result = deadlines_for(t0, calendar(tz=BERLIN))
+    assert result.affected_customers == datetime(2026, 10, 26, 7, 0, tzinfo=UTC)
+
+
 def test_fixed_elapsed_deadlines():
     t0 = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
     result = deadlines_for(t0, calendar())

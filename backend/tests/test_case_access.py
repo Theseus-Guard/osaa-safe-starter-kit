@@ -779,8 +779,9 @@ def test_close_succeeds_after_review_and_tasks_done_or_not_applicable(db_client,
     open_and_set_review(db_client(people["reviewer"]), case_id, "not_applicable", reason="Not applicable to this case")
 
     tasks = task_ids(db_client, people["triager"], case_id)
-    # An assigned investigator may mark tasks done, but not not_applicable.
-    for kind in ("affected_customers", "preliminary_safe_report", "broader_advisory", "preliminary_public_report"):
+    # An assigned investigator may mark tasks done, but not not_applicable. The conditional advisory starts not
+    # applicable, and only a triager may change that, so it is left as it is and closure accepts it.
+    for kind in ("affected_customers", "preliminary_safe_report", "preliminary_public_report"):
         assert investigator.patch(
             f"/api/v1/cases/{case_id}/deadlines/{tasks[kind]}", json={"status": "done"}
         ).status_code == 200

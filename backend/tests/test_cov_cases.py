@@ -60,6 +60,9 @@ def task_state(task_id: str) -> tuple:
 
 def finish_all_tasks(case_id: str, scope: CaseScope) -> None:
     for task in cases.find_visible_case(case_id, scope).deadlines:
+        # A task that starts not applicable (the conditional advisory) is left as it is: closure accepts it.
+        if task.status == "not_applicable":
+            continue
         assert cases.update_deadline(case_id, task.id, "done", None, scope, False) is Outcome.OK
 
 
@@ -78,7 +81,13 @@ def test_case_stores_the_timezone_snapshot_and_its_deadline_tasks():
     assert sorted((t.kind, t.due_at) for t in case.deadlines) == sorted((t.kind, t.due_at) for t in expected)
     assert all(task.id for task in case.deadlines)
     assert len({task.id for task in case.deadlines}) == len(expected)
-    assert all(task.status == "open" for task in case.deadlines)
+    assert {task.kind: task.status for task in case.deadlines} == {
+        "affected_customers": "open",
+        "preliminary_safe_report": "open",
+        "broader_advisory": "not_applicable",
+        "preliminary_public_report": "open",
+        "remediation_status": "open",
+    }
 
     with connect() as conn:
         stored_tz = conn.execute("SELECT calendar_timezone FROM cases WHERE id = %s", (case.id,)).fetchone()[0]
@@ -88,10 +97,10 @@ def test_case_stores_the_timezone_snapshot_and_its_deadline_tasks():
         ).fetchall()
     assert stored_tz == tz
     assert stored_tasks == sorted(
-        ((t.kind, t.due_at, "open") for t in expected), key=lambda row: row[0]
+        ((t.kind, t.due_at, t.status) for t in expected), key=lambda row: row[0]
     )
     assert audit_rows(case.id, audit.CASE_CREATE) == [
-        (owner, {"calendar_version": "provisional-1", "calendar_timezone": tz})
+        (owner, {"calendar_version": "provisional-1", "calendar_timezone": tz, "not_applicable": ["broader_advisory"]})
     ]
 
 

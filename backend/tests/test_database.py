@@ -253,11 +253,24 @@ def test_case_is_stored_with_its_deadline_tasks_and_audit_row():
     assert fetched is not None
     assert fetched.calendar_version == "provisional-1"
     assert len(fetched.deadlines) == 5
-    assert [task.status for task in fetched.deadlines] == ["open"] * 5
+    assert {task.kind: task.status for task in fetched.deadlines} == {
+        "affected_customers": "open",
+        "preliminary_safe_report": "open",
+        "broader_advisory": "not_applicable",
+        "preliminary_public_report": "open",
+        "remediation_status": "open",
+    }
     assert any(item.id == case.id for item in cases.list_visible_cases(CaseScope(owner, read_own=True), 50, 0))
     assert cases.count_visible_cases(CaseScope(owner, read_own=True)) >= 1
     assert audit_rows(case.id, audit.CASE_CREATE) == [
-        (owner, {"calendar_version": "provisional-1", "calendar_timezone": fetched.calendar_timezone})
+        (
+            owner,
+            {
+                "calendar_version": "provisional-1",
+                "calendar_timezone": fetched.calendar_timezone,
+                "not_applicable": ["broader_advisory"],
+            },
+        )
     ]
 
 

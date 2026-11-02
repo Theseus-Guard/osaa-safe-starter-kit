@@ -431,6 +431,8 @@ def set_impact(
                 updated_at = conn.execute("SELECT updated_at FROM impacts WHERE id = %s", (row[0],)).fetchone()[0]
         if changes:
             audit.record(conn, audit.CASE_IMPACT_CHANGE, "case", case_id, actor_id=scope.user_id, details={"area": area, **changes})
+            # The weekly update depends on the significant risks, so it follows every change of an impact area.
+            cases.sync_weekly_update(conn, case_id, scope.user_id)
     assessment = ImpactAssessment(area=area, assessed=True, severity=severity, scope=impact_scope, updated_at=updated_at)
     return RecordOutcome.OK, assessment
 

@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 from safe_kit import audit
 from safe_kit import system_timezone
 from safe_kit.db import connect
-from safe_kit.deadlines import BusinessCalendar, deadline_start, deadlines_for
+from safe_kit.deadlines import BusinessCalendar, deadline_start, deadlines_for, next_weekly_update
 from safe_kit.system_timezone import TimezoneNotConfigured
 
 # The working calendar is provisional until the owning organization confirms its working days and holidays.
@@ -173,13 +173,33 @@ SAFE_DEADLINE_KINDS = (
 )
 
 
+# The 14-day broader advisory is conditional, and the case data has no field that records the condition. Until it
+# does, the task starts not applicable with this reason. A triager sets it open once the condition holds.
+BROADER_ADVISORY_CONDITION_REASON = (
+    "conditional advisory: no condition is recorded in the case data, so the advisory is not applicable yet"
+)
+# The reason a task holds only by its default, so that no person has decided it. The internal incident option may
+# replace it, and turning the option off puts it back.
+DEFAULT_NOT_APPLICABLE_REASONS = {"broader_advisory": BROADER_ADVISORY_CONDITION_REASON}
+# The weekly update is due while a significant risk is open: an impact area is recorded as high or critical.
+WEEKLY_UPDATE_KIND = "weekly_update"
+SIGNIFICANT_SEVERITIES = ("high", "critical")
+WEEKLY_SIGNIFICANT_SOURCE = "significant_risk"
+WEEKLY_NOT_SIGNIFICANT_REASON = "no significant risk is open, so the weekly update is not due"
+
+
 def deadline_tasks_for(t0: datetime, calendar: BusinessCalendar) -> list[DeadlineTask]:
     """The tasks created with a case. weekly_update is not created here: it depends on risks still being open."""
     due = deadlines_for(t0, calendar)
     return [
         DeadlineTask("affected_customers", due.affected_customers, "open"),
         DeadlineTask("preliminary_safe_report", due.preliminary_safe_report, "open"),
-        DeadlineTask("broader_advisory", due.broader_advisory, "open"),
+        DeadlineTask(
+            "broader_advisory",
+            due.broader_advisory,
+            "not_applicable",
+            not_applicable_reason=BROADER_ADVISORY_CONDITION_REASON,
+        ),
         DeadlineTask("preliminary_public_report", due.preliminary_public_report, "open"),
         DeadlineTask("remediation_status", due.remediation_status, "open"),
     ]
@@ -358,8 +378,9 @@ def insert_case(conn, title: str, awareness_time: datetime, created_by: str) -> 
     stored_tasks = []
     for task in tasks:
         task_id = conn.execute(
-            "INSERT INTO deadline_tasks (case_id, kind, due_at, status) VALUES (%s, %s, %s, %s) RETURNING id::text",
-            (case.id, task.kind, task.due_at, task.status),
+            "INSERT INTO deadline_tasks (case_id, kind, due_at, status, not_applicable_reason) "
+            "VALUES (%s, %s, %s, %s, %s) RETURNING id::text",
+            (case.id, task.kind, task.due_at, task.status, task.not_applicable_reason),
         ).fetchone()[0]
         stored_tasks.append(replace(task, id=task_id))
     audit.record(
@@ -368,7 +389,11 @@ def insert_case(conn, title: str, awareness_time: datetime, created_by: str) -> 
         "case",
         case.id,
         actor_id=created_by,
-        details={"calendar_version": CALENDAR_VERSION, "calendar_timezone": calendar_timezone},
+        details={
+            "calendar_version": CALENDAR_VERSION,
+            "calendar_timezone": calendar_timezone,
+            "not_applicable": [task.kind for task in tasks if task.status == "not_applicable"],
+        },
     )
     return replace(case, deadlines=stored_tasks)
 
@@ -399,16 +424,37 @@ def _last_task_change(conn, case_id: str, task_id: str) -> dict[str, Any] | None
     return None if row is None else row[0]
 
 
+def _option_previous_state(conn, case_id: str, task_id: str, kind: str) -> tuple[str, str | None]:
+    """The status and reason that the option replaced on one task.
+
+    The option's own change that set the status records the old status. A task that was not applicable only by its
+    default reason has no such change: the option only replaced its reason, so it returns to that default reason.
+    """
+    row = conn.execute(
+        """
+        SELECT details FROM audit_events
+        WHERE target_type = 'case' AND target_id = %s AND action = %s AND details->>'task_id' = %s
+          AND details->>'source' = %s AND details->'status' IS NOT NULL AND NOT is_deleted
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        (case_id, audit.CASE_DEADLINE_UPDATE, task_id, INTERNAL_OPTION_SOURCE),
+    ).fetchone()
+    if row is not None:
+        return row[0]["status"]["old"], None
+    return "not_applicable", DEFAULT_NOT_APPLICABLE_REASONS[kind]
+
+
 def sync_internal_incident_option(
     conn, case_id: str, enabled: bool, rationale: str | None, actor_id: str
 ) -> dict[str, list[str]]:
     """Make the external notice tasks follow the internal incident option. Runs on the caller's transaction.
 
     Option on: each external notice task that is not already not applicable becomes not applicable, with the
-    rationale as its reason. A task the option changed keeps that reason in step with the rationale.
-    Option off: each task the option changed goes back to the status it had before. The previous status is read from the
-    audit row that made the change, so nothing is deleted and no extra table is needed. A task that someone changed by
-    hand after the option was set is left as it is.
+    rationale as its reason. A task that is not applicable only by its default reason (the conditional advisory) takes
+    the rationale in place of that reason. A task the option changed keeps that reason in step with the rationale.
+    Option off: each task the option changed goes back to the status and reason it had before. The previous state is
+    read from the audit rows that made the change, so nothing is deleted and no extra table is needed. A task that
+    someone changed by hand after the option was set is left as it is.
     Tasks are never deleted. Every change writes one deadline audit row. Returns the changed task kinds by action.
     """
     rows = conn.execute(
@@ -438,9 +484,16 @@ def sync_internal_incident_option(
                     INTERNAL_OPTION_SOURCE, actor_id,
                 )
                 changed["applied"].append(kind)
+            elif reason == DEFAULT_NOT_APPLICABLE_REASONS.get(kind):
+                _write_task_change(
+                    conn, case_id, task_id, kind, status, "not_applicable", reason, rationale,
+                    INTERNAL_OPTION_SOURCE, actor_id,
+                )
+                changed["applied"].append(kind)
         elif set_by_option and status == "not_applicable":
+            previous_status, previous_reason = _option_previous_state(conn, case_id, task_id, kind)
             _write_task_change(
-                conn, case_id, task_id, kind, status, last["status"]["old"], reason, None,
+                conn, case_id, task_id, kind, status, previous_status, reason, previous_reason,
                 INTERNAL_OPTION_RESTORED_SOURCE, actor_id,
             )
             changed["restored"].append(kind)
@@ -458,16 +511,22 @@ def _write_task_change(
     new_reason: str | None,
     source: str,
     actor_id: str,
+    *,
+    old_due: datetime | None = None,
+    new_due: datetime | None = None,
 ) -> None:
+    """Write one deadline change and its audit row. A new_due that is given also moves the due date."""
     conn.execute(
-        "UPDATE deadline_tasks SET status = %s, not_applicable_reason = %s WHERE id = %s",
-        (new_status, new_reason, task_id),
+        "UPDATE deadline_tasks SET status = %s, not_applicable_reason = %s, due_at = COALESCE(%s, due_at) WHERE id = %s",
+        (new_status, new_reason, new_due, task_id),
     )
     changes: dict[str, Any] = {}
     if old_status != new_status:
         changes["status"] = _change(old_status, new_status)
     if old_reason != new_reason:
         changes["not_applicable_reason"] = _change(_text_marker(old_reason), _text_marker(new_reason))
+    if new_due is not None and new_due != old_due:
+        changes["due_at"] = _change(old_due.isoformat() if old_due else None, new_due.isoformat())
     audit.record(
         conn,
         audit.CASE_DEADLINE_UPDATE,
@@ -476,6 +535,65 @@ def _write_task_change(
         actor_id=actor_id,
         details={"task_id": task_id, "kind": kind, "source": source, **changes},
     )
+
+
+def sync_weekly_update(conn, case_id: str, actor_id: str) -> None:
+    """Keep the weekly_update task in step with the significant risks of the case. Runs on the caller's transaction.
+
+    A significant risk is an impact area recorded as high or critical. While one is open, the weekly update task
+    is open and due 7 elapsed days after the moment the risk was recorded. The machine-readable update record that
+    moves the due date later belongs to another package. When no significant risk is open, the task that this rule
+    opened becomes not applicable with a reason. A task that a person has marked done, or not applicable with a reason
+    of their own, is left as it is.
+    Each change writes one deadline audit row. The row is never deleted and the task is never removed.
+    """
+    significant = conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM impacts WHERE case_id = %s AND NOT is_deleted AND severity = ANY(%s))",
+        (case_id, list(SIGNIFICANT_SEVERITIES)),
+    ).fetchone()[0]
+    row = conn.execute(
+        """
+        SELECT id::text, status, not_applicable_reason, due_at FROM deadline_tasks
+        WHERE case_id = %s AND kind = %s AND NOT is_deleted
+        FOR UPDATE
+        """,
+        (case_id, WEEKLY_UPDATE_KIND),
+    ).fetchone()
+    now = datetime.now(UTC)
+    if significant:
+        if row is None:
+            due = next_weekly_update(now)
+            task_id = conn.execute(
+                "INSERT INTO deadline_tasks (case_id, kind, due_at, status) VALUES (%s, %s, %s, 'open') RETURNING id::text",
+                (case_id, WEEKLY_UPDATE_KIND, due),
+            ).fetchone()[0]
+            audit.record(
+                conn,
+                audit.CASE_DEADLINE_UPDATE,
+                "case",
+                case_id,
+                actor_id=actor_id,
+                details={
+                    "task_id": task_id,
+                    "kind": WEEKLY_UPDATE_KIND,
+                    "source": WEEKLY_SIGNIFICANT_SOURCE,
+                    "status": _change(None, "open"),
+                    "due_at": _change(None, due.isoformat()),
+                },
+            )
+        elif row[1] == "not_applicable" and row[2] == WEEKLY_NOT_SIGNIFICANT_REASON:
+            task_id, _, _, old_due = row
+            due = next_weekly_update(now)
+            _write_task_change(
+                conn, case_id, task_id, WEEKLY_UPDATE_KIND, "not_applicable", "open", row[2], None,
+                WEEKLY_SIGNIFICANT_SOURCE, actor_id, old_due=old_due, new_due=due,
+            )
+    elif row is not None and row[1] == "open":
+        task_id = row[0]
+        _write_task_change(
+            conn, case_id, task_id, WEEKLY_UPDATE_KIND, "open", "not_applicable", None,
+            WEEKLY_NOT_SIGNIFICANT_REASON, WEEKLY_SIGNIFICANT_SOURCE, actor_id,
+        )
 
 
 

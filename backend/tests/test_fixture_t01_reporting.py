@@ -307,6 +307,22 @@ def test_turning_the_internal_option_off_restores_the_previous_states(triage_peo
 
 
 @requires_database
+def test_turning_the_option_off_after_a_rationale_change_restores_the_states(triage_people):
+    reporter, triager = triage_people["reporter"], triage_people["triager"]
+    case_id = new_case(reporter)
+    url = f"/api/v1/cases/{case_id}/classification"
+    before = task_states(triager, case_id)
+    assert triager.put(url, json=internal_option_body(0)).status_code == 200
+    # The last audit row of each marked task now only changes the reason, not the status.
+    assert triager.put(url, json=internal_option_body(1, rationale="a different rationale")).status_code == 200
+
+    restored = triager.put(url, json=internal_option_body(2, rationale=None))
+
+    assert restored.status_code == 200, restored.text
+    assert task_states(triager, case_id) == before
+
+
+@requires_database
 def test_a_task_changed_by_hand_while_the_option_is_on_is_not_restored(triage_people):
     reporter, triager = triage_people["reporter"], triage_people["triager"]
     case_id = new_case(reporter)

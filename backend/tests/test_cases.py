@@ -6,7 +6,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from safe_kit import api, auth
-from safe_kit.cases import CALENDAR_VERSION, Case, calendar_for, create_case, deadline_tasks_for
+from safe_kit.cases import (
+    BROADER_ADVISORY_CONDITION_REASON,
+    CALENDAR_VERSION,
+    Case,
+    calendar_for,
+    create_case,
+    deadline_tasks_for,
+)
 from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS
 from safe_kit.system_timezone import TimezoneNotConfigured
 from safe_kit.users import User
@@ -50,7 +57,16 @@ def test_deadline_tasks_come_from_deadlines_for():
     assert tasks["affected_customers"].due_at == t0 + timedelta(hours=72)
     # Four business days from Friday 09:00 local is Thursday 09:00 local.
     assert tasks["preliminary_safe_report"].due_at == datetime(2026, 11, 12, 6, 0, tzinfo=UTC)
-    assert all(task.status == "open" for task in tasks.values())
+    # The conditional 14-day advisory starts not applicable, with a reason. The other tasks start open.
+    assert tasks["broader_advisory"].status == "not_applicable"
+    assert tasks["broader_advisory"].not_applicable_reason == BROADER_ADVISORY_CONDITION_REASON
+    assert {kind for kind, task in tasks.items() if task.status == "open"} == {
+        "affected_customers",
+        "preliminary_safe_report",
+        "preliminary_public_report",
+        "remediation_status",
+    }
+    assert all(task.not_applicable_reason is None for kind, task in tasks.items() if kind != "broader_advisory")
 
 
 def test_weekly_update_is_not_created_with_the_case():
@@ -209,7 +225,11 @@ def test_case_records_the_system_timezone_in_effect_and_computes_deadlines_in_it
     assert tasks["preliminary_safe_report"].due_at == datetime(2026, 11, 11, 20, 0, tzinfo=UTC)
     audit = timezone_db.audit_rows[-1]
     assert audit["action"] == "case.create"
-    assert audit["details"] == {"calendar_version": "provisional-1", "calendar_timezone": "Pacific/Auckland"}
+    assert audit["details"] == {
+        "calendar_version": "provisional-1",
+        "calendar_timezone": "Pacific/Auckland",
+        "not_applicable": ["broader_advisory"],
+    }
 
 
 def test_later_timezone_change_does_not_move_an_existing_case(timezone_db):
