@@ -8,10 +8,12 @@ migrations applied (see tests/test_database.py). They create rows and never remo
 import json
 import os
 import uuid
+from pathlib import Path
 
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
+from jsonschema import Draft202012Validator
 
 from safe_kit import api, auth, catalog_api, users
 from safe_kit.catalog import (
@@ -570,3 +572,88 @@ def test_a_repeated_entry_post_with_the_same_key_writes_once_and_a_changed_body_
     )
     assert changed.status_code == 409
     assert changed.json()["detail"] == {"status": "idempotency_key_reused"}
+
+
+# --- T11-A over HTTP: the export endpoint ----------------------------------------------------------------------------
+
+
+def export_document_errors(document) -> list[str]:
+    schema = json.loads(
+        (Path(__file__).resolve().parents[2] / "schemas" / "catalog-export.v0.json").read_text(encoding="utf-8")
+    )
+    return [error.message for error in Draft202012Validator(schema).iter_errors(document)]
+
+
+@requires_database
+def test_the_export_endpoint_hides_hidden_links_and_digests_from_every_reader():
+    reviewer = new_user("reviewer")
+    auditor = new_user("auditor")
+    run_id = run(recommendation(reviewer), reviewer)
+    hidden = entry(reviewer, run_id=run_id, reference=HIDDEN_LINK)
+    other = entry(reviewer, reference=OTHER_HIDDEN_LINK)
+    with connect() as conn:
+        stored = conn.execute(
+            "SELECT count(*) FROM catalog_restricted_references WHERE digest = %s",
+            (digest_of(HIDDEN_LINK),),
+        ).fetchone()[0]
+    assert stored >= 1  # the hidden reference is in the database, so a leak would be possible
+
+    response = as_user(auditor).get("/api/v1/catalog/export")
+    reviewer_response = as_user(reviewer).get("/api/v1/catalog/export")
+
+    assert response.status_code == 200
+    for secret in (
+        HIDDEN_LINK,
+        OTHER_HIDDEN_LINK,
+        digest_of(HIDDEN_LINK),
+        digest_of(OTHER_HIDDEN_LINK),
+    ):
+        assert secret not in response.text
+    document = response.json()
+    assert export_document_errors(document) == []
+    ids = {item["id"] for item in document["catalog_export"]["entries"]}
+    assert {hidden.id, other.id} <= ids
+    assert reviewer_response.content == response.content  # the same document for every reader
+    assert reviewer not in response.text  # internal identifiers stay internal
+
+
+@requires_database
+def test_the_export_repeats_exactly_and_shows_the_stored_current_version():
+    reviewer = new_user("reviewer")
+    auditor = new_user("auditor")
+    created = entry(reviewer)
+    changed = change_entry(
+        created.id,
+        1,
+        "correction",
+        {
+            "title": unique("Corrected"),
+            "body": "Corrected body",
+            "reason": "wording",
+            "reference": None,
+        },
+        reviewer,
+    )
+    assert changed.outcome is CatalogOutcome.OK
+
+    first = as_user(auditor).get("/api/v1/catalog/export")
+    second = as_user(auditor).get("/api/v1/catalog/export")
+
+    assert first.status_code == 200
+    assert first.content == second.content
+    assert export_document_errors(first.json()) == []
+    [exported] = [
+        item for item in first.json()["catalog_export"]["entries"] if item["id"] == created.id
+    ]
+    stored = get_entry(created.id, with_restricted=False)
+    assert exported["version"] == stored.current.version == 2
+    assert exported["status"] == stored.current.status == "active"
+    assert [item["version"] for item in exported["versions"]] == [1, 2]
+    assert exported["versions"][0]["title"] == created.current.title  # the earlier version is kept as it was
+    assert exported["versions"][-1]["title"] == changed.value.current.title
+
+
+@requires_database
+def test_the_export_endpoint_refuses_a_role_without_catalog_read():
+    reporter = new_user("reporter")
+    assert as_user(reporter).get("/api/v1/catalog/export").status_code == 403

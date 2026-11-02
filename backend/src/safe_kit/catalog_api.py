@@ -40,6 +40,7 @@ from safe_kit.catalog import (
     create_entry,
     get_entry,
     list_entries,
+    public_export,
     record_verification_run,
 )
 from safe_kit.idempotency import KeyScope, fingerprint, valid_key
@@ -47,6 +48,7 @@ from safe_kit.users import User
 
 RECOMMENDATIONS_ROUTE = "/api/v1/catalog/recommendations"
 RUNS_ROUTE = "/api/v1/catalog/recommendations/{recommendation_id}/verification-runs"
+EXPORT_ROUTE = "/api/v1/catalog/export"
 ENTRIES_ROUTE = "/api/v1/catalog/entries"
 ENTRY_ROUTE = "/api/v1/catalog/entries/{entry_id}"
 VERSIONS_ROUTE = "/api/v1/catalog/entries/{entry_id}/versions"
@@ -422,6 +424,15 @@ def list_catalog_entries(
         ],
         "next_cursor": next_cursor,
     }
+
+
+@catalog_router.get(EXPORT_ROUTE)
+def export_catalog(
+    actor: User = Depends(require_permission("catalog:read")),
+) -> dict[str, Any]:
+    """The public export (schemas/catalog-export.v0.json). It is the same for every caller with catalog:read: it holds
+    no restricted reference and no digest, whatever the caller may read."""
+    return public_export()
 
 
 @catalog_router.get(ENTRY_ROUTE)

@@ -39,6 +39,7 @@ from safe_kit.idempotency import (
     store,
 )
 
+CATALOG_EXPORT_SCHEMA_VERSION = "0.1.0"
 TITLE_LIMIT = 200
 BODY_LIMIT = 4000
 REASON_LIMIT = 1000
@@ -707,7 +708,8 @@ def public_export() -> dict[str, Any]:
     """A public derivative of the catalog: every entry with its public history. Never a restricted reference or digest.
 
     It reads the public columns only (see _load_versions with with_restricted=False), and it omits the internal fields:
-    the creator and checker identifiers, the evidence path, the recommendation, and the run identifier.
+    the creator and checker identifiers, the evidence path, the recommendation, and the run identifier. It carries no
+    export time, so two calls over an unchanged catalog give the same document (schemas/catalog-export.v0.json).
     """
     with connect() as conn:
         entry_ids = [
@@ -734,7 +736,10 @@ def public_export() -> dict[str, Any]:
                 "versions": [_public_version(version) for version in entry_versions],
             }
         )
-    return {"catalog_export": {"entries": entries}}
+    return {
+        "catalog_export_schema_version": CATALOG_EXPORT_SCHEMA_VERSION,
+        "catalog_export": {"entries": entries},
+    }
 
 
 def _public_version(version: Version) -> dict[str, Any]:

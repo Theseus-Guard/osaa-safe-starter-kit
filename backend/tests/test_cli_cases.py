@@ -1917,3 +1917,169 @@ def test_review_appeal_409_says_no_reviewer_is_eligible(api, capsys):
     code, out, err = run(capsys, "case", "review", "appeal", ROUND_ID, "--grounds", "Wrong", "--username", "alice")
     assert code != 0
     assert "no reviewer is eligible for this round" in err
+
+
+# --- import dry run ---
+
+DRY_RUN_PATH = "/api/v1/cases/import/dry-run"
+
+
+def dry_run_summary(**counts) -> dict:
+    base = {
+        "written": False,
+        "import_format_version": {"supported": 1, "received": 1, "accepted": True},
+        "record_schema_version": "0.1.0",
+        "file_errors": [],
+        "would_import": 0,
+        "duplicate": 0,
+        "conflict": 0,
+        "rejected": 0,
+        "results": [],
+    }
+    base.update(counts)
+    return base
+
+
+def test_import_dry_run_posts_to_the_dry_run_route_and_prints_the_report(api, capsys, tmp_path):
+    summary = dry_run_summary(
+        would_import=1,
+        results=[{"index": 0, "status": "would_import", "source_case_id": None, "case_id": None,
+                  "reference": None, "title": "Phishing campaign", "awareness_time": "2026-10-30T09:00:00+00:00",
+                  "errors": []}],
+    )
+    api.route("POST", DRY_RUN_PATH, body=summary)
+    path = write_file(tmp_path, json.dumps(IMPORT_FILE).encode("utf-8"))
+
+    code, out, err = run(capsys, "case", "import", path, "--username", "alice", "--dry-run")
+
+    assert code == 0
+    assert "Dry run finished: 1 would be imported, 0 duplicate, 0 conflict, 0 rejected. Nothing was written." in out
+    assert 'records[0]: would be imported as "Phishing campaign"' in out
+    assert api.paths() == [("POST", "/api/v1/auth/token"), ("POST", DRY_RUN_PATH), ("POST", "/api/v1/auth/logout")]
+    assert api.calls[1]["json"] == IMPORT_FILE
+    assert not any(name.lower() == "idempotency-key" for name in api.calls[1]["headers"])
+    assert err == ""
+
+
+def test_import_dry_run_json_prints_the_api_body_exactly(api, capsys, tmp_path):
+    summary = dry_run_summary(duplicate=1)
+    api.route("POST", DRY_RUN_PATH, body=summary)
+    path = write_file(tmp_path, json.dumps(IMPORT_FILE).encode("utf-8"))
+
+    code, out, err = run(capsys, "case", "import", path, "--username", "alice", "--dry-run", "--json")
+
+    assert code == 0
+    assert out == compact(summary).decode("utf-8") + "\n"
+
+
+def test_import_dry_run_exits_1_when_a_record_would_be_rejected(api, capsys, tmp_path):
+    api.route(
+        "POST",
+        DRY_RUN_PATH,
+        body=dry_run_summary(
+            rejected=1,
+            results=[{"index": 0, "status": "rejected", "source_case_id": None, "case_id": None, "reference": None,
+                      "title": None, "awareness_time": None,
+                      "errors": ["/record_schema_version: '0.2.0' was expected"]}],
+        ),
+    )
+    path = write_file(tmp_path, json.dumps(IMPORT_FILE).encode("utf-8"))
+
+    code, out, err = run(capsys, "case", "import", path, "--username", "alice", "--dry-run")
+
+    assert code == 1
+    assert "records[0]: rejected, nothing written" in out
+    assert "/record_schema_version: '0.2.0' was expected" in out
+    assert "1 record(s) would not be stored" in err
+    assert api.paths()[-1] == ("POST", "/api/v1/auth/logout")
+
+
+def test_import_dry_run_exits_1_when_the_file_is_not_accepted(api, capsys, tmp_path):
+    api.route(
+        "POST",
+        DRY_RUN_PATH,
+        body=dry_run_summary(
+            file_errors=["unsupported import_format_version; this version reads 1"],
+            import_format_version={"supported": 1, "received": 9, "accepted": False},
+        ),
+    )
+    path = write_file(tmp_path, json.dumps(IMPORT_FILE).encode("utf-8"))
+
+    code, out, err = run(capsys, "case", "import", path, "--username", "alice", "--dry-run")
+
+    assert code == 1
+    assert "file: unsupported import_format_version; this version reads 1" in out
+    assert "the import file is not accepted" in err
+
+
+def test_import_dry_run_with_only_duplicates_exits_0(api, capsys, tmp_path):
+    api.route("POST", DRY_RUN_PATH, body=dry_run_summary(duplicate=1))
+    path = write_file(tmp_path, json.dumps(IMPORT_FILE).encode("utf-8"))
+
+    code, out, err = run(capsys, "case", "import", path, "--username", "alice", "--dry-run")
+
+    assert code == 0
+    assert "1 duplicate" in out
+
+
+def test_import_dry_run_refuses_an_idempotency_key_before_any_request(api, capsys, tmp_path):
+    path = write_file(tmp_path, json.dumps(IMPORT_FILE).encode("utf-8"))
+
+    code, out, err = run(
+        capsys, "case", "import", path, "--username", "alice", "--dry-run", "--idempotency-key", "k-1"
+    )
+
+    assert code == 2
+    assert api.calls == []
+    assert "does not apply to --dry-run" in err
+
+
+# --- catalog export ---
+
+CATALOG_EXPORT_PATH = "/api/v1/catalog/export"
+CATALOG_BODY = {"catalog_export_schema_version": "0.1.0", "catalog_export": {"entries": []}}
+
+
+def test_catalog_export_prints_the_api_body_with_a_session(api, capsys):
+    api.route("GET", CATALOG_EXPORT_PATH, body=CATALOG_BODY)
+
+    code, out, err = run(capsys, "catalog", "export", "--username", "alice")
+
+    assert code == 0
+    assert out == compact(CATALOG_BODY).decode("utf-8") + "\n"
+    assert api.paths() == [("POST", "/api/v1/auth/token"), ("GET", CATALOG_EXPORT_PATH), ("POST", "/api/v1/auth/logout")]
+    assert api.calls[1]["headers"]["Authorization"] == f"Bearer {ACCESS}"
+    assert err == ""
+
+
+def test_catalog_export_out_writes_the_same_json_to_the_file(api, capsys, tmp_path):
+    api.route("GET", CATALOG_EXPORT_PATH, body=CATALOG_BODY)
+    target = tmp_path / "catalog-export.json"
+
+    code, out, err = run(capsys, "catalog", "export", "--username", "alice", "--out", str(target))
+
+    assert code == 0
+    assert out == ""
+    assert target.read_bytes() == compact(CATALOG_BODY) + b"\n"
+    assert api.paths()[-1] == ("POST", "/api/v1/auth/logout")
+
+
+def test_catalog_export_refused_for_a_role_without_catalog_read_is_a_failed_command(api, capsys, tmp_path):
+    api.route("GET", CATALOG_EXPORT_PATH, status=403, body={"detail": "forbidden"})
+
+    code, out, err = run(capsys, "catalog", "export", "--username", "alice")
+
+    assert code == 1
+    assert out == ""
+    assert err.startswith("error:")
+    assert api.paths()[-1] == ("POST", "/api/v1/auth/logout")
+
+
+def test_catalog_export_to_an_unwritable_path_is_a_usage_error(api, capsys, tmp_path):
+    api.route("GET", CATALOG_EXPORT_PATH, body=CATALOG_BODY)
+    target = tmp_path / "missing-directory" / "catalog-export.json"
+
+    code, out, err = run(capsys, "catalog", "export", "--username", "alice", "--out", str(target))
+
+    assert code == 2
+    assert "cannot write" in err

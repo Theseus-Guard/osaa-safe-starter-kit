@@ -33,11 +33,16 @@ from safe_kit.auth import (
 )
 from safe_kit.audit import record_login_failure
 from safe_kit.case_import import (
+    IMPORT_FORMAT_VERSION,
     MAX_IMPORT_BYTES,
+    RECORD_SCHEMA_VERSION,
+    DryRunResult,
     ImportFileError,
     RecordResult,
     import_records,
     parse_import_file,
+    preview_records,
+    received_format_version,
 )
 from safe_kit.cases import (
     Assignment,
@@ -812,6 +817,38 @@ class CaseImportResponse(BaseModel):
     results: list[CaseImportRecordResult]
 
 
+class CaseImportDryRunRecordResult(BaseModel):
+    # index is the position of the record in the file's records array. Nothing is stored for any record.
+    index: int
+    status: Literal["would_import", "duplicate", "conflict", "rejected"]
+    source_case_id: str | None
+    case_id: str | None
+    reference: str | None
+    title: str | None
+    awareness_time: str | None
+    errors: list[str]
+
+
+class ImportFormatCheck(BaseModel):
+    supported: int
+    # The value the file declares, or null when it declares none that this report can show.
+    received: int | str | None
+    accepted: bool
+
+
+class CaseImportDryRunResponse(BaseModel):
+    written: Literal[False] = False
+    import_format_version: ImportFormatCheck
+    record_schema_version: str
+    # File-level problems (JSON, envelope, format version). When this is not empty, no record was checked.
+    file_errors: list[str]
+    would_import: int
+    duplicate: int
+    conflict: int
+    rejected: int
+    results: list[CaseImportDryRunRecordResult]
+
+
 # Any role that may open a case: the reporter (own), the triager (all), or an assignee.
 CASE_READ_PERMISSIONS = ("cases:read_own", "cases:read_all", "cases:read_assigned")
 CASE_NOT_FOUND = HTTPException(status_code=404, detail="case not found")
@@ -1047,6 +1084,60 @@ async def import_cases(
     except TimezoneNotConfigured:
         raise HTTPException(status_code=409, detail="system timezone is not configured")
     return _import_response(results)
+
+
+def _dry_run_response(
+    results: list[DryRunResult], received: int | str | None, accepted: bool, file_errors: list[str]
+) -> CaseImportDryRunResponse:
+    counts = {status: 0 for status in ("would_import", "duplicate", "conflict", "rejected")}
+    for result in results:
+        counts[result.status] += 1
+    return CaseImportDryRunResponse(
+        import_format_version=ImportFormatCheck(
+            supported=IMPORT_FORMAT_VERSION, received=received, accepted=accepted
+        ),
+        record_schema_version=RECORD_SCHEMA_VERSION,
+        file_errors=file_errors,
+        **counts,
+        results=[
+            CaseImportDryRunRecordResult(
+                index=result.index,
+                status=result.status,
+                source_case_id=result.source_case_id,
+                case_id=result.case_id,
+                reference=result.reference,
+                title=result.title,
+                awareness_time=result.awareness_time.isoformat() if result.awareness_time else None,
+                errors=list(result.errors),
+            )
+            for result in results
+        ],
+    )
+
+
+@app.post("/api/v1/cases/import/dry-run", response_model=CaseImportDryRunResponse)
+async def dry_run_case_import(
+    request: Request,
+    actor: User = Depends(require_permission("cases:submit")),
+) -> CaseImportDryRunResponse:
+    """Check an import file and report what the commit route (POST /api/v1/cases/import) would do. Nothing is written.
+
+    The validation and the duplicate and conflict rules are those of the commit route. The one difference is the answer
+    to a file-level problem: the commit refuses it with 422, while the dry run answers 200 with the problem in
+    file_errors and the declared format version in import_format_version, so the caller sees the whole report.
+    """
+    body = await _read_import_body(request)
+    received = received_format_version(body)
+    accepted = type(received) is int and received == IMPORT_FORMAT_VERSION
+    try:
+        records = parse_import_file(body)
+    except ImportFileError as error:
+        return _dry_run_response([], received, accepted, [str(error)])
+    try:
+        results = await run_in_threadpool(preview_records, records, _scope(actor))
+    except TimezoneNotConfigured:
+        raise HTTPException(status_code=409, detail="system timezone is not configured")
+    return _dry_run_response(results, received, accepted, [])
 
 
 @app.get("/api/v1/cases", response_model=CasePage)
