@@ -388,6 +388,33 @@ def test_a_timeout_on_a_repeat_is_a_new_unknown_record_not_a_second_delivery(dwo
     assert revision_states(repeat.json()["id"]) == ["sent", "receipt_unknown"]
 
 
+@requires_database
+def test_a_notice_without_a_receipt_is_never_delivered_by_time_or_by_reading(dworld):
+    version, notice = recorded_notice(dworld)
+    for _ in range(2):
+        listed = read_list(dworld, "approver", version["id"]).json()["items"]
+        assert [(item["id"], item["state"], item["received_at"]) for item in listed] == [(notice["id"], "sent", None)]
+    assert revision_states(notice["id"]) == ["sent"]
+    assert read_one(dworld, "approver", version["id"], notice["id"]).json()["state"] == "sent"
+
+
+def test_the_notice_and_disclosure_modules_hold_no_sender_and_no_retry_queue():
+    """Nothing in the notice path sends or resends: no HTTP or mail client, no socket, and no job queue that a worker
+    could replay. The modules are read as text, so the check does not depend on what is installed."""
+    from pathlib import Path
+
+    import safe_kit
+
+    package = Path(safe_kit.__file__).parent
+    forbidden = ("import httpx", "import requests", "import smtplib", "import socket", "import urllib", "from urllib",
+                 "import aiohttp", "from safe_kit import outbox", "from safe_kit.outbox", "import outbox")
+    for name in ("external_notices.py", "external_notices_api.py", "disclosure.py", "disclosure_api.py"):
+        source = (package / name).read_text(encoding="utf-8")
+        for marker in forbidden:
+            assert marker not in source, f"{name} must not contain {marker!r}"
+        assert "enqueue(" not in source, f"{name} must not queue a job"
+
+
 # --- manual fallback, cancel and the permissions -----------------------------------------------------------------------
 
 

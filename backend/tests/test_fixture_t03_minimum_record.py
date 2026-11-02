@@ -143,6 +143,39 @@ def test_a_complete_record_has_no_gap_and_shows_the_version_containment_gap_and_
     assert classification["next_update_due_at"] == (NOW + timedelta(days=7)).isoformat()
 
 
+@pytest.mark.parametrize("area", IMPACT_AREAS)
+def test_a_single_impact_area_not_assessed_is_the_only_gap_for_that_area(area):
+    impacts = [
+        ImpactAssessment(area=other, assessed=other != area, severity="low", scope="scope", updated_at=NOW)
+        for other in IMPACT_AREAS
+    ]
+    report = build_preliminary_report(case_now(), complete_record(), one_event(), impacts, [], True, NOW)
+
+    assert report["complete"] is False
+    assert report["missing_fields"] == [{"field": f"impacts.{area}", "state": "missing"}]
+    assert report["impacts"][IMPACT_AREAS.index(area)]["assessed"] is False
+
+
+@pytest.mark.parametrize("area", IMPACT_AREAS)
+def test_an_impact_area_marked_unknown_is_listed_as_unknown_and_the_report_is_still_built(area):
+    impacts = [
+        ImpactAssessment(
+            area=other,
+            assessed=True,
+            severity="unknown" if other == area else "low",
+            scope="to research" if other == area else "scope",
+            updated_at=NOW,
+        )
+        for other in IMPACT_AREAS
+    ]
+    report = build_preliminary_report(case_now(), complete_record(), one_event(), impacts, [], True, NOW)
+
+    assert report["complete"] is False
+    assert report["missing_fields"] == [{"field": f"impacts.{area}", "state": "unknown"}]
+    assert len(report["impacts"]) == len(IMPACT_AREAS)
+    assert report["classification"]["containment"] == "contained"
+
+
 def test_a_missing_contact_a_missing_event_and_an_unknown_impact_are_listed_with_their_own_state():
     impacts = recorded_impacts()
     impacts[1] = ImpactAssessment(area="severity", assessed=True, severity="unknown", scope="to research", updated_at=NOW)
