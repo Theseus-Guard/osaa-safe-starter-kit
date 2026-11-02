@@ -5,6 +5,7 @@ import getpass
 import json
 import mimetypes
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -1670,6 +1671,182 @@ def _report_show(base_url: str, args: argparse.Namespace) -> None:
     _with_session(base_url, args, action)
 
 
+# --- disclosure packages (safe_kit.disclosure_api) ----------------------------------------------------------------
+
+DISCLOSURE_TEMPLATES = ("confidential_rapid_alert", "de_identified_member_advisory", "redacted_public_safety_report")
+DISCLOSURE_AUDIENCES = ("RED", "AMBER", "AMBER+STRICT", "GREEN", "CLEAR")
+DISCLOSURE_DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+DISCLOSURE_LIST_MESSAGES = {404: "case not found, or the case is not visible to your account"}
+DISCLOSURE_VERSION_MESSAGES = {404: "case or disclosure version not found, or the case is not visible to your account"}
+DISCLOSURE_APPROVAL_TEXT = {
+    "approved": "approved for this version",
+    "not_approved": "not approved yet",
+    "revoked_by_change": "revoked by a later version",
+}
+# The text for each status the API gives a refused disclosure write. Unknown statuses keep the API's HTTP message.
+DISCLOSURE_STATUS_TEXT = {
+    "case_closed": "the case is closed, so its disclosure packages cannot change",
+    "evidence_not_eligible": (
+        "one or more evidence items cannot be used: each must be a redacted derivative of this case that is available "
+        "and in your TLP audience. Originals cannot be listed"
+    ),
+    "audience_wider_than_evidence": "the TLP audience is wider than one of the evidence items allows. Choose a narrower audience",
+    "no_change": "the package content did not change, so no new version was saved",
+    "not_latest_version": "a newer version of this package exists, so only its latest version can be approved",
+    "already_approved": "this version already has an approval",
+    "preparer_is_approver": "you prepared this version, so another approver must approve it",
+    "approval_binding_mismatch": (
+        "the recipient, purpose or digest does not match the version. Copy them exactly from 'case disclosure show'"
+    ),
+    "evidence_not_visible": "one or more items are outside your TLP audience, so you cannot approve this version",
+    "digest_mismatch": "the stored content does not match its digest, so nothing was approved. Report this to an administrator",
+    "idempotency_key_reused": "this Idempotency-Key was used with another request. Run again without --idempotency-key",
+}
+
+
+def _disclosure_failure(error: RequestFailed) -> RequestFailed:
+    """Replace the message of a refused disclosure write with the text for its status, when the API names one."""
+    detail = error.detail
+    status = detail.get("status") if isinstance(detail, dict) else None
+    if status == "version_conflict":
+        text = (
+            "the package has a newer version, so nothing was saved. Run 'case disclosure show CASE_ID' to read the latest "
+            f"version, then run this command again with --expected-version {detail.get('current_version')}"
+        )
+    else:
+        text = DISCLOSURE_STATUS_TEXT.get(status or "")
+    if text is None:
+        return error
+    return RequestFailed(text, status=error.status, detail=detail)
+
+
+def _disclosure_write(base_url: str, args: argparse.Namespace, method: str, path: str, payload: dict, render) -> None:
+    """One disclosure write in its own login session, with an Idempotency-Key. --json prints the API body."""
+    headers = {"Idempotency-Key": args.idempotency_key or str(uuid.uuid4())}
+
+    def action(base: str, token: str) -> None:
+        try:
+            raw = _call(base, method, path, token=token, payload=payload, extra_headers=headers)
+        except RequestFailed as error:
+            raise _disclosure_failure(error) from None
+        if args.json:
+            _print_json(raw)
+        else:
+            render(_json_object(raw))
+
+    _with_session(base_url, args, action)
+
+
+def _print_preview(preview: dict) -> None:
+    template = preview["template"]
+    print(f"Disclosure version {preview['version']}, {template['title']}:")
+    _print_field("Version ID", preview["version_id"])
+    _print_field("Package ID", preview["package_id"])
+    _print_field("TLP audience", preview["tlp_audience"])
+    _print_field("Recipient", preview["recipient"])
+    _print_field("Purpose", preview["purpose"])
+    _print_field("Digest", preview["digest"])
+    _print_field("Approval", DISCLOSURE_APPROVAL_TEXT[preview["approval_state"]])
+    print("  Sections:")
+    for section in template["sections"]:
+        print(f"    {section['title']}: {section['contains']}")
+    print("  Evidence items (derivatives only):")
+    if not preview["evidence"]:
+        print("    none")
+    for item in preview["evidence"]:
+        if item["withheld"]:
+            print("    withheld: outside your TLP audience")
+        else:
+            print(
+                f"    {item['evidence_id']}  {item['media_type']}  {item['size_bytes']} bytes  "
+                f"TLP {item['tlp_label']}  {item['removed_lines']} line(s) removed"
+            )
+    print(preview["notice"])
+
+
+def _render_disclosure_list(raw: bytes, _full_view: bool) -> None:
+    items = _json_object(raw)["items"]
+    if not items:
+        print("No disclosure package version exists for this case.")
+        return
+    for item in items:
+        print(
+            f"  {item['id']}  package {item['package_id']}  version {item['version']}  {item['template']}  "
+            f"TLP {item['tlp_audience']}  {DISCLOSURE_APPROVAL_TEXT[item['approval_state']]}"
+        )
+
+
+def _render_disclosure_created(version: dict) -> None:
+    print("Disclosure version saved. It has no approval yet: an approver must approve this exact version before it can be sent.")
+    _print_field("Version ID", version["id"])
+    _print_field("Package ID", version["package_id"])
+    _print_field("Version", str(version["version"]))
+    _print_field("Digest", version["digest"])
+
+
+def _render_disclosure_approved(version: dict) -> None:
+    approval = version["approval"]
+    print("Approval recorded. It covers this version and its digest only; a later version needs its own approval.")
+    _print_field("Version ID", version["id"])
+    _print_field("Digest", approval["digest"])
+    _print_field("Approved by", approval["approved_by"])
+    _print_field("Approved (UTC)", approval["approved_at"])
+
+
+def _disclosure_create(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+    evidence_ids = [_uuid_arg(text, "--evidence") for text in args.evidence]
+    if len(evidence_ids) > 50:
+        raise UsageError("--evidence can be given at most 50 times")
+    if (args.package_id is None) != (args.expected_version is None):
+        raise UsageError(
+            "--package-id and --expected-version go together: give both to add a version to a package, or neither for a new one"
+        )
+    if args.expected_version is not None and args.expected_version < 1:
+        raise UsageError("--expected-version must be 1 or more. Read it with: case disclosure show CASE_ID")
+    payload = {
+        "package_id": _uuid_arg(args.package_id, "--package-id") if args.package_id else None,
+        "expected_version": args.expected_version,
+        "template": args.template,
+        "tlp_audience": args.tlp_audience,
+        "recipient": args.recipient,
+        "purpose": args.purpose,
+        "evidence_ids": evidence_ids,
+    }
+    _disclosure_write(base_url, args, "POST", f"/api/v1/cases/{case_id}/disclosures", payload, _render_disclosure_created)
+
+
+def _disclosure_show(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+    if args.version_id is None:
+        _case_read(base_url, args, f"/api/v1/cases/{case_id}/disclosures", DISCLOSURE_LIST_MESSAGES, _render_disclosure_list)
+        return
+    version_id = _uuid_arg(args.version_id, "VERSION_ID")
+    _case_read(
+        base_url,
+        args,
+        f"/api/v1/cases/{case_id}/disclosures/{version_id}/preview",
+        DISCLOSURE_VERSION_MESSAGES,
+        lambda raw, _full_view: _print_preview(_json_object(raw)),
+    )
+
+
+def _disclosure_approve(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+    version_id = _uuid_arg(args.version_id, "VERSION_ID")
+    if not DISCLOSURE_DIGEST_PATTERN.match(args.digest):
+        raise UsageError("--digest must be the 64-character digest shown by 'case disclosure show CASE_ID VERSION_ID'")
+    payload = {"recipient": args.recipient, "purpose": args.purpose, "digest": args.digest}
+    _disclosure_write(
+        base_url,
+        args,
+        "POST",
+        f"/api/v1/cases/{case_id}/disclosures/{version_id}/approvals",
+        payload,
+        _render_disclosure_approved,
+    )
+
+
 def _add_idempotency_option(parser: argparse.ArgumentParser) -> None:
     """--idempotency-key for a write. A new run gets a new key; pass the key of an earlier run to retry it safely."""
     parser.add_argument(
@@ -1827,6 +2004,61 @@ def _add_case_update_commands(case_commands) -> None:
     link_remove.add_argument("linked_case_id", metavar="LINKED_CASE_ID", help="Case ID (UUID) of the linked case")
     _add_auth_options(link_remove, json_output=False)
     link_remove.set_defaults(handler=_case_link_remove)
+
+    disclosure = case_commands.add_parser(
+        "disclosure",
+        help="Create, show and approve disclosure packages: redacted derivatives for one recipient and purpose",
+    )
+    disclosure_commands = disclosure.add_subparsers(dest="disclosure_command", required=True)
+    disclosure_create = disclosure_commands.add_parser(
+        "create", help="Save a disclosure version: a new package, or the next version of one"
+    )
+    disclosure_create.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    disclosure_create.add_argument("--template", required=True, choices=DISCLOSURE_TEMPLATES, help="Template of the package")
+    disclosure_create.add_argument(
+        "--tlp-audience", required=True, choices=DISCLOSURE_AUDIENCES, help="TLP audience of the package"
+    )
+    disclosure_create.add_argument("--recipient", required=True, help="Recipient, up to 200 characters")
+    disclosure_create.add_argument("--purpose", required=True, help="Purpose, up to 500 characters")
+    disclosure_create.add_argument(
+        "--evidence",
+        action="append",
+        required=True,
+        metavar="EVIDENCE_ID",
+        help="Redacted derivative evidence item (UUID). Repeat for each item, up to 50 in all",
+    )
+    disclosure_create.add_argument("--package-id", metavar="PACKAGE_ID", help="Add a version to this package (UUID)")
+    disclosure_create.add_argument(
+        "--expected-version",
+        type=int,
+        metavar="N",
+        help="The latest version number of the package you read. Required with --package-id",
+    )
+    _add_idempotency_option(disclosure_create)
+    _add_auth_options(disclosure_create)
+    disclosure_create.set_defaults(handler=_disclosure_create)
+    disclosure_show = disclosure_commands.add_parser(
+        "show",
+        help="List the disclosure versions of a case, or show one version with its preview (no evidence content)",
+    )
+    disclosure_show.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    disclosure_show.add_argument(
+        "version_id", metavar="VERSION_ID", nargs="?", help="Version ID (UUID). Without it, the versions are listed"
+    )
+    _add_auth_options(disclosure_show)
+    disclosure_show.set_defaults(handler=_disclosure_show)
+    disclosure_approve = disclosure_commands.add_parser(
+        "approve",
+        help="Approve one version. Give its recipient, purpose and digest exactly as 'case disclosure show' prints them",
+    )
+    disclosure_approve.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    disclosure_approve.add_argument("version_id", metavar="VERSION_ID", help="Version ID (UUID)")
+    disclosure_approve.add_argument("--recipient", required=True, help="The version's recipient")
+    disclosure_approve.add_argument("--purpose", required=True, help="The version's purpose")
+    disclosure_approve.add_argument("--digest", required=True, help="The version's digest (64 hex characters)")
+    _add_idempotency_option(disclosure_approve)
+    _add_auth_options(disclosure_approve)
+    disclosure_approve.set_defaults(handler=_disclosure_approve)
 
     review = case_commands.add_parser(
         "review",

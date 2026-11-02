@@ -8,6 +8,7 @@ import { CaseAwarenessEvents } from "./CaseAwarenessEvents";
 import { CaseClassification } from "./CaseClassification";
 import { CaseClosure } from "./CaseClosure";
 import { CaseDeadlines } from "./CaseDeadlines";
+import { CaseDisclosures } from "./CaseDisclosures";
 import { CaseEvidence } from "./CaseEvidence";
 import { CaseHistory } from "./CaseHistory";
 import { CaseImpacts } from "./CaseImpacts";
@@ -30,7 +31,7 @@ interface Props {
   permissions: readonly string[];
 }
 
-type CaseTab = "overview" | "deadlines" | "evidence" | "reviews" | "links" | "activity";
+type CaseTab = "overview" | "deadlines" | "evidence" | "reviews" | "links" | "disclosures" | "activity";
 
 export function CaseDetailPage({ caseId, permissions }: Props) {
   const abilities = caseAbilities(permissions);
@@ -217,6 +218,21 @@ export function CaseDetailPage({ caseId, permissions }: Props) {
         </>
       ),
     });
+    // The Disclosure tab lists the package versions and their previews. Approval is offered only with disclosures:approve.
+    if (abilities.canReadDisclosures) {
+      tabs.push({
+        id: "disclosures",
+        label: "Disclosure",
+        content: (
+          <CaseDisclosures
+            key={detail.id}
+            caseId={detail.id}
+            closed={closed}
+            canApprove={abilities.canApproveDisclosures}
+          />
+        ),
+      });
+    }
     tabs.push({
       id: "activity",
       label: "Activity",

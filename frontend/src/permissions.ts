@@ -26,6 +26,10 @@ export interface CaseAbilities {
   canReadFullView: boolean;
   // reporter_contact:read. Read the contact the reporter gave. Every read is audited.
   canReadReporterContact: boolean;
+  // disclosures:read. List the disclosure package versions and their previews.
+  canReadDisclosures: boolean;
+  // disclosures:approve. Approve one disclosure version. The backend also requires case visibility.
+  canApproveDisclosures: boolean;
 }
 
 export function hasPermission(permissions: readonly string[], name: string): boolean {
@@ -54,5 +58,7 @@ export function caseAbilities(permissions: readonly string[]): CaseAbilities {
     canWriteRecords: hasPermission(permissions, "cases:triage"),
     canReadFullView: hasPermission(permissions, "cases:read_all"),
     canReadReporterContact: hasPermission(permissions, "reporter_contact:read"),
+    canReadDisclosures: hasPermission(permissions, "disclosures:read"),
+    canApproveDisclosures: hasPermission(permissions, "disclosures:approve"),
   };
 }

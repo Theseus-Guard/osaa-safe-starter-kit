@@ -1229,6 +1229,104 @@ export function getOutboxSummary(): Promise<OutboxSummary> {
   return request<OutboxSummary>("/ops/outbox-summary");
 }
 
+// Disclosure packages (plans/f0/api-draft.md section 2.5). Needs disclosures:read to read and disclosures:approve to approve,
+// and the case must be visible. A version is never changed: a changed package is a new version.
+export type DisclosureApprovalState = "approved" | "not_approved" | "revoked_by_change";
+
+export interface DisclosureEvidence {
+  // False for an item the caller may not see under the TLP rule. Its details are then absent.
+  withheld: boolean;
+  evidence_id?: string;
+  media_type?: string;
+  size_bytes?: number;
+  tlp_label?: string;
+  removed_lines?: number | null;
+}
+
+export interface DisclosureApproval {
+  id: string;
+  recipient: string;
+  purpose: string;
+  digest: string;
+  preparer_id: string;
+  approved_by: string;
+  approved_at: string;
+  separation_rule: string;
+}
+
+export interface DisclosureVersion {
+  id: string;
+  package_id: string;
+  case_id: string;
+  version: number;
+  is_latest: boolean;
+  template: string;
+  tlp_audience: string;
+  recipient: string;
+  purpose: string;
+  digest: string;
+  approval_state: DisclosureApprovalState;
+  approval: DisclosureApproval | null;
+  evidence: DisclosureEvidence[];
+  withheld_count: number;
+  created_by: string;
+  created_at: string;
+}
+
+export interface DisclosureSection {
+  title: string;
+  contains: string;
+}
+
+// The structure of one version. It holds no evidence content, no file name, and no redaction reason.
+export interface DisclosurePreview {
+  version_id: string;
+  package_id: string;
+  case_id: string;
+  version: number;
+  template: { key: string; title: string; sections: DisclosureSection[] };
+  recipient: string;
+  purpose: string;
+  tlp_audience: string;
+  digest: string;
+  approval_state: DisclosureApprovalState;
+  evidence: DisclosureEvidence[];
+  withheld_count: number;
+  notice: string;
+}
+
+export interface DisclosureList {
+  items: DisclosureVersion[];
+}
+
+export interface DisclosureApprovalBody {
+  recipient: string;
+  purpose: string;
+  digest: string;
+}
+
+export function listDisclosures(caseId: string): Promise<DisclosureList> {
+  return request<DisclosureList>(`/cases/${encodeURIComponent(caseId)}/disclosures`);
+}
+
+export function getDisclosurePreview(caseId: string, versionId: string): Promise<DisclosurePreview> {
+  return request<DisclosurePreview>(
+    `/cases/${encodeURIComponent(caseId)}/disclosures/${encodeURIComponent(versionId)}/preview`,
+  );
+}
+
+// The approver confirms the recipient, purpose and digest of the version. The API refuses any other value.
+export function approveDisclosure(
+  caseId: string,
+  versionId: string,
+  body: DisclosureApprovalBody,
+): Promise<DisclosureVersion> {
+  return request<DisclosureVersion>(
+    `/cases/${encodeURIComponent(caseId)}/disclosures/${encodeURIComponent(versionId)}/approvals`,
+    { method: "POST", json: body, headers: idempotencyHeaders() },
+  );
+}
+
 export async function readiness(): Promise<Readiness> {
   const response = await fetch("/api/v1/health/ready", { credentials: "include" });
   if (response.ok) return "ready";
