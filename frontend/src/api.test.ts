@@ -771,3 +771,109 @@ describe("case and evidence endpoints", () => {
     expect(await blob.text()).toBe("example bytes");
   });
 });
+
+describe("start-up session restore", () => {
+  it("loads the session from a valid cookie without refreshing", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, ME));
+
+    await expect(api.restoreSession()).resolves.toEqual(ME);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(urlOf(0)).toBe("/api/v1/auth/me");
+    expect(credentialsOf(0)).toBe("include");
+    expect(headersOf(0).get("Authorization")).toBeNull();
+  });
+
+  it("refreshes once with the CSRF header after a 401, then loads the session", async () => {
+    setCookie("safe_csrf", "csrf-value-5");
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(401, { detail: "token expired" }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(jsonResponse(200, ME));
+
+    await expect(api.restoreSession()).resolves.toEqual(ME);
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(urlOf(1)).toBe("/api/v1/auth/refresh");
+    expect((fetchMock.mock.calls[1][1] as RequestInit).method).toBe("POST");
+    expect((fetchMock.mock.calls[1][1] as RequestInit).body).toBeUndefined();
+    expect(credentialsOf(1)).toBe("include");
+    expect(headersOf(1).get("X-CSRF-Token")).toBe("csrf-value-5");
+    expect(urlOf(2)).toBe("/api/v1/auth/me");
+    expect(credentialsOf(2)).toBe("include");
+  });
+
+  it("resolves to null without a second refresh when the refresh fails", async () => {
+    const listener = vi.fn();
+    api.onSessionEnded(listener);
+    setCookie("safe_csrf", "csrf-value-6");
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(401, { detail: "token expired" }))
+      .mockResolvedValueOnce(jsonResponse(401, { detail: "invalid credentials" }));
+
+    await expect(api.restoreSession()).resolves.toBeNull();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(urlOf(1)).toBe("/api/v1/auth/refresh");
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("resolves to null when the refresh is refused for a missing CSRF header", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(401, { detail: "token expired" }))
+      .mockResolvedValueOnce(jsonResponse(403, { detail: "csrf_token_invalid" }));
+
+    await expect(api.restoreSession()).resolves.toBeNull();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(headersOf(1).get("X-CSRF-Token")).toBeNull();
+  });
+
+  it("resolves to null when /auth/me is still rejected after the refresh", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(401, { detail: "token expired" }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(jsonResponse(401, { detail: "token expired" }));
+
+    await expect(api.restoreSession()).resolves.toBeNull();
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("shares one refresh between concurrent start-up checks", async () => {
+    let refreshed = false;
+    let unauthorized = 0;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url === "/api/v1/auth/refresh") {
+        // Hold the refresh until both start-up checks have seen a 401.
+        await gate;
+        refreshed = true;
+        return new Response(null, { status: 200 });
+      }
+      if (!refreshed) {
+        unauthorized += 1;
+        if (unauthorized === 2) setTimeout(release, 0);
+        return jsonResponse(401, { detail: "token expired" });
+      }
+      return jsonResponse(200, ME);
+    });
+
+    const [first, second] = await Promise.all([api.restoreSession(), api.restoreSession()]);
+
+    expect(first).toEqual(ME);
+    expect(second).toEqual(ME);
+    const refreshes = fetchMock.mock.calls.filter(([url]) => url === "/api/v1/auth/refresh");
+    expect(refreshes).toHaveLength(1);
+  });
+
+  it("returns the forced password change flag so the caller can show the change page", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { ...ME, password_change_required: true }));
+
+    await expect(api.restoreSession()).resolves.toMatchObject({ password_change_required: true });
+  });
+});

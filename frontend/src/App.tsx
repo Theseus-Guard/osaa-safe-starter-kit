@@ -1,19 +1,28 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { changePassword, login, logout, me, Me, onSessionEnded } from "./api";
+import { changePassword, login, logout, me, Me, onSessionEnded, restoreSession } from "./api";
 import { watchIdle } from "./idle";
 import { ChangePassword } from "./screens/ChangePassword";
 import { Home } from "./screens/Home";
 import { Login } from "./screens/Login";
 import { SetupTimezone } from "./screens/SetupTimezone";
 
-type Phase = "anonymous" | "password-change" | "timezone-setup" | "signed-in";
+// "starting" is shown until the start-up check has answered, so the login page does not flash before a valid session loads.
+type Phase = "starting" | "anonymous" | "password-change" | "timezone-setup" | "signed-in";
+
+// The first-login steps come before the dashboard. The forced password change is checked first.
+function phaseFor(current: Me): Phase {
+  if (current.password_change_required) return "password-change";
+  if (current.timezone_setup_required) return "timezone-setup";
+  return "signed-in";
+}
 
 export function App() {
-  const [phase, setPhase] = useState<Phase>("anonymous");
+  const [phase, setPhase] = useState<Phase>("starting");
   const [profile, setProfile] = useState<Me | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [idleWarning, setIdleWarning] = useState(false);
+  const startedRef = useRef(false);
 
   useEffect(() => {
     onSessionEnded(() => {
@@ -21,6 +30,23 @@ export function App() {
       setPhase("anonymous");
       setNotice("Your session has ended. Please log in again.");
     });
+  }, []);
+
+  // A reload loses the in-memory state, but the HttpOnly cookies may still hold a session. Development runs effects
+  // twice (StrictMode), so the check runs once.
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+    restoreSession()
+      .then((current) => {
+        if (current) {
+          setProfile(current);
+          setPhase(phaseFor(current));
+        } else {
+          setPhase("anonymous");
+        }
+      })
+      .catch(() => setPhase("anonymous"));
   }, []);
 
   // Signs the user out after an hour without activity. The server-side session is ended too, through logout().
@@ -46,9 +72,7 @@ export function App() {
     await login(username, password);
     const current = await me();
     setProfile(current);
-    if (current.password_change_required) setPhase("password-change");
-    else if (current.timezone_setup_required) setPhase("timezone-setup");
-    else setPhase("signed-in");
+    setPhase(phaseFor(current));
   }
 
   // Shared by the forced first-login change and the voluntary change: the backend ends all sessions,
@@ -87,6 +111,8 @@ export function App() {
       </>
     );
   }
+
+  if (phase === "starting") return <p className="p-4 text-sm text-muted-foreground">Loading…</p>;
 
   // The login page has its own full-page layout, with its own header and footer.
   if (phase === "anonymous") return <Login notice={notice} onLogin={handleLogin} />;
