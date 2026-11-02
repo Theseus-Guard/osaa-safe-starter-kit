@@ -27,9 +27,11 @@ const NOT_VISIBLE_TEXT = "(not visible to your account)";
 interface Props {
   roundId: string;
   // The caller may declare a conflict or withdraw from the round: reviews:write, an open case, and an open round.
-  // Without it the conflict and recusal forms are not offered. Appeals need only read access, so their form is always
-  // offered.
+  // Without it the conflict and recusal forms are not offered.
   canDeclare: boolean;
+  // The caller may file an appeal. Appeals need a case-read permission, but the disclosure approver is refused them, so
+  // the form is hidden for that role. Defaults to offered; the backend decides.
+  canAppeal?: boolean;
 }
 
 interface Independence {
@@ -40,7 +42,7 @@ interface Independence {
 
 // The conflict, recusal and appeal records of one review round, with the forms to add them. Nothing here is edited:
 // a correction is a new entry, and the lists show every entry, the current one first.
-export function ReviewIndependence({ roundId, canDeclare }: Props) {
+export function ReviewIndependence({ roundId, canDeclare, canAppeal = true }: Props) {
   const [loaded, setLoaded] = useState<Independence | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Bumped after a change so the lists reload from the server.
@@ -75,7 +77,7 @@ export function ReviewIndependence({ roundId, canDeclare }: Props) {
       {loaded !== null && <IndependenceLists data={loaded} />}
       {canDeclare && <ConflictForm roundId={roundId} onSaved={reload} />}
       {canDeclare && <RecusalForm roundId={roundId} onSaved={reload} />}
-      <AppealForm roundId={roundId} onSaved={reload} />
+      {canAppeal && <AppealForm roundId={roundId} onSaved={reload} />}
     </section>
   );
 }

@@ -49,6 +49,7 @@ describe("permissions", () => {
       canWriteEvidence: false,
       canRedactEvidence: false,
       canReview: false,
+      canFileAppeal: true,
       canReadRecords: true,
       canWriteRecords: true,
       canReadFullView: true,
@@ -80,6 +81,38 @@ describe("permissions", () => {
     const preparer = caseAbilities(["disclosures:read", "disclosures:prepare"]);
     expect(preparer.canRecordNotices).toBe(true);
     expect(preparer.canApproveDisclosures).toBe(false);
+  });
+
+  it("lets the disclosure approver read the case it approves, with no deadline change, appeal or contact", () => {
+    // The approver's permissions after migration 0044. The role is passed, as the case page does, so the controls the
+    // backend refuses to this role are hidden too.
+    const permissions = ["cases:read_all", "disclosures:read", "disclosures:approve"];
+    expect(canReadCases(permissions)).toBe(true);
+
+    const approver = caseAbilities(permissions, "disclosure_approver");
+    expect(approver.canReadRecords).toBe(true);
+    expect(approver.canReadFullView).toBe(true);
+    expect(approver.canReadDisclosures).toBe(true);
+    expect(approver.canApproveDisclosures).toBe(true);
+    expect(approver.canRecordNotices).toBe(true);
+    expect(approver.canUpdateDeadlines).toBe(false);
+    expect(approver.canMarkNotApplicable).toBe(false);
+    expect(approver.canFileAppeal).toBe(false);
+    expect(approver.canWriteRecords).toBe(false);
+    expect(approver.canReview).toBe(false);
+    expect(approver.canAssign).toBe(false);
+    expect(approver.canClose).toBe(false);
+    expect(approver.canReadReporterContact).toBe(false);
+  });
+
+  it("keeps the deadline and appeal controls for the other read_all and read_assigned roles", () => {
+    expect(caseAbilities(["cases:read_all"], "triager").canUpdateDeadlines).toBe(true);
+    expect(caseAbilities(["cases:read_all"], "reporting_owner").canUpdateDeadlines).toBe(true);
+    expect(caseAbilities(["cases:read_assigned", "reviews:write"], "reviewer").canUpdateDeadlines).toBe(true);
+    expect(caseAbilities(["cases:read_assigned", "reviews:write"], "reviewer").canFileAppeal).toBe(true);
+    expect(caseAbilities(["cases:read_own"], "reporter").canFileAppeal).toBe(true);
+    // Without a role the controls follow the permissions alone, as before.
+    expect(caseAbilities(["cases:read_all"]).canUpdateDeadlines).toBe(true);
   });
 
   it("lets only reporter_contact:read open the reporter contact", () => {

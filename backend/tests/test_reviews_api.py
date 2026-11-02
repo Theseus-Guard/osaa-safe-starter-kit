@@ -116,7 +116,21 @@ def test_the_template_has_the_eleven_plan_layers_in_order():
     assert TEMPLATE_LAYERS == PLAN_LAYERS
 
 
-@pytest.mark.parametrize("role", ["admin", "auditor", "disclosure_approver"])
+def test_the_disclosure_approver_reads_rounds_but_may_not_open_or_record_one(client, caller, monkeypatch):
+    # cases:read_all lets the approver read the case, so its review rounds; opening a round or recording a layer needs
+    # reviews:write, which the approver does not hold.
+    monkeypatch.setattr(reviews_api, "list_rounds", lambda *args, **kwargs: [])
+    monkeypatch.setattr(reviews_api, "open_round", lambda *args, **kwargs: pytest.fail("must not reach the service"))
+    as_role(caller, ADMIN_ID, "disclosure_approver")
+    assert client.get("/api/v1/reviews", params={"case_id": CASE_ID}).status_code == 200
+    assert client.post("/api/v1/reviews", headers=idem(), json={"case_id": CASE_ID}).status_code == 403
+    response = client.patch(
+        f"/api/v1/reviews/{ROUND_ID}/layers/model", json={"outcome": "pass", "expected_revision": 1}, headers=idem()
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize("role", ["admin", "auditor"])
 def test_roles_without_case_permissions_get_403(client, caller, monkeypatch, role):
     monkeypatch.setattr(reviews_api, "list_rounds", lambda *args, **kwargs: pytest.fail("must not reach the service"))
     monkeypatch.setattr(reviews_api, "open_round", lambda *args, **kwargs: pytest.fail("must not reach the service"))

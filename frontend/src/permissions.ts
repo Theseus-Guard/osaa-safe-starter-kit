@@ -6,7 +6,8 @@ export interface CaseAbilities {
   canSubmit: boolean;
   // cases:close. Close and reopen a case.
   canClose: boolean;
-  // cases:read_all or cases:read_assigned. Change deadline status.
+  // cases:read_all or cases:read_assigned. Change deadline status. Not for the disclosure approver, which reads the case
+  // through cases:read_all and is refused the deadline routes.
   canUpdateDeadlines: boolean;
   // cases:triage. Mark a deadline not applicable.
   canMarkNotApplicable: boolean;
@@ -20,6 +21,9 @@ export interface CaseAbilities {
   canRedactEvidence: boolean;
   // reviews:write. Record a review. The backend also requires an assignment to the case.
   canReview: boolean;
+  // Any case-read permission, except for the disclosure approver. Shows the appeal form. The backend refuses appeals to
+  // that role even though it reads the case.
+  canFileAppeal: boolean;
   // Any case-read permission. Shows the case record sections: awareness events, impacts, legal duties and classification.
   canReadRecords: boolean;
   // cases:triage. Write the case record: awareness events, impacts, legal duties and the classification.
@@ -48,12 +52,19 @@ export function canReadCases(permissions: readonly string[]): boolean {
   return CASE_READ_PERMISSIONS.some((name) => hasPermission(permissions, name));
 }
 
-export function caseAbilities(permissions: readonly string[]): CaseAbilities {
+// The disclosure approver reads the case it approves through cases:read_all, but the deadline routes and the appeal route
+// refuse that role by name (backend: require_any_permission_except_role). The role is needed to hide those controls.
+export const DISCLOSURE_APPROVER_ROLE = "disclosure_approver";
+
+export function caseAbilities(permissions: readonly string[], role?: string): CaseAbilities {
+  const isApprover = role === DISCLOSURE_APPROVER_ROLE;
+  const canReadRecords = canReadCases(permissions);
   return {
     canSubmit: hasPermission(permissions, "cases:submit"),
     canClose: hasPermission(permissions, "cases:close"),
     canUpdateDeadlines:
-      hasPermission(permissions, "cases:read_all") || hasPermission(permissions, "cases:read_assigned"),
+      (hasPermission(permissions, "cases:read_all") || hasPermission(permissions, "cases:read_assigned")) &&
+      !isApprover,
     canMarkNotApplicable: hasPermission(permissions, "cases:triage"),
     canAssign: hasPermission(permissions, "cases:assign"),
     canReadEvidence: hasPermission(permissions, "evidence:read"),
@@ -61,7 +72,8 @@ export function caseAbilities(permissions: readonly string[]): CaseAbilities {
     canRedactEvidence:
       hasPermission(permissions, "evidence:read") && hasPermission(permissions, "evidence:write"),
     canReview: hasPermission(permissions, "reviews:write"),
-    canReadRecords: canReadCases(permissions),
+    canFileAppeal: canReadRecords && !isApprover,
+    canReadRecords,
     canWriteRecords: hasPermission(permissions, "cases:triage"),
     canReadFullView: hasPermission(permissions, "cases:read_all"),
     canReadReporterContact: hasPermission(permissions, "reporter_contact:read"),

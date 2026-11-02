@@ -27,6 +27,7 @@ from safe_kit.auth import (
     current_user_pending_change,
     permissions_of,
     require_any_permission,
+    require_any_permission_except_role,
     require_csrf,
     require_permission,
     set_session_cookies,
@@ -94,7 +95,13 @@ from safe_kit.rate_limit import (
 from safe_kit.rate_limit import clear as clear_rate_limit
 from safe_kit.rate_limit import hit as hit_rate_limit
 from safe_kit.privacy import CSV_COLUMNS, inventory, inventory_csv_rows
-from safe_kit.rbac import RoleOutcome, list_catalog, list_role_permissions, set_role_permissions
+from safe_kit.rbac import (
+    DISCLOSURE_APPROVER_ROLE,
+    RoleOutcome,
+    list_catalog,
+    list_role_permissions,
+    set_role_permissions,
+)
 from safe_kit.idempotency import KeyReused, Replayed, checked_key, key_scope
 from safe_kit.reporter_channel import ContactOutcome, hide_reporter, read_reporter_contact, submit_report
 from safe_kit.security import (
@@ -1376,7 +1383,10 @@ def update_case_deadline(
     case_id: uuid.UUID,
     task_id: uuid.UUID,
     body: DeadlineUpdateRequest,
-    actor: User = Depends(require_any_permission("cases:read_all", "cases:read_assigned")),
+    # The disclosure approver holds cases:read_all to read the case it approves, and may not change deadlines.
+    actor: User = Depends(
+        require_any_permission_except_role(DISCLOSURE_APPROVER_ROLE, "cases:read_all", "cases:read_assigned")
+    ),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> CaseResponse:
     scope = _scope(actor)
@@ -1413,7 +1423,9 @@ def update_case_deadline(
 def restore_case_deadline(
     case_id: uuid.UUID,
     task_id: uuid.UUID,
-    actor: User = Depends(require_any_permission("cases:read_all", "cases:read_assigned")),
+    actor: User = Depends(
+        require_any_permission_except_role(DISCLOSURE_APPROVER_ROLE, "cases:read_all", "cases:read_assigned")
+    ),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> CaseResponse:
     """Turn off the not applicable exception of a deadline task: it goes back to the status it had before."""

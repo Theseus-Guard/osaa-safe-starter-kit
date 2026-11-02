@@ -130,4 +130,18 @@ describe("catalog page routes", () => {
     expect(pageInNavigation("users", true, [])).toBe(true);
     expect(pageInNavigation("overview", false, [])).toBe(true);
   });
+
+  it("shows the cases page and a case detail to the disclosure approver, but not the admin pages", () => {
+    // The approver's permissions as /auth/me returns them after migration 0044 (disclosures:approve, disclosures:read,
+    // cases:read_all). The case page is open to every signed-in user, so the approver sees it.
+    const approverPermissions = ["cases:read_all", "disclosures:approve", "disclosures:read"];
+    expect(pageInNavigation("cases", false, approverPermissions)).toBe(true);
+    expect(pageInNavigation("catalog", false, approverPermissions)).toBe(false);
+    expect(pageInNavigation("users", false, approverPermissions)).toBe(false);
+    expect(routeFromHash(hashFor("cases", "case-42"), false)).toEqual({
+      page: "cases",
+      caseId: "case-42",
+      entryId: null,
+    });
+  });
 });

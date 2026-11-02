@@ -127,7 +127,7 @@ def test_assignee_scope_needs_an_active_assignment():
     assert params == (INVESTIGATOR_ID,)
 
 
-@pytest.mark.parametrize("role", ["admin", "auditor", "disclosure_approver"])
+@pytest.mark.parametrize("role", ["admin", "auditor"])
 def test_roles_without_case_permissions_see_no_case(role):
     scope = CaseScope.from_permissions(ADMIN_ID, DEFAULT_ROLE_PERMISSIONS[role])
     assert scope.visibility_sql() == ("FALSE", ())
@@ -244,7 +244,7 @@ def test_list_is_built_from_the_callers_scope(client, caller, monkeypatch):
     assert seen["scope"] == CaseScope(user_id=TRIAGER_ID, read_all=True, read_assigned=True)
 
 
-@pytest.mark.parametrize("role", ["admin", "auditor", "disclosure_approver"])
+@pytest.mark.parametrize("role", ["admin", "auditor"])
 def test_roles_without_case_permissions_get_403_on_every_case_endpoint(client, caller, role):
     as_role(caller, ADMIN_ID, role)
     assert client.get("/api/v1/cases").status_code == 403
@@ -254,6 +254,23 @@ def test_roles_without_case_permissions_get_403_on_every_case_endpoint(client, c
     assert client.post(f"/api/v1/cases/{CASE_ID}/assignments", json={"user_id": ASSIGNEE_ID}, headers=idem()).status_code == 403
     assert client.post(f"/api/v1/cases/{CASE_ID}/close", json={"reason": "done"}, headers=idem()).status_code == 403
     assert client.post("/api/v1/reviews", headers=idem(), json={"case_id": CASE_ID}).status_code == 403
+
+
+def test_the_disclosure_approver_may_not_change_deadlines_assign_close_or_review(client, caller):
+    # The approver reads the case through cases:read_all (migration 0044), which the deadline routes also accept. The
+    # approver role is refused those routes by name; the other writes need permissions the approver does not hold.
+    as_role(caller, ADMIN_ID, "disclosure_approver")
+    deadline = f"/api/v1/cases/{CASE_ID}/deadlines/{TASK_ID}"
+    refused = [
+        client.patch(deadline, json={"status": "done"}, headers=idem()),
+        client.post(f"{deadline}/restore", headers=idem()),
+        client.post(f"/api/v1/cases/{CASE_ID}/assignments", json={"user_id": ASSIGNEE_ID}, headers=idem()),
+        client.post(f"/api/v1/cases/{CASE_ID}/close", json={"reason": "done"}, headers=idem()),
+        client.post("/api/v1/reviews", headers=idem(), json={"case_id": CASE_ID}),
+    ]
+    for response in refused:
+        assert response.status_code == 403, response.request.url
+        assert response.json() == {"detail": "forbidden"}
 
 
 def test_reporter_cannot_assign_review_close_or_change_deadlines(client, caller):

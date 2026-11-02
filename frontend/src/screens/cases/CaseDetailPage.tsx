@@ -29,12 +29,14 @@ interface Props {
   caseId: string;
   // The caller's permission names from /auth/me.
   permissions: readonly string[];
+  // The caller's role from /auth/me. The disclosure approver reads the case but may not change deadlines or file appeals.
+  role?: string;
 }
 
 type CaseTab = "overview" | "deadlines" | "evidence" | "reviews" | "links" | "disclosures" | "activity";
 
-export function CaseDetailPage({ caseId, permissions }: Props) {
-  const abilities = caseAbilities(permissions);
+export function CaseDetailPage({ caseId, permissions, role }: Props) {
+  const abilities = caseAbilities(permissions, role);
   const [detail, setDetail] = useState<CaseDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<CaseTab>("overview");
@@ -201,6 +203,7 @@ export function CaseDetailPage({ caseId, permissions }: Props) {
           caseId={detail.id}
           closed={closed}
           canReview={abilities.canReview}
+          canAppeal={abilities.canFileAppeal}
           onRecorded={() => setHistoryRevision((value) => value + 1)}
         />
       ),
