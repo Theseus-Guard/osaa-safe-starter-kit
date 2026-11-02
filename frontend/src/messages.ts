@@ -95,6 +95,8 @@ const MESSAGES: Record<string, string> = {
     "A newer version of this package exists, so no notice can be recorded for this one. Use the latest approved version.",
   approval_mismatch: "The approval does not match this version. Tell an administrator.",
   release_approval_missing: "A CLEAR item has no release approval, so no notice can be recorded for this version.",
+  release_trace_missing:
+    "No release attempt is open for this version, so the release was refused. Start the release again from this version.",
   state_conflict: "The notice is no longer in a state that allows this change. Reload it and check its state.",
   "deadline task not found": "That deadline task does not exist on this case.",
   "legal duty not found": "That legal duty does not exist on this case.",

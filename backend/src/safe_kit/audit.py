@@ -96,6 +96,9 @@ DISCLOSURE_APPROVAL = "disclosure.approved"
 # Written on every export of an approved version (safe_kit.disclosure.export_version). Details hold identifiers, the
 # status, and the digest only: never the export's content, the recipient or the purpose.
 DISCLOSURE_EXPORT = "disclosure.exported"
+# A release attempt (notice record or export) that the release check or a later rule refused. Details hold identifiers,
+# the purpose and the reason code only (safe_kit.disclosure.close_release_attempt).
+DISCLOSURE_RELEASE_REFUSED = "disclosure.release_refused"
 # External notices (safe_kit.external_notices). Written against the notice (target_type "disclosure_notice"). Details hold
 # identifiers, the channel, states, reason codes and the length of each free-text reason, never the text itself.
 DISCLOSURE_NOTICE_RECORD = "disclosure.notice_recorded"

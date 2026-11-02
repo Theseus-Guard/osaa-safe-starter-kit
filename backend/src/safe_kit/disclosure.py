@@ -11,13 +11,21 @@ approval row (separation_rule). Approving a CLEAR package also records the relea
 same transaction. A later version of the same package revokes an earlier approval by change: the approval counts only for
 the latest version.
 
+Release attempts (migration 0047): a release is a notice record (safe_kit.external_notices) or an export. Each one first
+writes an 'attempted' row with open_release_attempt, in the same transaction, and then runs the release check. The
+check requires that open attempt for the version and purpose (RELEASE_TRACE_MISSING otherwise). The same transaction
+closes the attempt with close_release_attempt: 'done' when the release goes through, or 'refused' with a reason code.
+Only the release path writes attempts. A refused attempt never counts as a release.
+
 The send step, which is not built yet, must call check_release before it sends. check_release re-checks the approval
-against the current digest and the release rules, and returns a refusal whenever a check fails.
+against the current digest, the release rules, and the open release attempt, and returns a refusal whenever a check
+fails.
 
 Export (export_version): only a version that has an approval can be exported. The export is the approved package as
 JSON (schemas/disclosure-export.v0.json). It follows the preview rule: derivatives only, no file name, no case title,
 no redaction reason, no source checksum, and items outside the caller's TLP audience are withheld without details. An
 approved version that a later version has replaced is exported with status "superseded", so the history is marked.
+Each export is a release attempt with the same check as a notice, except that a superseded version is still exportable.
 Each export writes one audit row, in the same transaction as the read, with the identifiers and the status only.
 
 Access: the caller needs the permission of the route (disclosures:read, disclosures:prepare, or disclosures:approve), the
@@ -35,6 +43,7 @@ Idempotency follows safe_kit.idempotency: the key is checked and locked after th
 
 import hashlib
 import json
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -163,6 +172,9 @@ class Outcome(Enum):
     BINDING_MISMATCH = "binding_mismatch"
     EVIDENCE_NOT_VISIBLE = "evidence_not_visible"
     INTEGRITY_FAILED = "integrity_failed"
+    APPROVAL_MISMATCH = "approval_mismatch"  # export: the approval does not match the version
+    RELEASE_APPROVAL_MISSING = "release_approval_missing"  # export: a CLEAR item has no release approval
+    RELEASE_TRACE_MISSING = "release_trace_missing"  # export: no open release attempt for the version
 
 
 @dataclass(frozen=True)
@@ -235,6 +247,9 @@ class ReleaseOutcome(Enum):
     RELEASE_APPROVAL_MISSING = (
         "release_approval_missing"  # a CLEAR item has no release approval
     )
+    RELEASE_TRACE_MISSING = (
+        "release_trace_missing"  # no open release attempt for the version and purpose
+    )
 
 
 @dataclass(frozen=True)
@@ -242,6 +257,19 @@ class ReleaseCheck:
     outcome: ReleaseOutcome
     version_id: str
     digest: str | None = None
+
+
+# The purpose of a release attempt: a notice record, or a disclosure export (migration 0047).
+RELEASE_PURPOSE_NOTICE = "external_notice"
+RELEASE_PURPOSE_EXPORT = "export"
+
+
+@dataclass(frozen=True)
+class ReleaseAttempt:
+    id: str
+    version: Version
+    purpose: str
+    actor_id: str
 
 
 # --- canonical content and digest -------------------------------------------------------------------------------------
@@ -855,13 +883,15 @@ def approve_version(
 # --- the send step's check ------------------------------------------------------------------------------------------
 
 
-def check_release(version_id: str) -> ReleaseCheck:
+def check_release(version_id: str, purpose: str = RELEASE_PURPOSE_NOTICE) -> ReleaseCheck:
     """Re-check a version right before a send. The send step of a package calls it, and so does the notice record
     (safe_kit.external_notices), which may only record a notice for a version that passes.
 
     It passes only when all of these hold: the version exists; an approval exists for it; the approval's recipient,
     purpose and digest equal the version's; the version is still the latest of its package; the digest recomputed from
-    the stored content equals the stored digest; and, for a CLEAR audience, every CLEAR item has a release approval.
+    the stored content equals the stored digest; for a CLEAR audience, every CLEAR item has a release approval; and an
+    open release attempt exists for the version and purpose (RELEASE_TRACE_MISSING otherwise). The check reads only:
+    the attempt is written by the release path, not by this function.
     """
     with connect() as conn:
         row = conn.execute(
@@ -872,15 +902,21 @@ def check_release(version_id: str) -> ReleaseCheck:
             return ReleaseCheck(ReleaseOutcome.NOT_FOUND, version_id)
         version = load_version_on(conn, row[0], version_id)
         assert version is not None
-        return release_check_on(conn, version)
+        return release_check_on(conn, version, purpose)
 
 
-def release_check_on(conn, version: Version) -> ReleaseCheck:
-    """The check of check_release for a version already loaded on the caller's connection (see the docstring above)."""
+def release_check_on(
+    conn, version: Version, purpose: str = RELEASE_PURPOSE_NOTICE, *, history: bool = False
+) -> ReleaseCheck:
+    """The check of check_release for a version already loaded on the caller's connection (see the docstring above).
+
+    history: an export of a superseded version is allowed as history, so REVOKED_BY_CHANGE is not raised for it. Every
+    other rule, including the open release attempt, still applies.
+    """
     version_id = version.id
     if version.approval is None:
         return ReleaseCheck(ReleaseOutcome.NOT_APPROVED, version_id, version.digest)
-    if not version.is_latest:
+    if not version.is_latest and not history:
         return ReleaseCheck(ReleaseOutcome.REVOKED_BY_CHANGE, version_id, version.digest)
     approval = version.approval
     if (approval.recipient, approval.purpose, approval.digest) != (
@@ -906,7 +942,102 @@ def release_check_on(conn, version: Version) -> ReleaseCheck:
         approved=release_ok,
     ):
         return ReleaseCheck(ReleaseOutcome.RELEASE_APPROVAL_MISSING, version_id, version.digest)
+    # The trace rule (migration 0047): the release path opens the attempt before it calls the check, on the same
+    # connection, so the attempt is visible here. It is checked last so that the rules above keep their own outcomes.
+    if not _open_attempt_exists(conn, version_id, purpose):
+        return ReleaseCheck(ReleaseOutcome.RELEASE_TRACE_MISSING, version_id, version.digest)
     return ReleaseCheck(ReleaseOutcome.RELEASABLE, version_id, version.digest)
+
+
+def _open_attempt_exists(conn, version_id: str, purpose: str) -> bool:
+    """True when an 'attempted' row exists for the version and purpose and no outcome row closes it."""
+    return bool(
+        conn.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM release_attempts a
+                WHERE a.version_id = %s AND a.purpose = %s AND a.state = 'attempted' AND NOT a.is_deleted
+                  AND NOT EXISTS (
+                      SELECT 1 FROM release_attempts r
+                      WHERE r.attempt_id = a.id AND r.state <> 'attempted' AND NOT r.is_deleted
+                  )
+            )
+            """,
+            (version_id, purpose),
+        ).fetchone()[0]
+    )
+
+
+# --- release attempts (migration 0047) -----------------------------------------------------------------------------
+
+
+def open_release_attempt(
+    conn, version: Version, purpose: str, actor_id: str
+) -> ReleaseAttempt:
+    """Write the 'attempted' row of a release, on the caller's connection, before the release check runs.
+
+    Only the release path calls it: the notice record and the export. The caller must close the attempt with
+    close_release_attempt in the same transaction, whatever the outcome, so no open attempt is ever committed.
+    """
+    assert purpose in (RELEASE_PURPOSE_NOTICE, RELEASE_PURPOSE_EXPORT), purpose
+    attempt_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT INTO release_attempts (id, attempt_id, state, purpose, case_id, package_id, version_id, actor_id)
+        VALUES (%s, %s, 'attempted', %s, %s, %s, %s, %s)
+        """,
+        (
+            attempt_id,
+            attempt_id,
+            purpose,
+            version.case_id,
+            version.package_id,
+            version.id,
+            actor_id,
+        ),
+    )
+    return ReleaseAttempt(attempt_id, version, purpose, actor_id)
+
+
+def close_release_attempt(
+    conn, attempt: ReleaseAttempt, reason_code: str | None = None
+) -> None:
+    """Write the outcome of an attempt, on the same connection: 'done' when reason_code is None, else 'refused' with the
+    reason. A refused attempt is audited with the reason code only."""
+    version = attempt.version
+    conn.execute(
+        """
+        INSERT INTO release_attempts (
+            attempt_id, state, purpose, case_id, package_id, version_id, actor_id, reason_code
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            attempt.id,
+            "done" if reason_code is None else "refused",
+            attempt.purpose,
+            version.case_id,
+            version.package_id,
+            version.id,
+            attempt.actor_id,
+            reason_code,
+        ),
+    )
+    if reason_code is not None:
+        audit.record(
+            conn,
+            audit.DISCLOSURE_RELEASE_REFUSED,
+            "disclosure_version",
+            version.id,
+            actor_id=attempt.actor_id,
+            details={
+                "case_id": version.case_id,
+                "package_id": version.package_id,
+                "version": version.version,
+                "purpose": attempt.purpose,
+                "reason_code": reason_code,
+            },
+        )
 
 
 # --- export of an approved version ----------------------------------------------------------------------------------
@@ -1009,8 +1140,10 @@ def export_version(
 ) -> Result:
     """The export of one version, and its audit row, in one transaction.
 
-    Refused: a case the caller cannot see (NOT_FOUND), a version of another case (VERSION_NOT_FOUND), a version with no
-    approval (NOT_APPROVED), and a stored content that no longer matches its digest (INTEGRITY_FAILED). The audit row
+    The export is a release: it opens a release attempt (purpose export) before the release check, and closes it with
+    the outcome in the same transaction. Refused: a case the caller cannot see (NOT_FOUND), a version of another case
+    (VERSION_NOT_FOUND), and any failed release rule (NOT_APPROVED, INTEGRITY_FAILED, APPROVAL_MISMATCH,
+    RELEASE_APPROVAL_MISSING, or RELEASE_TRACE_MISSING). A refused export is recorded as a refused attempt. The audit row
     holds the identifiers, the digest, and the status; the export itself is never written to the log.
     """
     with connect() as conn:
@@ -1026,10 +1159,11 @@ def export_version(
         version = load_version_on(conn, case_id, version_id)
         if version is None:
             return Result(Outcome.VERSION_NOT_FOUND)
-        if version.approval is None:
-            return Result(Outcome.NOT_APPROVED)
-        if digest_of_version(version) != version.digest:
-            return Result(Outcome.INTEGRITY_FAILED)
+        attempt = open_release_attempt(conn, version, RELEASE_PURPOSE_EXPORT, scope.user_id)
+        release = release_check_on(conn, version, RELEASE_PURPOSE_EXPORT, history=True)
+        if release.outcome is not ReleaseOutcome.RELEASABLE:
+            close_release_attempt(conn, attempt, reason_code=release.outcome.value)
+            return Result(_EXPORT_REFUSALS[release.outcome])
         visible = _labels_visible(
             conn, case_id, recipient, [item.tlp_label for item in version.items]
         )
@@ -1051,4 +1185,16 @@ def export_version(
                 "schema_version": EXPORT_SCHEMA_VERSION,
             },
         )
+        close_release_attempt(conn, attempt)
     return Result(Outcome.OK, value=document)
+
+
+# The outcome of a refused export for each failed release rule.
+_EXPORT_REFUSALS: dict[ReleaseOutcome, Outcome] = {
+    ReleaseOutcome.NOT_FOUND: Outcome.VERSION_NOT_FOUND,
+    ReleaseOutcome.NOT_APPROVED: Outcome.NOT_APPROVED,
+    ReleaseOutcome.APPROVAL_MISMATCH: Outcome.APPROVAL_MISMATCH,
+    ReleaseOutcome.DIGEST_MISMATCH: Outcome.INTEGRITY_FAILED,
+    ReleaseOutcome.RELEASE_APPROVAL_MISSING: Outcome.RELEASE_APPROVAL_MISSING,
+    ReleaseOutcome.RELEASE_TRACE_MISSING: Outcome.RELEASE_TRACE_MISSING,
+}

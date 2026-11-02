@@ -15,8 +15,10 @@ There is no state that means delivered without a receipt.
 
 Rules:
 - A notice may be recorded only against a version that passes disclosure.check_release: approved, still the latest version
-  of its package, digest intact, and, for CLEAR, released. Later versions do not change an existing notice; the notice
-  keeps the version it was sent with. Receipts, follow-ups and cancels are still possible after a later version exists.
+  of its package, digest intact, for CLEAR released, and with an open release attempt (migration 0047). Recording writes
+  that attempt first, in the same transaction, and closes it as done with the notice, or as refused with the reason. A
+  refused attempt never counts as a release. Later versions do not change an existing notice; the notice keeps the version
+  it was sent with. Receipts, follow-ups and cancels are still possible after a later version exists.
 - sent_at must not be before the approval and not in the future (a small clock allowance applies).
 - A second notice for the same version and recipient reference is a new record. It needs a repeat_reason. Without one the
   record is refused, so a repeated request never creates a duplicate by itself.
@@ -72,6 +74,7 @@ class Outcome(Enum):
     APPROVAL_MISMATCH = "approval_mismatch"
     DIGEST_MISMATCH = "digest_mismatch"
     RELEASE_APPROVAL_MISSING = "release_approval_missing"
+    RELEASE_TRACE_MISSING = "release_trace_missing"
     TIME_OUT_OF_RANGE = "time_out_of_range"
     REPEAT_REASON_REQUIRED = "repeat_reason_required"
     # The notice is not in a state that allows the change. value holds the current state.
@@ -321,7 +324,14 @@ _RELEASE_OUTCOME = {
     disclosure.ReleaseOutcome.APPROVAL_MISMATCH: Outcome.APPROVAL_MISMATCH,
     disclosure.ReleaseOutcome.DIGEST_MISMATCH: Outcome.DIGEST_MISMATCH,
     disclosure.ReleaseOutcome.RELEASE_APPROVAL_MISSING: Outcome.RELEASE_APPROVAL_MISSING,
+    disclosure.ReleaseOutcome.RELEASE_TRACE_MISSING: Outcome.RELEASE_TRACE_MISSING,
 }
+
+
+def _refuse_release(conn, attempt: disclosure.ReleaseAttempt, outcome: Outcome, reason_code: str) -> Result:
+    """Close the attempt as refused, in the same transaction, and return the refusal. Nothing else is written."""
+    disclosure.close_release_attempt(conn, attempt, reason_code=reason_code)
+    return Result(outcome)
 
 
 def record_notice(
@@ -345,15 +355,19 @@ def record_notice(
             version = disclosure.load_version_on(conn, case_id, version_id)
             if version is None:
                 return Result(Outcome.VERSION_NOT_FOUND)
-            release = disclosure.release_check_on(conn, version)
+            # The release path: the attempt is written first, and every refusal after this point closes it as refused.
+            attempt = disclosure.open_release_attempt(
+                conn, version, disclosure.RELEASE_PURPOSE_NOTICE, scope.user_id
+            )
+            release = disclosure.release_check_on(conn, version, disclosure.RELEASE_PURPOSE_NOTICE)
             if release.outcome is not disclosure.ReleaseOutcome.RELEASABLE:
-                return Result(_RELEASE_OUTCOME[release.outcome])
+                return _refuse_release(conn, attempt, _RELEASE_OUTCOME[release.outcome], release.outcome.value)
             assert version.approval is not None
             if not _time_allowed(new.sent_at, version.approval.approved_at):
-                return Result(Outcome.TIME_OUT_OF_RANGE)
+                return _refuse_release(conn, attempt, Outcome.TIME_OUT_OF_RANGE, "time_out_of_range")
             earlier = _latest(conn, case_id, version_id=version_id, recipient_ref=new.recipient_ref)
             if earlier and new.repeat_reason is None:
-                return Result(Outcome.REPEAT_REASON_REQUIRED)
+                return _refuse_release(conn, attempt, Outcome.REPEAT_REASON_REQUIRED, "repeat_reason_required")
             notice_id = str(uuid.uuid4())
             recorded_at = conn.execute(
                 """
@@ -402,6 +416,7 @@ def record_notice(
                     "fallback_reason": {"length": len(new.fallback_reason or "")},
                 },
             )
+            disclosure.close_release_attempt(conn, attempt)
             created = Notice(
                 id=notice_id,
                 revision=1,

@@ -173,6 +173,7 @@ _REFUSALS: dict[Outcome, tuple[int, dict[str, Any] | str]] = {
     Outcome.APPROVAL_MISMATCH: (409, {"status": "approval_mismatch"}),
     Outcome.DIGEST_MISMATCH: (409, {"status": "digest_mismatch"}),
     Outcome.RELEASE_APPROVAL_MISSING: (409, {"status": "release_approval_missing"}),
+    Outcome.RELEASE_TRACE_MISSING: (409, {"status": "release_trace_missing"}),
     Outcome.TIME_OUT_OF_RANGE: (422, {"status": "time_out_of_range"}),
     Outcome.REPEAT_REASON_REQUIRED: (422, {"status": "repeat_reason_required"}),
 }
