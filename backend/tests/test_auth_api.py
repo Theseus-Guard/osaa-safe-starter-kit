@@ -698,3 +698,232 @@ def test_me_reports_no_setup_required_once_the_timezone_is_set(client, store):
     token = login_tokens(client, "carol")["access_token"]
     store.timezone = "Pacific/Auckland"
     assert client.get("/api/v1/auth/me", headers=bearer_header(token)).json()["timezone_setup_required"] is False
+
+
+# --- browser sessions: HttpOnly cookies and the CSRF check -----------------------------------------------------------
+# The browser client talks over https, as it does through the gateway: Secure cookies are sent only over https.
+
+
+@pytest.fixture
+def browser(store):
+    return TestClient(api.app, base_url="https://testserver")
+
+
+def set_cookie_lines(response) -> dict[str, str]:
+    return {line.split("=", 1)[0]: line for line in response.headers.get_list("set-cookie")}
+
+
+def cookie_attributes(line: str) -> set[str]:
+    return {part.strip().lower() for part in line.split(";")[1:]}
+
+
+def csrf_header(browser_client) -> dict[str, str]:
+    return {"X-CSRF-Token": browser_client.cookies.get("safe_csrf")}
+
+
+def presenting(*cookies: tuple[str, str]) -> TestClient:
+    """A client that presents only the given cookies, as a browser holding exactly those would."""
+    client = TestClient(api.app, base_url="https://testserver")
+    for name, value in cookies:
+        client.cookies.set(name, value)
+    return client
+
+
+def create_frank(client_or_browser, headers=None):
+    return client_or_browser.post(
+        "/api/v1/users",
+        headers=headers or {},
+        json={"username": "frank", "role": "auditor", "temporary_password": "temporary passphrase"},
+    )
+
+
+def test_login_sets_the_three_session_cookies_with_the_right_attributes(browser):
+    response = login(browser, "alice")
+    assert response.status_code == 200
+
+    lines = set_cookie_lines(response)
+    assert set(lines) == {"safe_access", "safe_refresh", "safe_csrf"}
+
+    access = cookie_attributes(lines["safe_access"])
+    assert {"httponly", "secure", "samesite=strict", "path=/"} <= access
+    assert any(part.startswith("max-age=") for part in access)
+
+    refresh = cookie_attributes(lines["safe_refresh"])
+    assert {"httponly", "secure", "samesite=strict", "path=/api/v1/auth"} <= refresh
+
+    # The page must read the CSRF cookie, so it is the one cookie that is not HttpOnly.
+    csrf = cookie_attributes(lines["safe_csrf"])
+    assert {"secure", "samesite=strict", "path=/"} <= csrf
+    assert "httponly" not in csrf
+
+
+def test_login_still_returns_the_tokens_in_the_body_for_the_cli(browser):
+    body = login(browser, "alice").json()
+    assert body["access_token"]
+    assert body["refresh_token"]
+
+
+def test_cookie_authenticates_a_read_without_a_csrf_header(browser):
+    login(browser, "alice")
+    response = browser.get("/api/v1/auth/me")
+    assert response.status_code == 200
+    assert response.json()["username"] == "alice"
+
+
+def test_bearer_header_still_authenticates_without_a_csrf_header(client):
+    token = login_tokens(client, "carol")["access_token"]
+    response = create_frank(client, bearer_header(token))
+    assert response.status_code == 201
+
+
+def test_bearer_write_needs_no_csrf_even_when_cookies_are_also_sent(browser):
+    # Carol's cookies are in the jar and the write has no CSRF header; the Bearer header alone authenticates it.
+    admin_token = login_tokens(browser, "carol")["access_token"]
+    response = create_frank(browser, bearer_header(admin_token))
+    assert response.status_code == 201
+
+
+def test_cookie_write_without_the_csrf_header_is_refused(browser, store):
+    login(browser, "carol")
+    response = create_frank(browser)
+    assert response.status_code == 403
+    assert response.json() == {"detail": "csrf_token_invalid"}
+    assert "frank" not in {user.username for user in store.users.values()}
+
+
+def test_cookie_write_with_a_different_csrf_header_is_refused(browser, store):
+    login(browser, "carol")
+    response = create_frank(browser, {"X-CSRF-Token": "not-the-token"})
+    assert response.status_code == 403
+    assert response.json() == {"detail": "csrf_token_invalid"}
+    assert "frank" not in {user.username for user in store.users.values()}
+
+
+def test_cookie_write_with_the_matching_csrf_header_succeeds(browser):
+    login(browser, "carol")
+    response = create_frank(browser, csrf_header(browser))
+    assert response.status_code == 201
+
+
+def test_cookie_read_does_not_need_the_csrf_header(browser):
+    login(browser, "carol")
+    assert browser.get("/api/v1/system/timezone").status_code == 200
+
+
+def test_bad_cookie_token_on_a_write_is_answered_with_401_not_403(browser):
+    fresh = TestClient(api.app, base_url="https://testserver")
+    fresh.cookies.set("safe_access", "not-a-jwt")
+    fresh.cookies.set("safe_csrf", "value")
+    response = fresh.post("/api/v1/auth/logout", headers={"X-CSRF-Token": "value"})
+    assert response.status_code == 401
+
+
+def test_refresh_by_cookie_rotates_the_cookies(browser):
+    login(browser, "alice")
+    old_access = browser.cookies.get("safe_access")
+    old_refresh = browser.cookies.get("safe_refresh")
+
+    response = browser.post("/api/v1/auth/refresh", headers=csrf_header(browser))
+    assert response.status_code == 200
+    assert response.json()["access_token"]
+
+    lines = set_cookie_lines(response)
+    assert set(lines) == {"safe_access", "safe_refresh", "safe_csrf"}
+    assert {"httponly", "secure", "samesite=strict", "path=/api/v1/auth"} <= cookie_attributes(lines["safe_refresh"])
+    assert browser.cookies.get("safe_access") != old_access
+    assert browser.cookies.get("safe_refresh") != old_refresh
+    assert browser.get("/api/v1/auth/me").status_code == 200
+
+    # The rotated-out refresh cookie is refused, and presenting it ends the family.
+    replay = presenting(("safe_refresh", old_refresh), ("safe_csrf", browser.cookies.get("safe_csrf")))
+    assert replay.post("/api/v1/auth/refresh", headers=csrf_header(replay)).status_code == 401
+
+
+def test_refresh_by_cookie_needs_the_csrf_header(browser):
+    login(browser, "alice")
+    assert browser.post("/api/v1/auth/refresh").status_code == 403
+    assert browser.get("/api/v1/auth/me").status_code == 200
+
+
+def test_refresh_without_any_refresh_credential_is_refused(client):
+    assert client.post("/api/v1/auth/refresh").status_code == 401
+
+
+def test_logout_by_cookie_needs_the_csrf_header_and_keeps_the_session_without_it(browser):
+    login(browser, "alice")
+    assert browser.post("/api/v1/auth/logout").status_code == 403
+    assert browser.get("/api/v1/auth/me").status_code == 200
+
+
+def test_logout_by_cookie_clears_all_three_cookies_and_revokes_the_session(browser):
+    login(browser, "alice")
+    old_access = browser.cookies.get("safe_access")
+
+    response = browser.post("/api/v1/auth/logout", headers=csrf_header(browser))
+    assert response.status_code == 204
+
+    lines = set_cookie_lines(response)
+    assert set(lines) == {"safe_access", "safe_refresh", "safe_csrf"}
+    assert all("max-age=0" in cookie_attributes(line) for line in lines.values())
+    assert browser.cookies.get("safe_access") is None
+    assert browser.cookies.get("safe_refresh") is None
+    assert browser.cookies.get("safe_csrf") is None
+
+    # The old access token no longer works, even when it is presented directly.
+    assert presenting(("safe_access", old_access)).get("/api/v1/auth/me").status_code == 401
+
+
+def test_refresh_after_logout_is_refused_for_the_old_refresh_cookie(browser):
+    login(browser, "alice")
+    old_refresh = browser.cookies.get("safe_refresh")
+    browser.post("/api/v1/auth/logout", headers=csrf_header(browser))
+
+    replay = presenting(("safe_refresh", old_refresh), ("safe_csrf", "same"))
+    response = replay.post("/api/v1/auth/refresh", headers={"X-CSRF-Token": "same"})
+    assert response.status_code == 401
+
+
+def test_password_change_by_cookie_needs_the_csrf_header(browser, store):
+    create_dave(TestClient(api.app), temporary="temporary passphrase")
+    login(browser, "dave", "temporary passphrase")
+    response = browser.post(
+        "/api/v1/auth/password",
+        json={"current_password": "temporary passphrase", "new_password": "my own passphrase"},
+    )
+    assert response.status_code == 403
+    assert response.json() == {"detail": "csrf_token_invalid"}
+
+
+def test_password_change_by_cookie_clears_the_cookies_and_ends_the_session(browser, store):
+    create_dave(TestClient(api.app), temporary="temporary passphrase")
+    login(browser, "dave", "temporary passphrase")
+    old_access = browser.cookies.get("safe_access")
+
+    # The forced change at first login: regular endpoints refuse the cookie session, /me and the change answer.
+    assert browser.get("/api/v1/system/timezone").status_code == 403
+    assert browser.get("/api/v1/auth/me").json()["password_change_required"] is True
+
+    changed = browser.post(
+        "/api/v1/auth/password",
+        headers=csrf_header(browser),
+        json={"current_password": "temporary passphrase", "new_password": "my own passphrase"},
+    )
+    assert changed.status_code == 204
+    lines = set_cookie_lines(changed)
+    assert all("max-age=0" in cookie_attributes(line) for line in lines.values())
+    assert browser.cookies.get("safe_access") is None
+    assert presenting(("safe_access", old_access)).get("/api/v1/auth/me").status_code == 401
+    assert login(browser, "dave", "temporary passphrase").status_code == 401
+
+    # Tokens are rejected if issued in the same second as the password change (iat has whole seconds).
+    time.sleep(1.1)
+    relogin = login(browser, "dave", "my own passphrase")
+    assert relogin.status_code == 200
+    assert relogin.json()["password_change_required"] is False
+    assert browser.get("/api/v1/system/timezone").status_code == 200
+
+
+def test_disabled_account_loses_its_cookie_session_at_once(browser, store):
+    login(browser, "alice")
+    store._replace(ALICE, is_active=False)
+    assert browser.get("/api/v1/auth/me").status_code == 401

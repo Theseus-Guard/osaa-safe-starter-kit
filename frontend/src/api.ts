@@ -1,5 +1,7 @@
 // Thin client for the existing backend API, called through the gateway at /api/v1.
-// Tokens live in memory only. A page reload requires logging in again.
+// The session is carried by cookies that the server sets: the access and refresh tokens are HttpOnly, so this module
+// never reads or stores them. Every request is sent with credentials. The CSRF cookie is readable by the page, and its
+// value is sent back in the X-CSRF-Token header of every state-changing request.
 
 import { recordActivity } from "./idle";
 
@@ -77,13 +79,6 @@ export interface PermissionSummary {
   description: string;
 }
 
-interface TokenResponse {
-  access_token: string;
-  refresh_token: string;
-  expires_in: number;
-  password_change_required: boolean;
-}
-
 export type Readiness = "ready" | "setup_required" | "unavailable";
 
 export class ApiError extends Error {
@@ -103,10 +98,9 @@ export class ApiError extends Error {
   }
 }
 
+// Only the fact that a session started and when its cookies were issued. The tokens themselves are never in the page.
 interface Session {
-  access: string;
-  refresh: string;
-  // When the current token pair was issued. Both tokens start their lifetime at the same moment.
+  // When the current cookie pair was issued. Both cookies start their lifetime at the same moment.
   issuedAt: number;
 }
 
@@ -114,6 +108,15 @@ interface Session {
 // lifetime as the access token, so renewing only after the access token expires would find the refresh token expired
 // too. A session that is not used for the full refresh lifetime ends on its next request.
 const RENEW_AFTER_MS = 5 * 60 * 1000;
+
+const CSRF_HEADER = "X-CSRF-Token";
+const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+// The CSRF cookie is not HttpOnly, so the page can read it. Returns null when the cookie is absent.
+function csrfToken(): string | null {
+  const match = document.cookie.match(/(?:^|;\s*)safe_csrf=([^;]*)/);
+  return match ? match[1] : null;
+}
 
 interface RequestOptions {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -145,33 +148,37 @@ function endSession(): void {
   sessionEndedListener?.();
 }
 
-function storeTokens(body: TokenResponse): void {
-  session = { access: body.access_token, refresh: body.refresh_token, issuedAt: Date.now() };
+// The server has set the cookies on the login response. Only the time is kept here.
+function startSession(): void {
+  session = { issuedAt: Date.now() };
 }
 
+// Every request carries the cookies (credentials: "include"). A state-changing request also carries the CSRF value.
 async function send(path: string, options: RequestOptions): Promise<Response> {
+  const method = options.method ?? "GET";
   const headers = new Headers(options.headers);
   if (options.json !== undefined) headers.set("Content-Type", "application/json");
-  if (options.auth !== false && session) headers.set("Authorization", `Bearer ${session.access}`);
+  if (UNSAFE_METHODS.has(method)) {
+    const csrf = csrfToken();
+    if (csrf !== null) headers.set(CSRF_HEADER, csrf);
+  }
   let body: BodyInit | undefined;
   if (options.form !== undefined) body = options.form;
   else if (options.json !== undefined) body = JSON.stringify(options.json);
   return fetch(`/api/v1${path}`, {
-    method: options.method ?? "GET",
+    method,
     headers,
     body,
+    credentials: "include",
   });
 }
 
+// The refresh token travels in its HttpOnly cookie, so the request has no body. The server sets new cookies on success.
 async function renew(): Promise<boolean> {
   if (!session) return false;
-  const response = await fetch("/api/v1/auth/refresh", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refresh_token: session.refresh }),
-  });
+  const response = await send("/auth/refresh", { method: "POST" });
   if (!response.ok) return false;
-  storeTokens((await response.json()) as TokenResponse);
+  startSession();
   return true;
 }
 
@@ -227,26 +234,24 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return (await response.json()) as T;
 }
 
+// The login response also carries the tokens for API clients. The page ignores them: the cookies are the session.
 export async function login(username: string, password: string): Promise<void> {
-  const body = await request<TokenResponse>("/auth/token", {
+  await request<unknown>("/auth/token", {
     method: "POST",
     json: { username, password },
     auth: false,
   });
-  storeTokens(body);
+  startSession();
 }
 
 export function me(): Promise<Me> {
   return request<Me>("/auth/me");
 }
 
+// The server clears the session cookies and revokes the session. The local state is cleared even when the request fails.
 export async function logout(): Promise<void> {
-  const refreshToken = session?.refresh;
   try {
-    await request("/auth/logout", {
-      method: "POST",
-      json: refreshToken ? { refresh_token: refreshToken } : {},
-    });
+    await request("/auth/logout", { method: "POST" });
   } finally {
     clearSession();
   }
@@ -1096,7 +1101,7 @@ export function getPrivacyInventory(): Promise<PrivacyInventory> {
   return request<PrivacyInventory>("/privacy/inventory");
 }
 
-// Downloads the inventory as a file. The bytes come through request(), so bearer auth and refresh apply.
+// Downloads the inventory as a file. The bytes come through request(), so the session cookies and refresh apply.
 export async function downloadPrivacyExport(format: PrivacyExportFormat): Promise<void> {
   const blob = await request<Blob>(`/privacy/inventory/export?format=${format}`, { responseType: "blob" });
   saveBlob(blob, `privacy-inventory.${format}`);
@@ -1225,7 +1230,7 @@ export function getOutboxSummary(): Promise<OutboxSummary> {
 }
 
 export async function readiness(): Promise<Readiness> {
-  const response = await fetch("/api/v1/health/ready");
+  const response = await fetch("/api/v1/health/ready", { credentials: "include" });
   if (response.ok) return "ready";
   try {
     const body = (await response.json()) as { detail?: { status?: string } };

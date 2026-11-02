@@ -5,6 +5,7 @@ const MESSAGES: Record<string, string> = {
   "too many login attempts": "Too many login attempts. Wait 15 minutes and try again.",
   setup_required: "This instance has no admin yet. An operator must create the first admin on the server.",
   session_expired: "Your session has expired. Please log in again.",
+  csrf_token_invalid: "The request could not be verified. Reload the page and try again.",
   "password change required": "You must change your password before continuing.",
   "current password is incorrect": "The current password is incorrect.",
   password_reused:
