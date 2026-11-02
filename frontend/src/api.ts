@@ -1245,6 +1245,34 @@ export interface OpsCards {
   heartbeat_age_seconds: number | null;
 }
 
+// Disclosure versions waiting for approval (disclosure approver only). Counts and ages, no package content.
+export interface ApprovalTemplateCounts {
+  template: string;
+  pending: number;
+  oldest_pending_age_days: number | null;
+}
+
+export interface ApprovalCards {
+  pending: number;
+  oldest_pending_age_days: number | null;
+  by_template: ApprovalTemplateCounts[];
+}
+
+export interface WeeklyStatusCounts {
+  status: "open" | "closed";
+  cases_with_significant_risk: number;
+  cases_with_weekly_update: number;
+  // YYYY-MM-DD in the system timezone, or null when no weekly update exists.
+  latest_update_date: string | null;
+}
+
+// Investigator and reviewer only. A significant risk is an impact of high or critical severity.
+export interface WeeklyUpdateCards {
+  open_significant_risk_cases: number;
+  latest_update_date: string | null;
+  by_status: WeeklyStatusCounts[];
+}
+
 export interface OverviewSummary {
   days: number;
   timezone: string;
@@ -1252,15 +1280,24 @@ export interface OverviewSummary {
   case_activity: CaseCards | null;
   users: { pending_password_change: number } | null;
   ops: OpsCards | null;
+  approvals: ApprovalCards | null;
+  weekly_updates: WeeklyUpdateCards | null;
 }
 
+// The caller's own series: cases by status at the end of each day, and own audit actions per day.
 export type SeriesMetric =
   | "cases_created"
   | "audit_events"
   | "logins_success"
   | "logins_failed"
   | "outbox_completed"
-  | "outbox_failed";
+  | "outbox_failed"
+  | "my_cases_open"
+  | "my_cases_closed"
+  | "my_actions_cases_opened"
+  | "my_actions_assignments"
+  | "my_actions_reviews"
+  | "my_actions_cases_closed";
 
 export interface SeriesPoint {
   date: string;

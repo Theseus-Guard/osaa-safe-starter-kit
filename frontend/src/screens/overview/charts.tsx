@@ -16,9 +16,12 @@ import {
   getMetricSeries,
   getOutboxSummary,
   getUsersSummary,
+  type ApprovalCards,
   type AuditSummary,
   type OverviewRange,
+  type OverviewSummary,
   type SeriesPoint,
+  type WeeklyUpdateCards,
 } from "../../api";
 import {
   axisInterval,
@@ -27,7 +30,7 @@ import {
   formatChartDate,
   TABLE_PREVIEW_ROWS,
 } from "./parts";
-import { useLoad } from "./useLoad";
+import { type LoadState, mapLoadState, useLoad } from "./useLoad";
 
 // One row per x value. Keys are chart series keys; they never contain dots, which Recharts reads as a path.
 interface Row {
@@ -258,6 +261,86 @@ const DEADLINE_SERIES: Series[] = [
   { key: "done", label: "Done", color: "var(--chart-3)" },
 ];
 
+// The caller's cases by status at the end of each day (reporter, triager, investigator, reviewer). Counts only.
+const MY_CASES_SERIES: Series[] = [
+  { key: "open", label: "Open", color: "var(--chart-1)" },
+  { key: "closed", label: "Closed", color: "var(--chart-2)" },
+];
+
+export function MyCasesChart({ days, wide }: ChartProps & { days: OverviewRange }) {
+  const state = useLoad(async () => {
+    const [open, closed] = await Promise.all([
+      getMetricSeries("my_cases_open", days),
+      getMetricSeries("my_cases_closed", days),
+    ]);
+    return open.points.map((point, index) => ({
+      date: point.date,
+      open: point.count,
+      closed: closed.points[index]?.count ?? 0,
+    }));
+  }, [days]);
+  return (
+    <ChartPanel
+      title="My cases over time"
+      description={`Your cases by status at the end of each day, last ${days} days. Cases you created or are assigned to.`}
+      state={state}
+      wide={wide}
+      isEmpty={(rows) => isAllZero(rows, ["open", "closed"])}
+      chart={(rows) => <DailyLineChart rows={rows} series={MY_CASES_SERIES} />}
+      table={(rows) => (
+        <DataTable
+          label="My cases per day"
+          headers={["Date", "Open", "Closed"]}
+          rows={rows.map((row) => [String(row.date), row.open, row.closed])}
+        />
+      )}
+    />
+  );
+}
+
+// The caller's own actions on cases per day (reporter, triager, investigator, reviewer). Only actions the caller took.
+const MY_ACTIONS_SERIES: Series[] = [
+  { key: "opened", label: "Cases opened", color: "var(--chart-1)" },
+  { key: "assigned", label: "Assignments taken", color: "var(--chart-2)" },
+  { key: "reviewed", label: "Reviews recorded", color: "var(--chart-3)" },
+  { key: "closed", label: "Cases closed", color: "var(--chart-4)" },
+];
+
+export function MyContributionsChart({ days, wide }: ChartProps & { days: OverviewRange }) {
+  const state = useLoad(async () => {
+    const [opened, assigned, reviewed, closed] = await Promise.all([
+      getMetricSeries("my_actions_cases_opened", days),
+      getMetricSeries("my_actions_assignments", days),
+      getMetricSeries("my_actions_reviews", days),
+      getMetricSeries("my_actions_cases_closed", days),
+    ]);
+    return opened.points.map((point, index) => ({
+      date: point.date,
+      opened: point.count,
+      assigned: assigned.points[index]?.count ?? 0,
+      reviewed: reviewed.points[index]?.count ?? 0,
+      closed: closed.points[index]?.count ?? 0,
+    }));
+  }, [days]);
+  return (
+    <ChartPanel
+      title="My contributions over time"
+      description={`The actions you took on cases each day, last ${days} days. Other users' actions are not counted.`}
+      state={state}
+      wide={wide}
+      isEmpty={(rows) => isAllZero(rows, ["opened", "assigned", "reviewed", "closed"])}
+      chart={(rows) => <DailyStackedBars rows={rows} series={MY_ACTIONS_SERIES} />}
+      table={(rows) => (
+        <DataTable
+          label="My actions per day"
+          headers={["Date", "Cases opened", "Assignments taken", "Reviews recorded", "Cases closed"]}
+          rows={rows.map((row) => [String(row.date), row.opened, row.assigned, row.reviewed, row.closed])}
+        />
+      )}
+    />
+  );
+}
+
 // Deadline status per kind, for the caller's own cases (reporter, triager, investigator, reviewer).
 export function DeadlinesChart({ wide }: ChartProps) {
   const state = useLoad(async () => {
@@ -286,7 +369,7 @@ export function DeadlinesChart({ wide }: ChartProps) {
             <ChartTooltip content={<ChartTooltipContent />} />
             {legendFor(DEADLINE_SERIES)}
             {DEADLINE_SERIES.map((item) => (
-              <Bar key={item.key} dataKey={item.key} fill={`var(--color-${item.key})`} />
+              <Bar key={item.key} dataKey={item.key} stackId="deadlines" fill={`var(--color-${item.key})`} />
             ))}
           </BarChart>
         </ChartContainer>
@@ -454,6 +537,75 @@ export function UsersChart({ wide }: ChartProps) {
           {view.total} accounts in total. {view.pending} with a password change pending.
         </p>
       )}
+    />
+  );
+}
+
+const APPROVAL_TEMPLATE_LABELS: Record<string, string> = {
+  confidential_rapid_alert: "Confidential rapid alert",
+  de_identified_member_advisory: "De-identified member advisory",
+  redacted_public_safety_report: "Redacted public safety report",
+};
+
+// "1 day", "5 days", or "None" when there is no age.
+export function formatDays(days: number | null): string {
+  if (days === null) return "None";
+  return days === 1 ? "1 day" : `${days} days`;
+}
+
+// Disclosure versions waiting for approval, by template (disclosure approver only). A table only: counts and ages.
+export function ApprovalsPanel({ state, wide }: { state: LoadState<OverviewSummary>; wide?: boolean }) {
+  const approvals = mapLoadState(state, (summary) => summary.approvals ?? null);
+  return (
+    <ChartPanel<ApprovalCards | null>
+      title="Pending approvals"
+      description="Latest versions of disclosure packages with no approval yet, by template. Counts only; no package content."
+      state={approvals}
+      wide={wide}
+      isEmpty={(view) => view === null || view.pending === 0}
+      table={(view) =>
+        view === null ? null : (
+          <DataTable
+            label="Pending approvals by template"
+            headers={["Template", "Waiting", "Oldest waiting"]}
+            rows={view.by_template.map((item) => [
+              APPROVAL_TEMPLATE_LABELS[item.template] ?? item.template,
+              item.pending,
+              formatDays(item.oldest_pending_age_days),
+            ])}
+          />
+        )
+      }
+    />
+  );
+}
+
+const WEEKLY_STATUS_LABELS: Record<string, string> = { open: "Open", closed: "Closed" };
+
+// Significant risks of the caller's cases and their weekly updates (investigator and reviewer). A table only.
+export function WeeklyUpdatesPanel({ state, wide }: { state: LoadState<OverviewSummary>; wide?: boolean }) {
+  const weekly = mapLoadState(state, (summary) => summary.weekly_updates ?? null);
+  return (
+    <ChartPanel<WeeklyUpdateCards | null>
+      title="Weekly updates"
+      description="Your cases with a high or critical impact, by case status, and the latest weekly update. Counts only."
+      state={weekly}
+      wide={wide}
+      isEmpty={(view) => view === null || view.by_status.every((row) => row.cases_with_significant_risk === 0)}
+      table={(view) =>
+        view === null ? null : (
+          <DataTable
+            label="Weekly updates by case status"
+            headers={["Case status", "Significant risk", "With a weekly update", "Latest weekly update"]}
+            rows={view.by_status.map((row) => [
+              WEEKLY_STATUS_LABELS[row.status] ?? row.status,
+              row.cases_with_significant_risk,
+              row.cases_with_weekly_update,
+              row.latest_update_date === null ? "None" : formatChartDate(row.latest_update_date),
+            ])}
+          />
+        )
+      }
     />
   );
 }

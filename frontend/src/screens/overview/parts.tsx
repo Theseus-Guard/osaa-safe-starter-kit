@@ -84,7 +84,8 @@ interface ChartPanelProps<T> {
   description: string;
   state: LoadState<T>;
   isEmpty: (data: T) => boolean;
-  chart: (data: T) => ReactNode;
+  // Omitted for a card that is only a table. Such a card has no Chart / Table toggle.
+  chart?: (data: T) => ReactNode;
   table: (data: T) => ReactNode;
   footer?: (data: T) => ReactNode;
   // Spans both columns on wide screens. Used when the card would otherwise stand alone in its row.
@@ -95,13 +96,14 @@ interface ChartPanelProps<T> {
 export function ChartPanel<T>({ title, description, state, isEmpty, chart, table, footer, wide = false }: ChartPanelProps<T>) {
   const [view, setView] = useState<ChartView>("chart");
   const hasData = state.status === "ready" && !isEmpty(state.data);
+  const hasToggle = chart !== undefined;
 
   return (
     <Card className={wide ? "xl:col-span-2" : undefined}>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
         <CardDescription>{description}</CardDescription>
-        {hasData && (
+        {hasData && hasToggle && (
           <CardAction>
             <SegmentedControl label={`${title} view`} options={VIEW_OPTIONS} value={view} onChange={setView} />
           </CardAction>
@@ -120,7 +122,9 @@ export function ChartPanel<T>({ title, description, state, isEmpty, chart, table
         )}
         {state.status === "ready" &&
           (hasData ? (
-            <div className="min-w-0">{view === "chart" ? chart(state.data) : table(state.data)}</div>
+            <div className="min-w-0">
+              {chart !== undefined && view === "chart" ? chart(state.data) : table(state.data)}
+            </div>
           ) : (
             <p className="text-sm text-muted-foreground">{NO_DATA_MESSAGE}</p>
           ))}

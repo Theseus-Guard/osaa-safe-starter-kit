@@ -45,6 +45,31 @@ class OpsCards(BaseModel):
     heartbeat_age_seconds: int | None
 
 
+class ApprovalTemplateCounts(BaseModel):
+    template: str
+    pending: int
+    oldest_pending_age_days: int | None
+
+
+class ApprovalCards(BaseModel):
+    pending: int
+    oldest_pending_age_days: int | None
+    by_template: list[ApprovalTemplateCounts]
+
+
+class WeeklyStatusCounts(BaseModel):
+    status: Literal["open", "closed"]
+    cases_with_significant_risk: int
+    cases_with_weekly_update: int
+    latest_update_date: str | None
+
+
+class WeeklyUpdateCards(BaseModel):
+    open_significant_risk_cases: int
+    latest_update_date: str | None
+    by_status: list[WeeklyStatusCounts]
+
+
 class SummaryResponse(BaseModel):
     days: int
     timezone: str
@@ -52,6 +77,8 @@ class SummaryResponse(BaseModel):
     case_activity: CaseCards | None
     users: UserCards | None
     ops: OpsCards | None
+    approvals: ApprovalCards | None
+    weekly_updates: WeeklyUpdateCards | None
 
 
 class SeriesPoint(BaseModel):
@@ -130,6 +157,8 @@ def _window(days: int, now: datetime) -> Window:
 def _metric_allowed(metric: str, role: str, permissions: frozenset[str]) -> bool:
     if metric in ("logins_success", "logins_failed"):
         return overview.sees_logins(permissions)
+    if metric in overview.MY_TIMESERIES_METRICS:
+        return overview.sees_own_cases(permissions)
     return overview.sees_case_activity(role, permissions)
 
 
@@ -158,7 +187,10 @@ def get_metric_timeseries(
         raise FORBIDDEN
     now = datetime.now(UTC)
     window = _window(days, now)
-    points = overview.timeseries(metric, window)
+    if metric in overview.MY_TIMESERIES_METRICS:
+        points = overview.my_timeseries(metric, actor.id, permissions_of(actor), window)
+    else:
+        points = overview.timeseries(metric, window)
     return TimeseriesResponse(metric=metric, days=days, timezone=window.timezone, points=points)
 
 
