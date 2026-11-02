@@ -17,7 +17,12 @@ DB_SETTINGS = {
     "SAFE_SESSION_MAX_HOURS": "12",
     "SAFE_RETENTION_YEARS": "5",
 }
-DEMO = {"SAFE_MODE": "demo", "SAFE_BIND_HOST": "127.0.0.1", "SAFE_DATASET": "synthetic-demo", **DB_SETTINGS}
+DEMO = {
+    "SAFE_MODE": "demo",
+    "SAFE_BIND_HOST": "127.0.0.1",
+    "SAFE_DATASET": "synthetic-demo",
+    **DB_SETTINGS,
+}
 PRODUCTION = {"SAFE_MODE": "production", **DB_SETTINGS}
 HOST = "172.28.0.1"
 
@@ -32,7 +37,9 @@ def test_host_address_is_refused_when_not_configured():
 
 def test_other_addresses_on_the_edge_network_are_refused():
     env = {**DEMO, "SAFE_DEMO_HOST_ADDRESS": HOST}
-    assert not demo_sign_in_allowed(env, "172.28.0.10")  # the gateway itself is not the client
+    assert not demo_sign_in_allowed(
+        env, "172.28.0.10"
+    )  # the gateway itself is not the client
     assert not demo_sign_in_allowed(env, "172.28.0.99")
 
 

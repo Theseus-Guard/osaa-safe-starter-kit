@@ -56,7 +56,9 @@ class Actor:
     """One real user. The caller is set before every request, so actors never share a caller."""
 
     def __init__(self, role: str):
-        self.user_id = users.create_user("t-" + uuid.uuid4().hex[:12], "temporary passphrase", role)
+        self.user_id = users.create_user(
+            "t-" + uuid.uuid4().hex[:12], "temporary passphrase", role
+        )
         self.client = TestClient(api.app)
 
     def send(self, method: str, url: str, **kwargs):
@@ -67,7 +69,9 @@ class Actor:
 
     def ok(self, method: str, url: str, expect: int, **kwargs) -> dict:
         extra = kwargs.pop("headers", {})
-        response = self.send(method, url, headers={"Idempotency-Key": new_key(), **extra}, **kwargs)
+        response = self.send(
+            method, url, headers={"Idempotency-Key": new_key(), **extra}, **kwargs
+        )
         assert response.status_code == expect, response.text
         return response.json() if response.content else {}
 
@@ -84,11 +88,17 @@ class World:
 def world(monkeypatch, tmp_path):
     migrate()  # idempotent: applies pending migrations on a fresh test database
     with connect() as conn:
-        exists = conn.execute("SELECT EXISTS (SELECT 1 FROM system_timezone WHERE NOT is_deleted)").fetchone()[0]
+        exists = conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM system_timezone WHERE NOT is_deleted)"
+        ).fetchone()[0]
         if not exists:
-            conn.execute("INSERT INTO system_timezone (timezone) VALUES ('Europe/Istanbul')")
+            conn.execute(
+                "INSERT INTO system_timezone (timezone) VALUES ('Europe/Istanbul')"
+            )
     # Evidence goes to memory and to a throwaway key file: no storage volume or key service is needed.
-    monkeypatch.setattr(evidence_api, "_PROVIDER", LocalFileKeyProvider(write_kek(tmp_path / "kek.bin")))
+    monkeypatch.setattr(
+        evidence_api, "_PROVIDER", LocalFileKeyProvider(write_kek(tmp_path / "kek.bin"))
+    )
     monkeypatch.setattr(evidence_api, "storage_from_env", lambda: MemoryStorage())
     yield World(
         reporter=Actor("reporter"),
@@ -103,17 +113,24 @@ def world(monkeypatch, tmp_path):
 
 
 def open_case(world: World, title: str = "Case") -> dict:
-    return world.reporter.ok("POST", "/api/v1/cases", 201, json={"title": title, "awareness_time": past()})
+    return world.reporter.ok(
+        "POST", "/api/v1/cases", 201, json={"title": title, "awareness_time": past()}
+    )
 
 
 def assign(world: World, case_id: str, user_id: str) -> None:
-    world.triager.ok("POST", f"/api/v1/cases/{case_id}/assignments", 201, json={"user_id": user_id})
+    world.triager.ok(
+        "POST", f"/api/v1/cases/{case_id}/assignments", 201, json={"user_id": user_id}
+    )
 
 
 def settle_deadlines(world: World, case: dict) -> None:
     for task in case["deadlines"]:
         world.triager.ok(
-            "PATCH", f"/api/v1/cases/{case['id']}/deadlines/{task['id']}", 200, json={"status": "done"}
+            "PATCH",
+            f"/api/v1/cases/{case['id']}/deadlines/{task['id']}",
+            200,
+            json={"status": "done"},
         )
 
 
@@ -121,7 +138,9 @@ def closable_case(world: World) -> dict:
     """An open case with a recorded review layer and every deadline task done, so it may be closed."""
     case = open_case(world)
     assign(world, case["id"], world.reviewer.user_id)
-    round_ = world.reviewer.ok("POST", "/api/v1/reviews", 201, json={"case_id": case["id"]})
+    round_ = world.reviewer.ok(
+        "POST", "/api/v1/reviews", 201, json={"case_id": case["id"]}
+    )
     world.reviewer.ok(
         "PATCH",
         f"/api/v1/reviews/{round_['id']}/layers/model",
@@ -169,7 +188,10 @@ class Scenario:
 
 def scenario_create_case(world: World) -> Scenario:
     return Scenario(
-        world.reporter, "POST", "/api/v1/cases", 201,
+        world.reporter,
+        "POST",
+        "/api/v1/cases",
+        201,
         body={"title": "Case one", "awareness_time": past()},
         other_body={"title": "Case two", "awareness_time": past()},
     )
@@ -177,7 +199,10 @@ def scenario_create_case(world: World) -> Scenario:
 
 def scenario_report(world: World) -> Scenario:
     return Scenario(
-        world.reporter, "POST", "/api/v1/reports", 201,
+        world.reporter,
+        "POST",
+        "/api/v1/reports",
+        201,
         body={"title": "Report one", "awareness_time": past(), "contact": None},
         other_body={"title": "Report two", "awareness_time": past(), "contact": None},
     )
@@ -186,23 +211,40 @@ def scenario_report(world: World) -> Scenario:
 def scenario_import(world: World) -> Scenario:
     first = json.loads(envelope([example_record()]))
     other = json.loads(envelope([example_record()]))
-    return Scenario(world.reporter, "POST", "/api/v1/cases/import", 200, body=first, other_body=other)
+    return Scenario(
+        world.reporter,
+        "POST",
+        "/api/v1/cases/import",
+        200,
+        body=first,
+        other_body=other,
+    )
 
 
 def scenario_evidence(world: World) -> Scenario:
     case = open_case(world)
     assign(world, case["id"], world.investigator.user_id)
     return Scenario(
-        world.investigator, "POST", f"/api/v1/cases/{case['id']}/evidence", 201,
+        world.investigator,
+        "POST",
+        f"/api/v1/cases/{case['id']}/evidence",
+        201,
         files={"file": ("note.txt", b"first note", "text/plain")},
         other_files={"file": ("note.txt", b"second note", "text/plain")},
     )
 
 
 def scenario_link(world: World) -> Scenario:
-    first, second, third = open_case(world, "A"), open_case(world, "B"), open_case(world, "C")
+    first, second, third = (
+        open_case(world, "A"),
+        open_case(world, "B"),
+        open_case(world, "C"),
+    )
     return Scenario(
-        world.triager, "POST", f"/api/v1/cases/{first['id']}/links", 201,
+        world.triager,
+        "POST",
+        f"/api/v1/cases/{first['id']}/links",
+        201,
         body={"linked_case_id": second["id"]},
         other_body={"linked_case_id": third["id"]},
     )
@@ -211,7 +253,10 @@ def scenario_link(world: World) -> Scenario:
 def scenario_assignment(world: World) -> Scenario:
     case = open_case(world)
     return Scenario(
-        world.triager, "POST", f"/api/v1/cases/{case['id']}/assignments", 201,
+        world.triager,
+        "POST",
+        f"/api/v1/cases/{case['id']}/assignments",
+        201,
         body={"user_id": world.investigator.user_id},
         other_body={"user_id": world.reviewer.user_id},
     )
@@ -220,7 +265,10 @@ def scenario_assignment(world: World) -> Scenario:
 def scenario_close(world: World) -> Scenario:
     case = closable_case(world)
     return Scenario(
-        world.triager, "POST", f"/api/v1/cases/{case['id']}/close", 200,
+        world.triager,
+        "POST",
+        f"/api/v1/cases/{case['id']}/close",
+        200,
         body={"reason": "Closed after review"},
         other_body={"reason": "Another reason"},
     )
@@ -228,9 +276,14 @@ def scenario_close(world: World) -> Scenario:
 
 def scenario_reopen(world: World) -> Scenario:
     case = closable_case(world)
-    world.triager.ok("POST", f"/api/v1/cases/{case['id']}/close", 200, json={"reason": "Closed"})
+    world.triager.ok(
+        "POST", f"/api/v1/cases/{case['id']}/close", 200, json={"reason": "Closed"}
+    )
     return Scenario(
-        world.triager, "POST", f"/api/v1/cases/{case['id']}/reopen", 200,
+        world.triager,
+        "POST",
+        f"/api/v1/cases/{case['id']}/reopen",
+        200,
         body={"reason": "Reopened for review"},
         other_body={"reason": "Another reason"},
     )
@@ -239,25 +292,54 @@ def scenario_reopen(world: World) -> Scenario:
 def scenario_awareness(world: World) -> Scenario:
     case = open_case(world)
     return Scenario(
-        world.triager, "POST", f"/api/v1/cases/{case['id']}/awareness-events", 201,
-        body={"awareness_kind": "operator", "event_kind": "incident", "occurred_at": past(), "basis": "Alert"},
-        other_body={"awareness_kind": "operator", "event_kind": "incident", "occurred_at": past(), "basis": "Other"},
+        world.triager,
+        "POST",
+        f"/api/v1/cases/{case['id']}/awareness-events",
+        201,
+        body={
+            "awareness_kind": "operator",
+            "event_kind": "incident",
+            "occurred_at": past(),
+            "basis": "Alert",
+        },
+        other_body={
+            "awareness_kind": "operator",
+            "event_kind": "incident",
+            "occurred_at": past(),
+            "basis": "Other",
+        },
     )
 
 
 def scenario_legal_duty(world: World) -> Scenario:
     case = open_case(world)
     return Scenario(
-        world.triager, "POST", f"/api/v1/cases/{case['id']}/legal-duties", 201,
-        body={"kind": "statutory", "description": "Notify", "source_reference": "Act 1", "due_at": future()},
-        other_body={"kind": "statutory", "description": "Other duty", "source_reference": "Act 1", "due_at": future()},
+        world.triager,
+        "POST",
+        f"/api/v1/cases/{case['id']}/legal-duties",
+        201,
+        body={
+            "kind": "statutory",
+            "description": "Notify",
+            "source_reference": "Act 1",
+            "due_at": future(),
+        },
+        other_body={
+            "kind": "statutory",
+            "description": "Other duty",
+            "source_reference": "Act 1",
+            "due_at": future(),
+        },
     )
 
 
 def scenario_impact(world: World) -> Scenario:
     case = open_case(world)
     return Scenario(
-        world.triager, "PUT", f"/api/v1/cases/{case['id']}/impacts/severity", 200,
+        world.triager,
+        "PUT",
+        f"/api/v1/cases/{case['id']}/impacts/severity",
+        200,
         body={"severity": "high", "scope": "Wide"},
         other_body={"severity": "low", "scope": "Wide"},
     )
@@ -284,7 +366,10 @@ def _classification(**changes) -> dict:
 def scenario_classification(world: World) -> Scenario:
     case = open_case(world)
     return Scenario(
-        world.triager, "PUT", f"/api/v1/cases/{case['id']}/classification", 200,
+        world.triager,
+        "PUT",
+        f"/api/v1/cases/{case['id']}/classification",
+        200,
         body=_classification(),
         other_body=_classification(classification_rationale="Another rationale"),
     )
@@ -294,7 +379,10 @@ def scenario_deadline(world: World) -> Scenario:
     case = open_case(world)
     task = case["deadlines"][0]
     return Scenario(
-        world.triager, "PATCH", f"/api/v1/cases/{case['id']}/deadlines/{task['id']}", 200,
+        world.triager,
+        "PATCH",
+        f"/api/v1/cases/{case['id']}/deadlines/{task['id']}",
+        200,
         body={"status": "done"},
         other_body={"status": "open"},
     )
@@ -311,7 +399,10 @@ def scenario_restore(world: World) -> Scenario:
             json={"status": "not_applicable", "reason": "Not needed here"},
         )
     return Scenario(
-        world.triager, "POST", f"/api/v1/cases/{case['id']}/deadlines/{first['id']}/restore", 200,
+        world.triager,
+        "POST",
+        f"/api/v1/cases/{case['id']}/deadlines/{first['id']}/restore",
+        200,
         other_url=f"/api/v1/cases/{case['id']}/deadlines/{second['id']}/restore",
     )
 
@@ -319,9 +410,14 @@ def scenario_restore(world: World) -> Scenario:
 def scenario_review_layer(world: World) -> Scenario:
     case = open_case(world)
     assign(world, case["id"], world.reviewer.user_id)
-    round_ = world.reviewer.ok("POST", "/api/v1/reviews", 201, json={"case_id": case["id"]})
+    round_ = world.reviewer.ok(
+        "POST", "/api/v1/reviews", 201, json={"case_id": case["id"]}
+    )
     return Scenario(
-        world.reviewer, "PATCH", f"/api/v1/reviews/{round_['id']}/layers/model", 200,
+        world.reviewer,
+        "PATCH",
+        f"/api/v1/reviews/{round_['id']}/layers/model",
+        200,
         body={"outcome": "fail", "reason": "Gap"},
         other_body={"outcome": "fail", "reason": "Other gap"},
         if_match=f'"{round_["revision"]}"',
@@ -389,14 +485,18 @@ def test_a_refused_request_stores_no_key_so_the_retry_with_the_same_key_succeeds
     key = new_key()
     # The task does not exist: refused with 404, nothing stored.
     refused = world.triager.send(
-        "PATCH", f"/api/v1/cases/{case['id']}/deadlines/{uuid.uuid4()}",
-        headers={"Idempotency-Key": key}, json={"status": "done"},
+        "PATCH",
+        f"/api/v1/cases/{case['id']}/deadlines/{uuid.uuid4()}",
+        headers={"Idempotency-Key": key},
+        json={"status": "done"},
     )
     assert refused.status_code == 404
     task = case["deadlines"][0]
     retry = world.triager.send(
-        "PATCH", f"/api/v1/cases/{case['id']}/deadlines/{task['id']}",
-        headers={"Idempotency-Key": key}, json={"status": "done"},
+        "PATCH",
+        f"/api/v1/cases/{case['id']}/deadlines/{task['id']}",
+        headers={"Idempotency-Key": key},
+        json={"status": "done"},
     )
     assert retry.status_code == 200, retry.text
 
@@ -404,9 +504,19 @@ def test_a_refused_request_stores_no_key_so_the_retry_with_the_same_key_succeeds
 def test_keys_are_scoped_to_the_principal(world):
     case = open_case(world)
     key = new_key()
-    body = {"awareness_kind": "operator", "event_kind": "incident", "occurred_at": past(), "basis": "Alert"}
+    body = {
+        "awareness_kind": "operator",
+        "event_kind": "incident",
+        "occurred_at": past(),
+        "basis": "Alert",
+    }
     url = f"/api/v1/cases/{case['id']}/awareness-events"
-    assert world.triager.send("POST", url, headers={"Idempotency-Key": key}, json=body).status_code == 201
+    assert (
+        world.triager.send(
+            "POST", url, headers={"Idempotency-Key": key}, json=body
+        ).status_code
+        == 201
+    )
     # Another triager with the same key and the same request is a new request, so it is stored and answered as one.
     another = Actor("triager")
     response = another.send("POST", url, headers={"Idempotency-Key": key}, json=body)

@@ -580,9 +580,13 @@ def test_a_repeated_entry_post_with_the_same_key_writes_once_and_a_changed_body_
 
 def export_document_errors(document) -> list[str]:
     schema = json.loads(
-        (Path(__file__).resolve().parents[2] / "schemas" / "catalog-export.v0.json").read_text(encoding="utf-8")
+        (
+            Path(__file__).resolve().parents[2] / "schemas" / "catalog-export.v0.json"
+        ).read_text(encoding="utf-8")
     )
-    return [error.message for error in Draft202012Validator(schema).iter_errors(document)]
+    return [
+        error.message for error in Draft202012Validator(schema).iter_errors(document)
+    ]
 
 
 @requires_database
@@ -597,7 +601,9 @@ def test_the_export_endpoint_hides_hidden_links_and_digests_from_every_reader():
             "SELECT count(*) FROM catalog_restricted_references WHERE digest = %s",
             (digest_of(HIDDEN_LINK),),
         ).fetchone()[0]
-    assert stored >= 1  # the hidden reference is in the database, so a leak would be possible
+    assert (
+        stored >= 1
+    )  # the hidden reference is in the database, so a leak would be possible
 
     response = as_user(auditor).get("/api/v1/catalog/export")
     reviewer_response = as_user(reviewer).get("/api/v1/catalog/export")
@@ -614,7 +620,9 @@ def test_the_export_endpoint_hides_hidden_links_and_digests_from_every_reader():
     assert export_document_errors(document) == []
     ids = {item["id"] for item in document["catalog_export"]["entries"]}
     assert {hidden.id, other.id} <= ids
-    assert reviewer_response.content == response.content  # the same document for every reader
+    assert (
+        reviewer_response.content == response.content
+    )  # the same document for every reader
     assert reviewer not in response.text  # internal identifiers stay internal
 
 
@@ -644,13 +652,17 @@ def test_the_export_repeats_exactly_and_shows_the_stored_current_version():
     assert first.content == second.content
     assert export_document_errors(first.json()) == []
     [exported] = [
-        item for item in first.json()["catalog_export"]["entries"] if item["id"] == created.id
+        item
+        for item in first.json()["catalog_export"]["entries"]
+        if item["id"] == created.id
     ]
     stored = get_entry(created.id, with_restricted=False)
     assert exported["version"] == stored.current.version == 2
     assert exported["status"] == stored.current.status == "active"
     assert [item["version"] for item in exported["versions"]] == [1, 2]
-    assert exported["versions"][0]["title"] == created.current.title  # the earlier version is kept as it was
+    assert (
+        exported["versions"][0]["title"] == created.current.title
+    )  # the earlier version is kept as it was
     assert exported["versions"][-1]["title"] == changed.value.current.title
 
 

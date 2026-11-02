@@ -52,8 +52,13 @@ def test_reconciliation_selects_only_stale_pending_rows_and_skips_locked_ones(sq
     assert evidence.fail_stale_pending(30) == []
     assert len(sql_log) == 1
     sql, params = sql_log[0]
-    assert sql.startswith("UPDATE evidence_items SET status = 'failed' WHERE id IN ( SELECT id FROM evidence_items")
-    assert "WHERE status = 'pending' AND NOT is_deleted AND created_at < now() - make_interval(mins => %s::int)" in sql
+    assert sql.startswith(
+        "UPDATE evidence_items SET status = 'failed' WHERE id IN ( SELECT id FROM evidence_items"
+    )
+    assert (
+        "WHERE status = 'pending' AND NOT is_deleted AND created_at < now() - make_interval(mins => %s::int)"
+        in sql
+    )
     assert "FOR UPDATE SKIP LOCKED ) RETURNING id::text" in sql
     assert params == (30,)
     assert "DELETE" not in sql and "TRUNCATE" not in sql
@@ -61,7 +66,9 @@ def test_reconciliation_selects_only_stale_pending_rows_and_skips_locked_ones(sq
 
 def test_reconciliation_writes_no_custody_event_when_nothing_is_stale(sql_log):
     evidence.fail_stale_pending(30)
-    assert [sql for sql, _ in sql_log if sql.startswith("INSERT INTO custody_events")] == []
+    assert [
+        sql for sql, _ in sql_log if sql.startswith("INSERT INTO custody_events")
+    ] == []
 
 
 def test_reconciliation_window_must_be_positive():
@@ -147,9 +154,13 @@ def test_worker_runs_reconciliation_once_when_the_queue_is_empty(loop):
     assert loop["reconcile_times"] == [0.0]
 
 
-def test_failed_reconciliation_is_logged_by_error_type_and_the_loop_keeps_running(loop, caplog):
+def test_failed_reconciliation_is_logged_by_error_type_and_the_loop_keeps_running(
+    loop, caplog
+):
     loop["jobs_left"] = 3
-    loop["reconcile_error"] = RuntimeError("connection to the database was lost: secret detail")
+    loop["reconcile_error"] = RuntimeError(
+        "connection to the database was lost: secret detail"
+    )
     with caplog.at_level(logging.ERROR, logger=worker.logger.name):
         assert worker.main() == 0
     assert loop["reconcile_times"] == [0.0]
@@ -198,11 +209,15 @@ def insert_pending_row(case_id: str, user_id: str, minutes_old: int) -> str:
 
 def row_status(evidence_id: str) -> str:
     with connect() as conn:
-        return conn.execute("SELECT status FROM evidence_items WHERE id = %s", (evidence_id,)).fetchone()[0]
+        return conn.execute(
+            "SELECT status FROM evidence_items WHERE id = %s", (evidence_id,)
+        ).fetchone()[0]
 
 
 def custody_actions(evidence_id: str) -> list[tuple[str, dict]]:
-    return [(event.action, event.details) for event in evidence.custody_events(evidence_id)]
+    return [
+        (event.action, event.details) for event in evidence.custody_events(evidence_id)
+    ]
 
 
 @requires_database
@@ -234,7 +249,9 @@ def test_row_locked_by_another_transaction_is_skipped_and_picked_up_later():
     stale = insert_pending_row(case_id, user_id, minutes_old=120)
     # Another transaction holds the row, as an upload finishing would. Reconciliation must not wait for it.
     with connect() as holder:
-        holder.execute("SELECT id FROM evidence_items WHERE id = %s FOR UPDATE", (stale,)).fetchone()
+        holder.execute(
+            "SELECT id FROM evidence_items WHERE id = %s FOR UPDATE", (stale,)
+        ).fetchone()
         assert stale not in evidence.fail_stale_pending(30)
     assert row_status(stale) == "pending"
     assert stale in evidence.fail_stale_pending(30)

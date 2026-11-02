@@ -18,7 +18,12 @@ from safe_kit import audit
 from safe_kit import system_timezone
 from safe_kit.db import connect
 from safe_kit.idempotency import KeyScope, check, remember
-from safe_kit.deadlines import BusinessCalendar, deadline_start, deadlines_for, next_weekly_update
+from safe_kit.deadlines import (
+    BusinessCalendar,
+    deadline_start,
+    deadlines_for,
+    next_weekly_update,
+)
 from safe_kit.system_timezone import TimezoneNotConfigured
 
 # The working calendar is provisional until the owning organization confirms its working days and holidays.
@@ -188,9 +193,7 @@ SAFE_DEADLINE_KINDS = (
 
 # The 14-day broader advisory is conditional, and the case data has no field that records the condition. Until it
 # does, the task starts not applicable with this reason. A triager sets it open once the condition holds.
-BROADER_ADVISORY_CONDITION_REASON = (
-    "conditional advisory: no condition is recorded in the case data, so the advisory is not applicable yet"
-)
+BROADER_ADVISORY_CONDITION_REASON = "conditional advisory: no condition is recorded in the case data, so the advisory is not applicable yet"
 # The reason a task holds only by its default, so that no person has decided it. A person who marks the task not
 # applicable replaces it, and restoring the task puts it back.
 DEFAULT_NOT_APPLICABLE_REASONS = {"broader_advisory": BROADER_ADVISORY_CONDITION_REASON}
@@ -198,7 +201,9 @@ DEFAULT_NOT_APPLICABLE_REASONS = {"broader_advisory": BROADER_ADVISORY_CONDITION
 WEEKLY_UPDATE_KIND = "weekly_update"
 SIGNIFICANT_SEVERITIES = ("high", "critical")
 WEEKLY_SIGNIFICANT_SOURCE = "significant_risk"
-WEEKLY_NOT_SIGNIFICANT_REASON = "no significant risk is open, so the weekly update is not due"
+WEEKLY_NOT_SIGNIFICANT_REASON = (
+    "no significant risk is open, so the weekly update is not due"
+)
 
 
 def deadline_tasks_for(t0: datetime, calendar: BusinessCalendar) -> list[DeadlineTask]:
@@ -213,7 +218,9 @@ def deadline_tasks_for(t0: datetime, calendar: BusinessCalendar) -> list[Deadlin
             "not_applicable",
             not_applicable_reason=BROADER_ADVISORY_CONDITION_REASON,
         ),
-        DeadlineTask("preliminary_public_report", due.preliminary_public_report, "open"),
+        DeadlineTask(
+            "preliminary_public_report", due.preliminary_public_report, "open"
+        ),
         DeadlineTask("remediation_status", due.remediation_status, "open"),
     ]
 
@@ -236,7 +243,10 @@ def resync_deadlines(conn, case_id: str) -> tuple[datetime, dict[str, dict[str, 
         ).fetchall()
     ]
     t0 = deadline_start(awareness_time, operator_times)
-    expected = {task.kind: task.due_at for task in deadline_tasks_for(t0, calendar_for(calendar_timezone))}
+    expected = {
+        task.kind: task.due_at
+        for task in deadline_tasks_for(t0, calendar_for(calendar_timezone))
+    }
     moved: dict[str, dict[str, str]] = {}
     stored = conn.execute(
         "SELECT id::text, kind, due_at FROM deadline_tasks WHERE case_id = %s AND NOT is_deleted AND kind = ANY(%s)",
@@ -244,7 +254,10 @@ def resync_deadlines(conn, case_id: str) -> tuple[datetime, dict[str, dict[str, 
     ).fetchall()
     for task_id, kind, due_at in stored:
         if due_at != expected[kind]:
-            conn.execute("UPDATE deadline_tasks SET due_at = %s WHERE id = %s", (expected[kind], task_id))
+            conn.execute(
+                "UPDATE deadline_tasks SET due_at = %s WHERE id = %s",
+                (expected[kind], task_id),
+            )
             moved[kind] = {"old": due_at.isoformat(), "new": expected[kind].isoformat()}
     return t0, moved
 
@@ -275,7 +288,9 @@ def _text_marker(text: str | None) -> dict[str, int] | None:
     return None if text is None else {"length": len(text)}
 
 
-def _record_status_change(conn, case_id: str, action: str, reason: str, actor_id: str) -> None:
+def _record_status_change(
+    conn, case_id: str, action: str, reason: str, actor_id: str
+) -> None:
     """Store the reason of a closure or reopening. changed_at is the transaction time, as is the audit row's."""
     conn.execute(
         "INSERT INTO case_status_changes (case_id, action, reason, actor_id) VALUES (%s, %s, %s, %s)",
@@ -320,7 +335,16 @@ def _load_tasks(conn, case_id: str) -> list[DeadlineTask]:
         """,
         (case_id,),
     ).fetchall()
-    return [DeadlineTask(id=row[0], kind=row[1], due_at=row[2], status=row[3], not_applicable_reason=row[4]) for row in rows]
+    return [
+        DeadlineTask(
+            id=row[0],
+            kind=row[1],
+            due_at=row[2],
+            status=row[3],
+            not_applicable_reason=row[4],
+        )
+        for row in rows
+    ]
 
 
 def _lock_visible_case(conn, case_id: str, scope: CaseScope) -> tuple | None:
@@ -393,7 +417,9 @@ def insert_case(conn, title: str, awareness_time: datetime, created_by: str) -> 
     if setting is None:
         raise TimezoneNotConfigured()
     calendar_timezone = setting.timezone
-    tasks = deadline_tasks_for(deadline_start(awareness_time, ()), calendar_for(calendar_timezone))
+    tasks = deadline_tasks_for(
+        deadline_start(awareness_time, ()), calendar_for(calendar_timezone)
+    )
     sequence = conn.execute("SELECT nextval('case_reference_seq')").fetchone()[0]
     reference = f"SAFE-{datetime.now(UTC).year}-{sequence:06d}"
     row = conn.execute(
@@ -402,7 +428,14 @@ def insert_case(conn, title: str, awareness_time: datetime, created_by: str) -> 
         VALUES (%s, %s, %s, %s, 'open', %s, %s)
         RETURNING {_CASE_COLUMNS}
         """,
-        (reference, title, awareness_time, created_by, CALENDAR_VERSION, calendar_timezone),
+        (
+            reference,
+            title,
+            awareness_time,
+            created_by,
+            CALENDAR_VERSION,
+            calendar_timezone,
+        ),
     ).fetchone()
     case = _to_case(row)
     stored_tasks = []
@@ -422,7 +455,9 @@ def insert_case(conn, title: str, awareness_time: datetime, created_by: str) -> 
         details={
             "calendar_version": CALENDAR_VERSION,
             "calendar_timezone": calendar_timezone,
-            "not_applicable": [task.kind for task in tasks if task.status == "not_applicable"],
+            "not_applicable": [
+                task.kind for task in tasks if task.status == "not_applicable"
+            ],
         },
     )
     return replace(case, deadlines=stored_tasks)
@@ -500,9 +535,22 @@ def restore_deadline(
         if not may_mark_not_applicable:
             return Outcome.NOT_APPLICABLE_FORBIDDEN
         previous = _previous_status(conn, case_id, task_id)
-        previous_reason = DEFAULT_NOT_APPLICABLE_REASONS.get(kind) if previous == "not_applicable" else None
+        previous_reason = (
+            DEFAULT_NOT_APPLICABLE_REASONS.get(kind)
+            if previous == "not_applicable"
+            else None
+        )
         _write_task_change(
-            conn, case_id, task_id, kind, status, previous, reason, previous_reason, RESTORED_SOURCE, scope.user_id,
+            conn,
+            case_id,
+            task_id,
+            kind,
+            status,
+            previous,
+            reason,
+            previous_reason,
+            RESTORED_SOURCE,
+            scope.user_id,
         )
         _remember_case(conn, idempotency, render, case_id)
     return Outcome.OK
@@ -532,9 +580,13 @@ def _write_task_change(
     if old_status != new_status:
         changes["status"] = _change(old_status, new_status)
     if old_reason != new_reason:
-        changes["not_applicable_reason"] = _change(_text_marker(old_reason), _text_marker(new_reason))
+        changes["not_applicable_reason"] = _change(
+            _text_marker(old_reason), _text_marker(new_reason)
+        )
     if new_due is not None and new_due != old_due:
-        changes["due_at"] = _change(old_due.isoformat() if old_due else None, new_due.isoformat())
+        changes["due_at"] = _change(
+            old_due.isoformat() if old_due else None, new_due.isoformat()
+        )
     audit.record(
         conn,
         audit.CASE_DEADLINE_UPDATE,
@@ -593,16 +645,33 @@ def sync_weekly_update(conn, case_id: str, actor_id: str) -> None:
             task_id, _, _, old_due = row
             due = next_weekly_update(now)
             _write_task_change(
-                conn, case_id, task_id, WEEKLY_UPDATE_KIND, "not_applicable", "open", row[2], None,
-                WEEKLY_SIGNIFICANT_SOURCE, actor_id, old_due=old_due, new_due=due,
+                conn,
+                case_id,
+                task_id,
+                WEEKLY_UPDATE_KIND,
+                "not_applicable",
+                "open",
+                row[2],
+                None,
+                WEEKLY_SIGNIFICANT_SOURCE,
+                actor_id,
+                old_due=old_due,
+                new_due=due,
             )
     elif row is not None and row[1] == "open":
         task_id = row[0]
         _write_task_change(
-            conn, case_id, task_id, WEEKLY_UPDATE_KIND, "open", "not_applicable", None,
-            WEEKLY_NOT_SIGNIFICANT_REASON, WEEKLY_SIGNIFICANT_SOURCE, actor_id,
+            conn,
+            case_id,
+            task_id,
+            WEEKLY_UPDATE_KIND,
+            "open",
+            "not_applicable",
+            None,
+            WEEKLY_NOT_SIGNIFICANT_REASON,
+            WEEKLY_SIGNIFICANT_SOURCE,
+            actor_id,
         )
-
 
 
 _LATEST_REOPEN_REASON = (
@@ -620,10 +689,17 @@ def _load_case(conn, case_id: str) -> Case:
         f"SELECT {_CASE_COLUMNS}, {_LATEST_REOPEN_REASON} FROM cases WHERE id = %s AND NOT is_deleted",
         (case_id,),
     ).fetchone()
-    return replace(_to_case(row[:-1]), deadlines=_load_tasks(conn, case_id), reopen_reason=row[-1])
+    return replace(
+        _to_case(row[:-1]), deadlines=_load_tasks(conn, case_id), reopen_reason=row[-1]
+    )
 
 
-def _remember_case(conn, idempotency: KeyScope | None, render: Callable[[Case], Any] | None, case_id: str) -> None:
+def _remember_case(
+    conn,
+    idempotency: KeyScope | None,
+    render: Callable[[Case], Any] | None,
+    case_id: str,
+) -> None:
     """Store the case response of a successful request under its key, in the same transaction as the change."""
     if idempotency is not None:
         assert render is not None
@@ -726,7 +802,10 @@ def list_visible_cases(
                 limit,
             ),
         ).fetchall()
-    return [replace(_to_case(row[:13]), next_deadline=row[13], updated_at=row[14]) for row in rows]
+    return [
+        replace(_to_case(row[:13]), next_deadline=row[13], updated_at=row[14])
+        for row in rows
+    ]
 
 
 def _keyset_sql(after: tuple[datetime, str] | None) -> tuple[str, tuple[object, ...]]:
@@ -734,7 +813,11 @@ def _keyset_sql(after: tuple[datetime, str] | None) -> tuple[str, tuple[object, 
     if after is None:
         return "TRUE", ()
     created_at, row_id = after
-    return "(created_at < %s OR (created_at = %s AND id > %s))", (created_at, created_at, row_id)
+    return "(created_at < %s OR (created_at = %s AND id > %s))", (
+        created_at,
+        created_at,
+        row_id,
+    )
 
 
 def list_assignments(case_id: str, scope: CaseScope) -> list[Assignment] | None:
@@ -764,7 +847,9 @@ class AssignableUser:
     role: str
 
 
-def list_assignable_users(case_id: str, scope: CaseScope) -> list[AssignableUser] | None:
+def list_assignable_users(
+    case_id: str, scope: CaseScope
+) -> list[AssignableUser] | None:
     """Users the caller may pick for an assignment on the case, or None when the scope may not see the case.
 
     A user is listed only when the account is active and not deleted and its role currently holds cases:assignable
@@ -940,7 +1025,9 @@ def update_deadline(
         if status != old_status:
             changes["status"] = _change(old_status, status)
         if new_reason != old_reason:
-            changes["not_applicable_reason"] = _change(_text_marker(old_reason), _text_marker(new_reason))
+            changes["not_applicable_reason"] = _change(
+                _text_marker(old_reason), _text_marker(new_reason)
+            )
         if changes:
             conn.execute(
                 "UPDATE deadline_tasks SET status = %s, not_applicable_reason = %s WHERE id = %s",
@@ -983,10 +1070,15 @@ def update_case_title(
             return Outcome.CLOSED, revision
         if revision != expected_revision:
             return Outcome.REVISION_MISMATCH, revision
-        (old_title,) = conn.execute("SELECT title FROM cases WHERE id = %s", (case_id,)).fetchone()
+        (old_title,) = conn.execute(
+            "SELECT title FROM cases WHERE id = %s", (case_id,)
+        ).fetchone()
         if title != old_title:
             revision += 1
-            conn.execute("UPDATE cases SET title = %s, revision = %s WHERE id = %s", (title, revision, case_id))
+            conn.execute(
+                "UPDATE cases SET title = %s, revision = %s WHERE id = %s",
+                (title, revision, case_id),
+            )
             audit.record(
                 conn,
                 audit.CASE_TITLE_UPDATE,
@@ -1093,7 +1185,9 @@ def reopen_case(
             actor_id=scope.user_id,
             details={
                 "status": _change("closed", "open"),
-                "closed_at": _change(closed_at.isoformat() if closed_at else None, None),
+                "closed_at": _change(
+                    closed_at.isoformat() if closed_at else None, None
+                ),
                 "closed_by": _change(closed_by, None),
                 "reopen_reason": _change(None, _text_marker(reason)),
             },
@@ -1103,7 +1197,12 @@ def reopen_case(
 
 
 def case_history(
-    case_id: str, scope: CaseScope, limit: int, offset: int, *, include_evidence: bool = False
+    case_id: str,
+    scope: CaseScope,
+    limit: int,
+    offset: int,
+    *,
+    include_evidence: bool = False,
 ) -> tuple[list[HistoryEntry], int] | None:
     """Audit rows of the case, newest first, or None when the scope may not see the case.
 
@@ -1133,7 +1232,15 @@ def case_history(
         rows = conn.execute(
             f"SELECT ae.id::text, ae.action, ae.created_at, ae.actor_id::text, ae.details, csc.reason {history_join}"
             " ORDER BY ae.created_at DESC, ae.id DESC LIMIT %s OFFSET %s",
-            (audit.CASE_CLOSE, audit.CASE_REOPEN, case_id, case_id, *evidence_filter, limit, offset),
+            (
+                audit.CASE_CLOSE,
+                audit.CASE_REOPEN,
+                case_id,
+                case_id,
+                *evidence_filter,
+                limit,
+                offset,
+            ),
         ).fetchall()
         total = conn.execute(
             "SELECT count(*) FROM audit_events ae "
@@ -1147,5 +1254,13 @@ def case_history(
         details = row[4]
         if row[5] is not None:
             details = {**(details or {}), "reason": row[5]}
-        entries.append(HistoryEntry(id=row[0], action=row[1], created_at=row[2], actor_id=row[3], details=details))
+        entries.append(
+            HistoryEntry(
+                id=row[0],
+                action=row[1],
+                created_at=row[2],
+                actor_id=row[3],
+                details=details,
+            )
+        )
     return entries, total

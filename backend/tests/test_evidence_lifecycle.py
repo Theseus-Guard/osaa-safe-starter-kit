@@ -20,7 +20,12 @@ from fastapi.testclient import TestClient
 from safe_kit import auth, evidence, evidence_api, evidence_crypto, migrate, users
 from safe_kit.cases import CaseScope
 from safe_kit.db import connect
-from safe_kit.evidence import INTEGRITY_FAILURE_REASONS, StoreVerificationFailed, UploadExpired, VerificationFailed
+from safe_kit.evidence import (
+    INTEGRITY_FAILURE_REASONS,
+    StoreVerificationFailed,
+    UploadExpired,
+    VerificationFailed,
+)
 from safe_kit.evidence_keys import KeyProviderError, LocalFileKeyProvider
 from safe_kit.evidence_storage import ObjectNotFound, StorageError
 from safe_kit.users import User
@@ -30,14 +35,17 @@ MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
 
 # Every reason that read_original can return, and how each one is classified.
 AVAILABILITY_FAILURE_REASONS = frozenset({"storage_read_failed", "key_unavailable"})
-ALL_READ_FAILURE_REASONS = frozenset(
-    {
-        "object_missing",
-        "decryption_failed",
-        "ciphertext_checksum_mismatch",
-        "plaintext_checksum_mismatch",
-    }
-) | AVAILABILITY_FAILURE_REASONS
+ALL_READ_FAILURE_REASONS = (
+    frozenset(
+        {
+            "object_missing",
+            "decryption_failed",
+            "ciphertext_checksum_mismatch",
+            "plaintext_checksum_mismatch",
+        }
+    )
+    | AVAILABILITY_FAILURE_REASONS
+)
 
 READER = User(
     id="66666666-6666-6666-6666-666666666666",
@@ -130,13 +138,27 @@ class Ledger:
 def ledger(monkeypatch) -> Ledger:
     book = Ledger()
 
-    def insert_pending(case_id, uploader_id, name, media_type, size_bytes, storage_key, key_id, wrapped, nonce, scope, **kwargs):
+    def insert_pending(
+        case_id,
+        uploader_id,
+        name,
+        media_type,
+        size_bytes,
+        storage_key,
+        key_id,
+        wrapped,
+        nonce,
+        scope,
+        **kwargs,
+    ):
         evidence_id = str(uuid.uuid4())
         book.rows[evidence_id] = "pending"
         book.events.append("pending")
         return evidence_id
 
-    def mark_available(evidence_id, uploader_id, sha_plaintext, sha_ciphertext, **kwargs):
+    def mark_available(
+        evidence_id, uploader_id, sha_plaintext, sha_ciphertext, **kwargs
+    ):
         if book.rows.get(evidence_id) != "pending":
             raise UploadExpired()
         book.rows[evidence_id] = "available"
@@ -173,7 +195,14 @@ def read_all(user_id: str) -> CaseScope:
 def upload(storage, provider, data: bytes = PDF):
     uploader = str(uuid.uuid4())
     return evidence.create_evidence(
-        str(uuid.uuid4()), uploader, "scan.pdf", "application/pdf", data, storage, provider, read_all(uploader),
+        str(uuid.uuid4()),
+        uploader,
+        "scan.pdf",
+        "application/pdf",
+        data,
+        storage,
+        provider,
+        read_all(uploader),
     )
 
 
@@ -204,7 +233,9 @@ def sql_log(monkeypatch) -> list:
     return log
 
 
-def stored_for(status: str, storage: ScriptedStorage, provider, data: bytes = PDF) -> evidence.StoredEvidence:
+def stored_for(
+    status: str, storage: ScriptedStorage, provider, data: bytes = PDF
+) -> evidence.StoredEvidence:
     """Seal and store one object, and return the record the database would hold for it with the given status."""
     key = str(uuid.uuid4())
     sealed = evidence_crypto.seal(data, key, provider)
@@ -227,7 +258,9 @@ def stored_for(status: str, storage: ScriptedStorage, provider, data: bytes = PD
 # --- upload: pending, then available or failed --------------------------------------------------------------------
 
 
-def test_successful_upload_is_pending_then_available_after_the_read_back(ledger, provider):
+def test_successful_upload_is_pending_then_available_after_the_read_back(
+    ledger, provider
+):
     storage = ScriptedStorage(ledger.events)
     item = upload(storage, provider)
     assert item.status == "available"
@@ -237,12 +270,16 @@ def test_successful_upload_is_pending_then_available_after_the_read_back(ledger,
     assert [action for _, action, _ in ledger.custody] == ["uploaded"]
 
 
-def test_failed_write_marks_the_row_failed_with_a_custody_event_and_re_raises(ledger, provider):
+def test_failed_write_marks_the_row_failed_with_a_custody_event_and_re_raises(
+    ledger, provider
+):
     storage = ScriptedStorage(ledger.events, mode="fail_write")
     with pytest.raises(StorageError):
         upload(storage, provider)
     assert list(ledger.rows.values()) == ["failed"]
-    assert ledger.custody == [(next(iter(ledger.rows)), "failed", {"reason": "storage_write_failed"})]
+    assert ledger.custody == [
+        (next(iter(ledger.rows)), "failed", {"reason": "storage_write_failed"})
+    ]
     assert storage.objects == {}
 
 
@@ -254,18 +291,24 @@ def test_failed_write_marks_the_row_failed_with_a_custody_event_and_re_raises(le
         ("unreadable", "storage_read_failed"),
     ],
 )
-def test_failed_read_back_marks_the_row_failed_and_is_never_available(ledger, provider, mode, reason):
+def test_failed_read_back_marks_the_row_failed_and_is_never_available(
+    ledger, provider, mode, reason
+):
     storage = ScriptedStorage(ledger.events, mode=mode)
     with pytest.raises(StoreVerificationFailed) as failure:
         upload(storage, provider)
     assert failure.value.reason == reason
-    assert isinstance(failure.value, StorageError)  # the API answers 500 for any StorageError
+    assert isinstance(
+        failure.value, StorageError
+    )  # the API answers 500 for any StorageError
     assert list(ledger.rows.values()) == ["failed"]
     assert "available" not in ledger.events
     assert ledger.custody[-1][2] == {"reason": reason}
 
 
-def test_read_back_with_a_key_that_cannot_be_unwrapped_fails_the_upload(ledger, provider):
+def test_read_back_with_a_key_that_cannot_be_unwrapped_fails_the_upload(
+    ledger, provider
+):
     storage = ScriptedStorage(ledger.events)
     with pytest.raises(StoreVerificationFailed) as failure:
         upload(storage, UnreadableKey(provider))
@@ -273,13 +316,17 @@ def test_read_back_with_a_key_that_cannot_be_unwrapped_fails_the_upload(ledger, 
     assert list(ledger.rows.values()) == ["failed"]
 
 
-def test_upload_that_reconciliation_failed_first_is_expired_and_stays_failed(ledger, provider):
+def test_upload_that_reconciliation_failed_first_is_expired_and_stays_failed(
+    ledger, provider
+):
     def reconcile():
         # What fail_stale_pending does when the upload is slower than its window.
         for evidence_id, status in list(ledger.rows.items()):
             if status == "pending":
                 ledger.rows[evidence_id] = "failed"
-                ledger.custody.append((evidence_id, "failed", {"reason": "stale_pending"}))
+                ledger.custody.append(
+                    (evidence_id, "failed", {"reason": "stale_pending"})
+                )
 
     storage = ScriptedStorage(ledger.events, after_put=reconcile)
     with pytest.raises(UploadExpired):
@@ -304,7 +351,10 @@ def test_key_failure_before_the_row_is_created_leaves_nothing_behind(ledger, pro
 
 
 def test_every_read_failure_reason_is_classified_as_integrity_or_availability():
-    assert INTEGRITY_FAILURE_REASONS | AVAILABILITY_FAILURE_REASONS == ALL_READ_FAILURE_REASONS
+    assert (
+        INTEGRITY_FAILURE_REASONS | AVAILABILITY_FAILURE_REASONS
+        == ALL_READ_FAILURE_REASONS
+    )
     assert not INTEGRITY_FAILURE_REASONS & AVAILABILITY_FAILURE_REASONS
 
 
@@ -345,7 +395,9 @@ def api(monkeypatch, provider):
     app = FastAPI()
     app.include_router(evidence_api.evidence_router)
     app.dependency_overrides[auth.current_user] = lambda: READER
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"evidence:read"}))
+    monkeypatch.setattr(
+        auth, "permissions_for_role", lambda role: frozenset({"evidence:read"})
+    )
     monkeypatch.setattr(evidence_api, "_PROVIDER", provider)
     storage = ScriptedStorage([])
     monkeypatch.setattr(evidence_api, "storage_from_env", lambda: storage)
@@ -365,7 +417,9 @@ def download_url(stored: evidence.StoredEvidence) -> str:
 
 
 @pytest.mark.parametrize("status", ["pending", "failed"])
-def test_download_of_a_non_available_item_is_409_and_reads_nothing(api, provider, status):
+def test_download_of_a_non_available_item_is_409_and_reads_nothing(
+    api, provider, status
+):
     stored = stored_for(status, api.storage, provider)
     api.monkeypatch.setattr(evidence, "find_stored", lambda evidence_id, scope: stored)
 
@@ -379,7 +433,9 @@ def test_download_of_a_non_available_item_is_409_and_reads_nothing(api, provider
     assert api.recorder.downloads == [] and api.recorder.failures == []
 
 
-def test_download_of_an_available_item_returns_the_content_and_records_the_read(api, provider):
+def test_download_of_an_available_item_returns_the_content_and_records_the_read(
+    api, provider
+):
     stored = stored_for("available", api.storage, provider)
     api.monkeypatch.setattr(evidence, "find_stored", lambda evidence_id, scope: stored)
     response = api.client.get(download_url(stored))
@@ -391,12 +447,16 @@ def test_download_of_an_available_item_returns_the_content_and_records_the_read(
 
 
 @pytest.mark.parametrize("reason", ["ciphertext_checksum_mismatch", "object_missing"])
-def test_integrity_failure_on_download_is_500_with_custody_and_no_content(api, provider, reason):
+def test_integrity_failure_on_download_is_500_with_custody_and_no_content(
+    api, provider, reason
+):
     stored = stored_for("available", api.storage, provider)
     if reason == "object_missing":
         del api.storage.objects[stored.storage_key]
     else:
-        api.storage.objects[stored.storage_key] = b"damaged" + api.storage.objects[stored.storage_key][7:]
+        api.storage.objects[stored.storage_key] = (
+            b"damaged" + api.storage.objects[stored.storage_key][7:]
+        )
     api.monkeypatch.setattr(evidence, "find_stored", lambda evidence_id, scope: stored)
     response = api.client.get(download_url(stored))
     assert response.status_code == 500
@@ -455,7 +515,9 @@ def database_case() -> tuple[str, str]:
 
 def database_status(evidence_id: str) -> str:
     with connect() as conn:
-        return conn.execute("SELECT status FROM evidence_items WHERE id = %s", (evidence_id,)).fetchone()[0]
+        return conn.execute(
+            "SELECT status FROM evidence_items WHERE id = %s", (evidence_id,)
+        ).fetchone()[0]
 
 
 def database_storage_key(evidence_id: str) -> str:
@@ -470,7 +532,14 @@ def test_upload_is_available_in_the_database_with_an_uploaded_custody_event(prov
     user_id, case_id = database_case()
     storage = ScriptedStorage([])
     item = evidence.create_evidence(
-        case_id, user_id, "scan.pdf", "application/pdf", PDF, storage, provider, read_all(user_id),
+        case_id,
+        user_id,
+        "scan.pdf",
+        "application/pdf",
+        PDF,
+        storage,
+        provider,
+        read_all(user_id),
     )
     assert database_status(item.id) == "available"
     assert [event.action for event in evidence.custody_events(item.id)] == ["uploaded"]
@@ -481,7 +550,13 @@ def test_failed_write_is_failed_in_the_database_with_a_reason(provider):
     user_id, case_id = database_case()
     with pytest.raises(StorageError):
         evidence.create_evidence(
-            case_id, user_id, "scan.pdf", "application/pdf", PDF, ScriptedStorage([], mode="fail_write"), provider,
+            case_id,
+            user_id,
+            "scan.pdf",
+            "application/pdf",
+            PDF,
+            ScriptedStorage([], mode="fail_write"),
+            provider,
             read_all(user_id),
         )
     with connect() as conn:
@@ -490,7 +565,9 @@ def test_failed_write_is_failed_in_the_database_with_a_reason(provider):
         ).fetchall()
     assert [status for _, status in rows] == ["failed"]
     events = evidence.custody_events(rows[0][0])
-    assert [(event.action, event.details) for event in events] == [("failed", {"reason": "storage_write_failed"})]
+    assert [(event.action, event.details) for event in events] == [
+        ("failed", {"reason": "storage_write_failed"})
+    ]
 
 
 @requires_database
@@ -498,7 +575,14 @@ def test_integrity_failure_on_download_moves_the_row_to_failed(provider):
     user_id, case_id = database_case()
     storage = ScriptedStorage([])
     item = evidence.create_evidence(
-        case_id, user_id, "scan.pdf", "application/pdf", PDF, storage, provider, read_all(user_id),
+        case_id,
+        user_id,
+        "scan.pdf",
+        "application/pdf",
+        PDF,
+        storage,
+        provider,
+        read_all(user_id),
     )
     key = database_storage_key(item.id)
     storage.objects[key] = b"damaged" + storage.objects[key][7:]
@@ -519,7 +603,14 @@ def test_integrity_failure_on_download_moves_the_row_to_failed(provider):
 def test_availability_failure_on_download_keeps_the_row_available(provider):
     user_id, case_id = database_case()
     item = evidence.create_evidence(
-        case_id, user_id, "scan.pdf", "application/pdf", PDF, ScriptedStorage([]), provider, read_all(user_id),
+        case_id,
+        user_id,
+        "scan.pdf",
+        "application/pdf",
+        PDF,
+        ScriptedStorage([]),
+        provider,
+        read_all(user_id),
     )
     evidence.record_failure(item.id, user_id, "key_unavailable")
     assert database_status(item.id) == "available"

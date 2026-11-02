@@ -21,7 +21,14 @@ from typing import Any
 from safe_kit import audit, cases
 from safe_kit.cases import CaseScope
 from safe_kit.db import connect
-from safe_kit.idempotency import KeyLookup, KeyScope, StoredResponse, lock_scope, lookup, store
+from safe_kit.idempotency import (
+    KeyLookup,
+    KeyScope,
+    StoredResponse,
+    lock_scope,
+    lookup,
+    store,
+)
 
 MIN_VALUE = 1
 MAX_VALUE = 5
@@ -81,7 +88,9 @@ def risk_score(values: Iterable[int | None]) -> float | None:
     return float(mean.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
 
 
-def impact_changes(old: ImpactScores, new: Mapping[str, int | None]) -> dict[str, dict[str, Any]]:
+def impact_changes(
+    old: ImpactScores, new: Mapping[str, int | None]
+) -> dict[str, dict[str, Any]]:
     """The values that differ, as {field: {"old": ..., "new": ...}}."""
     return {
         name: {"old": getattr(old, name), "new": new[name]}
@@ -90,14 +99,15 @@ def impact_changes(old: ImpactScores, new: Mapping[str, int | None]) -> dict[str
     }
 
 
-_COLUMNS = (
-    "case_id::text, version, confidentiality, integrity, availability, created_by::text, created_at"
-)
+_COLUMNS = "case_id::text, version, confidentiality, integrity, availability, created_by::text, created_at"
 
 
 def _lock_case(conn, case_id: str, scope: CaseScope) -> str | None:
     """Lock the case row, then check the caller's visibility. Returns the case status, or None when not visible."""
-    row = conn.execute("SELECT status FROM cases WHERE id = %s AND NOT is_deleted FOR UPDATE", (case_id,)).fetchone()
+    row = conn.execute(
+        "SELECT status FROM cases WHERE id = %s AND NOT is_deleted FOR UPDATE",
+        (case_id,),
+    ).fetchone()
     if row is None or not cases.is_visible_on(conn, case_id, scope):
         return None
     return row[0]
@@ -213,11 +223,18 @@ def update_impact_scores(
                 "case",
                 case_id,
                 actor_id=scope.user_id,
-                details={"version": {"old": current.version, "new": new_version}, **changes},
+                details={
+                    "version": {"old": current.version, "new": new_version},
+                    **changes,
+                },
             )
         else:
             # Nothing changed: no version and no audit row. The current version is the answer.
             stored_version = current
         if idempotency is not None and render is not None:
-            store(conn, idempotency, StoredResponse(status_code=200, body=render(stored_version)))
+            store(
+                conn,
+                idempotency,
+                StoredResponse(status_code=200, body=render(stored_version)),
+            )
     return ImpactResult(ImpactOutcome.OK, value=stored_version)

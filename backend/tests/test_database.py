@@ -35,9 +35,13 @@ def system_timezone_configured():
 
     migrate()  # idempotent: applies pending migrations on a fresh test database
     with connect() as conn:
-        exists = conn.execute("SELECT EXISTS (SELECT 1 FROM system_timezone WHERE NOT is_deleted)").fetchone()[0]
+        exists = conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM system_timezone WHERE NOT is_deleted)"
+        ).fetchone()[0]
         if not exists:
-            conn.execute("INSERT INTO system_timezone (timezone) VALUES ('Europe/Istanbul')")
+            conn.execute(
+                "INSERT INTO system_timezone (timezone) VALUES ('Europe/Istanbul')"
+            )
     yield
 
 
@@ -85,12 +89,18 @@ def job_row(job_id: str) -> tuple:
 
 def make_due(job_id: str) -> None:
     with connect() as conn:
-        conn.execute("UPDATE outbox_jobs SET available_at = now() - interval '1 second' WHERE id = %s", (job_id,))
+        conn.execute(
+            "UPDATE outbox_jobs SET available_at = now() - interval '1 second' WHERE id = %s",
+            (job_id,),
+        )
 
 
 def expire_lease(job_id: str) -> None:
     with connect() as conn:
-        conn.execute("UPDATE outbox_jobs SET lease_until = now() - interval '1 second' WHERE id = %s", (job_id,))
+        conn.execute(
+            "UPDATE outbox_jobs SET lease_until = now() - interval '1 second' WHERE id = %s",
+            (job_id,),
+        )
 
 
 # --- audit ---------------------------------------------------------------------------------------------------
@@ -107,22 +117,35 @@ def test_audit_content_cannot_be_changed_and_a_soft_delete_cannot_be_undone():
 
     with pytest.raises(psycopg.errors.RaiseException):
         with connect() as conn:
-            conn.execute("UPDATE audit_events SET action = 'changed' WHERE id = %s", (row_id,))
+            conn.execute(
+                "UPDATE audit_events SET action = 'changed' WHERE id = %s", (row_id,)
+            )
     with pytest.raises(psycopg.errors.RaiseException):
         with connect() as conn:
-            conn.execute("UPDATE audit_events SET details = '{}'::jsonb WHERE id = %s", (row_id,))
+            conn.execute(
+                "UPDATE audit_events SET details = '{}'::jsonb WHERE id = %s", (row_id,)
+            )
 
     with connect() as conn:
-        conn.execute("UPDATE audit_events SET is_deleted = true, deleted_at = now() WHERE id = %s", (row_id,))
+        conn.execute(
+            "UPDATE audit_events SET is_deleted = true, deleted_at = now() WHERE id = %s",
+            (row_id,),
+        )
     with pytest.raises(psycopg.errors.RaiseException):
         with connect() as conn:
-            conn.execute("UPDATE audit_events SET is_deleted = false, deleted_at = NULL WHERE id = %s", (row_id,))
+            conn.execute(
+                "UPDATE audit_events SET is_deleted = false, deleted_at = NULL WHERE id = %s",
+                (row_id,),
+            )
 
 
 def test_role_change_and_its_audit_row_commit_together():
     actor = new_user("admin")
     target = new_user("reporter")
-    assert users.update_user(target, role="auditor", actor_id=actor) == users.UpdateOutcome.OK
+    assert (
+        users.update_user(target, role="auditor", actor_id=actor)
+        == users.UpdateOutcome.OK
+    )
     rows = audit_rows(target, audit.USER_UPDATE)
     assert len(rows) == 1
     assert rows[0][0] == actor
@@ -139,7 +162,10 @@ def test_failed_change_leaves_no_audit_row():
 
 def test_password_reset_is_audited_with_the_operator_source():
     target = new_user("triager")
-    assert users.reset_password(target, "another temporary passphrase", source="cli") is True
+    assert (
+        users.reset_password(target, "another temporary passphrase", source="cli")
+        is True
+    )
     rows = audit_rows(target, audit.USER_PASSWORD_RESET)
     assert rows == [(None, {"source": "cli"})]
 
@@ -155,7 +181,9 @@ def test_rbac_change_lists_granted_and_revoked_permissions():
 
     actor = new_user("admin")
     before = frozenset(list_role_permissions()["auditor"])
-    target = frozenset({"cases:submit"})  # independent of the current state: the diff is computed from it
+    target = frozenset(
+        {"cases:submit"}
+    )  # independent of the current state: the diff is computed from it
     try:
         assert set_role_permissions("auditor", target, actor_id=actor) is RoleOutcome.OK
         with connect() as conn:
@@ -197,7 +225,9 @@ def test_claimed_job_is_not_offered_again_until_its_lease_expires(clean_outbox):
     assert job_row(job_id)[0] == "done"
 
 
-def test_failed_attempt_waits_for_backoff_then_moves_to_failed_at_the_limit(clean_outbox):
+def test_failed_attempt_waits_for_backoff_then_moves_to_failed_at_the_limit(
+    clean_outbox,
+):
     job_id = enqueue_one()
 
     def refuse(payload):
@@ -261,7 +291,10 @@ def test_case_is_stored_with_its_deadline_tasks_and_audit_row():
         "preliminary_public_report": "open",
         "remediation_status": "open",
     }
-    assert any(item.id == case.id for item in cases.list_visible_cases(CaseScope(owner, read_own=True), 50))
+    assert any(
+        item.id == case.id
+        for item in cases.list_visible_cases(CaseScope(owner, read_own=True), 50)
+    )
     assert audit_rows(case.id, audit.CASE_CREATE) == [
         (
             owner,
@@ -277,16 +310,26 @@ def test_case_is_stored_with_its_deadline_tasks_and_audit_row():
 def test_other_users_cannot_find_a_case(clean_outbox):
     owner = new_user("reporter")
     stranger = new_user("reporter")
-    case = cases.create_case("Owner only", datetime.now(UTC) - timedelta(hours=1), created_by=owner)
+    case = cases.create_case(
+        "Owner only", datetime.now(UTC) - timedelta(hours=1), created_by=owner
+    )
     assert cases.find_visible_case(case.id, CaseScope(stranger, read_own=True)) is None
-    assert all(item.id != case.id for item in cases.list_visible_cases(CaseScope(stranger, read_own=True), 50))
+    assert all(
+        item.id != case.id
+        for item in cases.list_visible_cases(CaseScope(stranger, read_own=True), 50)
+    )
 
 
 def test_soft_deleted_case_is_not_found():
     owner = new_user("reporter")
-    case = cases.create_case("To be soft deleted", datetime.now(UTC) - timedelta(hours=1), created_by=owner)
+    case = cases.create_case(
+        "To be soft deleted", datetime.now(UTC) - timedelta(hours=1), created_by=owner
+    )
     with connect() as conn:
-        conn.execute("UPDATE cases SET is_deleted = true, deleted_at = now() WHERE id = %s", (case.id,))
+        conn.execute(
+            "UPDATE cases SET is_deleted = true, deleted_at = now() WHERE id = %s",
+            (case.id,),
+        )
     assert cases.find_visible_case(case.id, CaseScope(owner, read_own=True)) is None
 
 
@@ -310,7 +353,9 @@ def password_history_temporary_flags(user_id: str) -> list[bool]:
 
 def password_changed_at(user_id: str) -> datetime:
     with connect() as conn:
-        return conn.execute("SELECT password_changed_at FROM users WHERE id = %s", (user_id,)).fetchone()[0]
+        return conn.execute(
+            "SELECT password_changed_at FROM users WHERE id = %s", (user_id,)
+        ).fetchone()[0]
 
 
 def test_every_password_write_is_recorded_as_an_argon2_hash():
@@ -353,7 +398,9 @@ def test_bootstrap_admin_records_its_password_as_temporary(monkeypatch):
         )
         monkeypatch.setattr(users, "connect", lambda: _inside_open_transaction(conn))
         username = "t-" + uuid.uuid4().hex[:12]
-        user_id = users.bootstrap_admin(username, "bootstrap passphrase", f"{username}@example.com")
+        user_id = users.bootstrap_admin(
+            username, "bootstrap passphrase", f"{username}@example.com"
+        )
 
         flags = [
             row[0]
@@ -382,9 +429,13 @@ def test_bootstrap_admin_is_refused_while_an_admin_exists(monkeypatch):
         username = "t-" + uuid.uuid4().hex[:12]
 
         with pytest.raises(users.AdminAlreadyExists):
-            users.bootstrap_admin(username, "bootstrap passphrase", f"{username}@example.com")
+            users.bootstrap_admin(
+                username, "bootstrap passphrase", f"{username}@example.com"
+            )
 
-        count = conn.execute("SELECT count(*) FROM users WHERE username = %s", (username,)).fetchone()[0]
+        count = conn.execute(
+            "SELECT count(*) FROM users WHERE username = %s", (username,)
+        ).fetchone()[0]
         assert count == 0
     finally:
         conn.rollback()
@@ -393,7 +444,9 @@ def test_bootstrap_admin_is_refused_while_an_admin_exists(monkeypatch):
 
 def test_profile_account_creation_records_the_temporary_password():
     username = "t-" + uuid.uuid4().hex[:12]
-    user_id = users.create_user_with_profile(username, "temporary passphrase", "reporter", f"{username}@example.com")
+    user_id = users.create_user_with_profile(
+        username, "temporary passphrase", "reporter", f"{username}@example.com"
+    )
     assert len(password_history_hashes(user_id)) == 1
     assert password_history_temporary_flags(user_id) == [True]
 
@@ -407,7 +460,12 @@ def test_temporary_password_cannot_be_chosen_as_the_next_password():
 
 def test_temporary_password_stays_refused_after_later_changes():
     target = new_user("triager")
-    for new in ["first passphrase here", "second passphrase here", "third passphrase here", "fourth passphrase here"]:
+    for new in [
+        "first passphrase here",
+        "second passphrase here",
+        "third passphrase here",
+        "fourth passphrase here",
+    ]:
         assert users.change_own_password(target, new) is True
     # Four later changes: the temporary password is outside the last three, and it is still refused.
     before = len(password_history_hashes(target))
@@ -420,7 +478,12 @@ def test_temporary_password_stays_refused_after_later_changes():
 
 def test_last_three_passwords_are_refused_and_the_fourth_most_recent_is_allowed():
     target = new_user("triager")
-    passwords = ["first passphrase here", "second passphrase here", "third passphrase here", "fourth passphrase here"]
+    passwords = [
+        "first passphrase here",
+        "second passphrase here",
+        "third passphrase here",
+        "fourth passphrase here",
+    ]
     for new in passwords:
         assert users.change_own_password(target, new) is True
     before = len(password_history_hashes(target))
@@ -445,11 +508,17 @@ def test_expired_password_forces_a_change_until_the_user_changes_it():
     assert users.find_user_by_id(target).must_change_password is True
     assert users.change_own_password(target, "a new passphrase here") is True
     with connect() as conn:
-        conn.execute("UPDATE users SET password_changed_at = now() - interval '179 days' WHERE id = %s", (target,))
+        conn.execute(
+            "UPDATE users SET password_changed_at = now() - interval '179 days' WHERE id = %s",
+            (target,),
+        )
     assert users.find_user_by_id(target).must_change_password is False
 
     with connect() as conn:
-        conn.execute("UPDATE users SET password_changed_at = now() - interval '181 days' WHERE id = %s", (target,))
+        conn.execute(
+            "UPDATE users SET password_changed_at = now() - interval '181 days' WHERE id = %s",
+            (target,),
+        )
     assert users.find_user_by_id(target).must_change_password is True
 
     assert users.change_own_password(target, "yet another passphrase") is True
@@ -480,6 +549,9 @@ def test_reporter_contact_permission_is_in_the_catalog_and_held_only_by_reportin
     from safe_kit import rbac
 
     assert "reporter_contact:read" in dict(rbac.list_catalog())
-    holders = {role for role, permissions in rbac.list_role_permissions().items() if "reporter_contact:read" in permissions}
+    holders = {
+        role
+        for role, permissions in rbac.list_role_permissions().items()
+        if "reporter_contact:read" in permissions
+    }
     assert holders == {"reporting_owner"}
-

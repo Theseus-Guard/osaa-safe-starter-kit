@@ -23,7 +23,12 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from safe_kit.auth import permissions_of, require_any_permission, require_any_permission_except_role, require_permission
+from safe_kit.auth import (
+    permissions_of,
+    require_any_permission,
+    require_any_permission_except_role,
+    require_permission,
+)
 from safe_kit.case_records_api import CASE_READ_PERMISSIONS_FOR_RECORDS
 from safe_kit.cases import CaseScope
 from safe_kit.rbac import DISCLOSURE_APPROVER_ROLE
@@ -73,7 +78,8 @@ CONFLICT_REFUSALS: dict[IndependenceOutcome, HTTPException] = {
 }
 RECUSAL_REFUSALS: dict[IndependenceOutcome, HTTPException] = {
     IndependenceOutcome.NOT_ASSIGNED: HTTPException(
-        status_code=403, detail="only an assigned reviewer can withdraw from a review round"
+        status_code=403,
+        detail="only an assigned reviewer can withdraw from a review round",
     ),
     IndependenceOutcome.ALREADY_RECUSED: HTTPException(
         status_code=409, detail={"status": "already_recused"}
@@ -82,10 +88,12 @@ RECUSAL_REFUSALS: dict[IndependenceOutcome, HTTPException] = {
         status_code=422, detail="a reviewer cannot name themselves as the replacement"
     ),
     IndependenceOutcome.REPLACEMENT_NOT_ELIGIBLE: HTTPException(
-        status_code=422, detail="the replacement must be an active, assigned user who holds reviews:write"
+        status_code=422,
+        detail="the replacement must be an active, assigned user who holds reviews:write",
     ),
     IndependenceOutcome.REPLACEMENT_CONFLICTED: HTTPException(
-        status_code=422, detail="the replacement has a declared conflict on this review round"
+        status_code=422,
+        detail="the replacement has a declared conflict on this review round",
     ),
     IndependenceOutcome.REPLACEMENT_WITHDRAWN: HTTPException(
         status_code=422, detail="the replacement has withdrawn from this review round"
@@ -199,9 +207,13 @@ def _scope(actor: User) -> CaseScope:
 def _checked_key(idempotency_key: str | None) -> str:
     # Checked after the permission check, so a caller without the permission learns nothing about keys.
     if idempotency_key is None:
-        raise HTTPException(status_code=400, detail={"status": "idempotency_key_required"})
+        raise HTTPException(
+            status_code=400, detail={"status": "idempotency_key_required"}
+        )
     if not valid_key(idempotency_key):
-        raise HTTPException(status_code=400, detail={"status": "idempotency_key_invalid"})
+        raise HTTPException(
+            status_code=400, detail={"status": "idempotency_key_invalid"}
+        )
     return idempotency_key
 
 
@@ -245,7 +257,9 @@ def _appeal_response(entry: AppealEntry, scope: CaseScope) -> AppealResponse:
     )
 
 
-def _refusal(outcome: IndependenceOutcome, specific: dict[IndependenceOutcome, HTTPException]) -> HTTPException:
+def _refusal(
+    outcome: IndependenceOutcome, specific: dict[IndependenceOutcome, HTTPException]
+) -> HTTPException:
     error = specific.get(outcome) or SHARED_REFUSALS.get(outcome)
     assert error is not None, outcome
     return error
@@ -261,7 +275,9 @@ def _key_scope(actor: User, route: str, path: str, key: str, body: dict) -> KeyS
     )
 
 
-@review_independence_router.post(CONFLICTS_ROUTE, status_code=201, response_model=ConflictResponse)
+@review_independence_router.post(
+    CONFLICTS_ROUTE, status_code=201, response_model=ConflictResponse
+)
 def declare_review_conflict(
     review_id: uuid.UUID,
     body: ConflictRequest,
@@ -277,8 +293,16 @@ def declare_review_conflict(
         body.description,
         str(body.supersedes_id) if body.supersedes_id is not None else None,
         scope,
-        idempotency=_key_scope(actor, CONFLICTS_ROUTE, f"/api/v1/reviews/{review_id}/conflicts", key, payload),
-        render=lambda created: _conflict_response(created, scope).model_dump(mode="json"),
+        idempotency=_key_scope(
+            actor,
+            CONFLICTS_ROUTE,
+            f"/api/v1/reviews/{review_id}/conflicts",
+            key,
+            payload,
+        ),
+        render=lambda created: _conflict_response(created, scope).model_dump(
+            mode="json"
+        ),
     )
     if outcome is IndependenceOutcome.REPLAY:
         # The same request again: the first answer, with its status and body. Nothing was written.
@@ -302,7 +326,9 @@ def list_review_conflicts(
     return [_conflict_response(entry, scope) for entry in entries]
 
 
-@review_independence_router.post(RECUSALS_ROUTE, status_code=201, response_model=RecusalResponse)
+@review_independence_router.post(
+    RECUSALS_ROUTE, status_code=201, response_model=RecusalResponse
+)
 def record_review_recusal(
     review_id: uuid.UUID,
     body: RecusalRequest,
@@ -318,8 +344,12 @@ def record_review_recusal(
         body.reason,
         str(body.supersedes_id) if body.supersedes_id is not None else None,
         scope,
-        idempotency=_key_scope(actor, RECUSALS_ROUTE, f"/api/v1/reviews/{review_id}/recusals", key, payload),
-        render=lambda created: _recusal_response(created, scope).model_dump(mode="json"),
+        idempotency=_key_scope(
+            actor, RECUSALS_ROUTE, f"/api/v1/reviews/{review_id}/recusals", key, payload
+        ),
+        render=lambda created: _recusal_response(created, scope).model_dump(
+            mode="json"
+        ),
     )
     if outcome is IndependenceOutcome.REPLAY:
         assert stored is not None
@@ -342,13 +372,17 @@ def list_review_recusals(
     return [_recusal_response(entry, scope) for entry in entries]
 
 
-@review_independence_router.post(APPEALS_ROUTE, status_code=201, response_model=AppealResponse)
+@review_independence_router.post(
+    APPEALS_ROUTE, status_code=201, response_model=AppealResponse
+)
 def file_review_appeal(
     review_id: uuid.UUID,
     body: AppealRequest,
     # The disclosure approver holds cases:read_all to read the case it approves; it may not file appeals.
     actor: User = Depends(
-        require_any_permission_except_role(DISCLOSURE_APPROVER_ROLE, *CASE_READ_PERMISSIONS_FOR_RECORDS)
+        require_any_permission_except_role(
+            DISCLOSURE_APPROVER_ROLE, *CASE_READ_PERMISSIONS_FOR_RECORDS
+        )
     ),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> AppealResponse | JSONResponse:
@@ -359,7 +393,9 @@ def file_review_appeal(
         str(review_id),
         body.grounds,
         scope,
-        idempotency=_key_scope(actor, APPEALS_ROUTE, f"/api/v1/reviews/{review_id}/appeals", key, payload),
+        idempotency=_key_scope(
+            actor, APPEALS_ROUTE, f"/api/v1/reviews/{review_id}/appeals", key, payload
+        ),
         render=lambda created: _appeal_response(created, scope).model_dump(mode="json"),
     )
     if outcome is IndependenceOutcome.REPLAY:

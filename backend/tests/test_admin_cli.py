@@ -6,7 +6,11 @@ import psycopg
 import pytest
 
 from safe_kit import admin
-from safe_kit.users import AdminAlreadyExists, PasswordReused, ReporterAccountResetRefused
+from safe_kit.users import (
+    AdminAlreadyExists,
+    PasswordReused,
+    ReporterAccountResetRefused,
+)
 
 PASSWORD = "bootstrap passphrase"
 EMAIL = "first.admin@example.com"
@@ -93,7 +97,11 @@ def test_duplicate_username_during_bootstrap_is_reported(calls, monkeypatch, cap
 
 def test_reset_password_resets_the_account(calls, monkeypatch, capsys):
     recorded, _ = calls
-    monkeypatch.setattr(admin, "find_user", lambda username: SimpleNamespace(id="00000000-0000-0000-0000-000000000002"))
+    monkeypatch.setattr(
+        admin,
+        "find_user",
+        lambda username: SimpleNamespace(id="00000000-0000-0000-0000-000000000002"),
+    )
     feed_password(monkeypatch, PASSWORD)
     assert admin.main(["reset-password", "--username", "alice"]) == 0
     assert recorded["reset"] == [("00000000-0000-0000-0000-000000000002", PASSWORD)]
@@ -104,7 +112,9 @@ def test_reset_password_refuses_a_reporter_account(calls, monkeypatch, capsys):
     recorded, state = calls
     state["reset_error"] = ReporterAccountResetRefused()
     monkeypatch.setattr(
-        admin, "find_user", lambda username: SimpleNamespace(id="00000000-0000-0000-0000-000000000003")
+        admin,
+        "find_user",
+        lambda username: SimpleNamespace(id="00000000-0000-0000-0000-000000000003"),
     )
     feed_password(monkeypatch, PASSWORD)
     assert admin.main(["reset-password", "--username", "reporter-one"]) == 1
@@ -118,7 +128,11 @@ def test_reset_password_refuses_a_reporter_account(calls, monkeypatch, capsys):
 def test_reset_password_refuses_a_recent_password(calls, monkeypatch, capsys):
     recorded, state = calls
     state["reset_error"] = PasswordReused()
-    monkeypatch.setattr(admin, "find_user", lambda username: SimpleNamespace(id="00000000-0000-0000-0000-000000000002"))
+    monkeypatch.setattr(
+        admin,
+        "find_user",
+        lambda username: SimpleNamespace(id="00000000-0000-0000-0000-000000000002"),
+    )
     feed_password(monkeypatch, PASSWORD)
     assert admin.main(["reset-password", "--username", "alice"]) == 1
     assert "password cannot be reused" in capsys.readouterr().err

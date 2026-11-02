@@ -475,7 +475,11 @@ EXPORT_BODY = {
         "version": 1,
         "status": "approved",
         "latest_version": 1,
-        "template": {"key": "confidential_rapid_alert", "title": "Confidential rapid alert", "sections": []},
+        "template": {
+            "key": "confidential_rapid_alert",
+            "title": "Confidential rapid alert",
+            "sections": [],
+        },
         "recipient": "Member CERT",
         "purpose": "Rapid alert",
         "tlp_audience": "AMBER",
@@ -494,12 +498,23 @@ EXPORT_BODY = {
 }
 
 
-def test_export_writes_the_document_to_the_file_and_prints_nothing(api, capsys, tmp_path):
+def test_export_writes_the_document_to_the_file_and_prints_nothing(
+    api, capsys, tmp_path
+):
     api.route("GET", EXPORT_PATH, body=EXPORT_BODY)
     target = tmp_path / "disclosure-export.json"
 
     code, out, err = run(
-        capsys, "case", "disclosure", "export", CASE_ID, VERSION_ID, "--username", "alice", "--out", str(target)
+        capsys,
+        "case",
+        "disclosure",
+        "export",
+        CASE_ID,
+        VERSION_ID,
+        "--username",
+        "alice",
+        "--out",
+        str(target),
     )
 
     assert code == 0, err
@@ -511,16 +526,39 @@ def test_export_writes_the_document_to_the_file_and_prints_nothing(api, capsys, 
 def test_export_without_a_file_prints_the_document_as_received(api, capsys):
     api.route("GET", EXPORT_PATH, body=EXPORT_BODY)
 
-    code, out, _ = run(capsys, "case", "disclosure", "export", CASE_ID, VERSION_ID, "--username", "alice")
+    code, out, _ = run(
+        capsys,
+        "case",
+        "disclosure",
+        "export",
+        CASE_ID,
+        VERSION_ID,
+        "--username",
+        "alice",
+    )
 
     assert code == 0
     assert json.loads(out) == EXPORT_BODY
 
 
 def test_export_of_an_unapproved_version_is_refused_with_the_next_step(api, capsys):
-    api.route("GET", EXPORT_PATH, status=409, body={"detail": {"status": "version_not_approved"}})
+    api.route(
+        "GET",
+        EXPORT_PATH,
+        status=409,
+        body={"detail": {"status": "version_not_approved"}},
+    )
 
-    code, out, err = run(capsys, "case", "disclosure", "export", CASE_ID, VERSION_ID, "--username", "alice")
+    code, out, err = run(
+        capsys,
+        "case",
+        "disclosure",
+        "export",
+        CASE_ID,
+        VERSION_ID,
+        "--username",
+        "alice",
+    )
 
     assert code == 1
     assert out == ""
@@ -529,9 +567,20 @@ def test_export_of_an_unapproved_version_is_refused_with_the_next_step(api, caps
 
 
 def test_export_of_a_version_the_caller_cannot_see_is_not_found(api, capsys):
-    api.route("GET", EXPORT_PATH, status=404, body={"detail": "disclosure version not found"})
+    api.route(
+        "GET", EXPORT_PATH, status=404, body={"detail": "disclosure version not found"}
+    )
 
-    code, out, err = run(capsys, "case", "disclosure", "export", CASE_ID, VERSION_ID, "--username", "alice")
+    code, out, err = run(
+        capsys,
+        "case",
+        "disclosure",
+        "export",
+        CASE_ID,
+        VERSION_ID,
+        "--username",
+        "alice",
+    )
 
     assert code == 1
     assert out == ""
@@ -543,7 +592,16 @@ def test_export_to_an_unwritable_path_is_a_usage_error(api, capsys, tmp_path):
     target = tmp_path / "missing-directory" / "disclosure-export.json"
 
     code, out, err = run(
-        capsys, "case", "disclosure", "export", CASE_ID, VERSION_ID, "--username", "alice", "--out", str(target)
+        capsys,
+        "case",
+        "disclosure",
+        "export",
+        CASE_ID,
+        VERSION_ID,
+        "--username",
+        "alice",
+        "--out",
+        str(target),
     )
 
     assert code == 2
@@ -551,7 +609,16 @@ def test_export_to_an_unwritable_path_is_a_usage_error(api, capsys, tmp_path):
 
 
 def test_export_with_a_malformed_version_id_is_refused_before_any_request(api, capsys):
-    code, out, err = run(capsys, "case", "disclosure", "export", CASE_ID, "not-a-uuid", "--username", "alice")
+    code, out, err = run(
+        capsys,
+        "case",
+        "disclosure",
+        "export",
+        CASE_ID,
+        "not-a-uuid",
+        "--username",
+        "alice",
+    )
 
     assert code == 2
     assert "VERSION_ID must be a UUID" in err

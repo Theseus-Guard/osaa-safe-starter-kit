@@ -58,7 +58,9 @@ class FakeAPI:
         self.calls: list[dict] = []
         self.response = response
         monkeypatch.setenv("SAFE_API_URL", BASE_URL)
-        monkeypatch.setattr(cli, "_with_session", lambda base, args, action: action(base, "token"))
+        monkeypatch.setattr(
+            cli, "_with_session", lambda base, args, action: action(base, "token")
+        )
         monkeypatch.setattr(cli, "_call", self._call)
 
     def _call(self, base_url, method, path, **kwargs):
@@ -80,7 +82,16 @@ def run(capsys, *argv: str) -> tuple[int, str, str]:
 def test_record_sends_the_configuration_with_the_idempotency_key(api, capsys):
     api.response = json.dumps(RECORD_BODY).encode()
 
-    code, out, _ = run(capsys, "case", "model", "record", CASE_ID, *RECORD_ARGS, "--idempotency-key", "run-1")
+    code, out, _ = run(
+        capsys,
+        "case",
+        "model",
+        "record",
+        CASE_ID,
+        *RECORD_ARGS,
+        "--idempotency-key",
+        "run-1",
+    )
 
     assert code == 0
     call = api.calls[0]
@@ -104,7 +115,9 @@ def test_record_sends_the_configuration_with_the_idempotency_key(api, capsys):
 def test_record_json_prints_the_api_body(api, capsys):
     api.response = json.dumps(RECORD_BODY).encode()
 
-    code, out, _ = run(capsys, "case", "model", "record", CASE_ID, *RECORD_ARGS, "--json")
+    code, out, _ = run(
+        capsys, "case", "model", "record", CASE_ID, *RECORD_ARGS, "--json"
+    )
 
     assert code == 0
     assert json.loads(out) == RECORD_BODY
@@ -113,16 +126,31 @@ def test_record_json_prints_the_api_body(api, capsys):
 def test_record_links_to_a_review_round(api, capsys):
     api.response = json.dumps(RECORD_BODY).encode()
 
-    run(capsys, "case", "model", "record", CASE_ID, *RECORD_ARGS, "--review-round", ROUND_ID)
+    run(
+        capsys,
+        "case",
+        "model",
+        "record",
+        CASE_ID,
+        *RECORD_ARGS,
+        "--review-round",
+        ROUND_ID,
+    )
 
     assert api.calls[0]["payload"]["review_round_id"] == ROUND_ID
 
 
 @pytest.mark.parametrize(
     ("option", "value"),
-    [("--model-name", "model a"), ("--runtime", "please answer in French"), ("--provider-alias", "x" * 201)],
+    [
+        ("--model-name", "model a"),
+        ("--runtime", "please answer in French"),
+        ("--provider-alias", "x" * 201),
+    ],
 )
-def test_an_identifier_with_spaces_or_too_long_is_refused_before_any_request(api, capsys, option, value):
+def test_an_identifier_with_spaces_or_too_long_is_refused_before_any_request(
+    api, capsys, option, value
+):
     args = list(RECORD_ARGS)
     args[args.index(option) + 1] = value
 
@@ -141,7 +169,16 @@ def test_an_identifier_with_spaces_or_too_long_is_refused_before_any_request(api
     ],
 )
 def test_effort_and_budget_need_reasoning_enabled(api, capsys, reasoning_args):
-    args = ["--model-name", "model-a", "--model-version", "1", "--runtime", "r", "--provider-alias", "p"]
+    args = [
+        "--model-name",
+        "model-a",
+        "--model-version",
+        "1",
+        "--runtime",
+        "r",
+        "--provider-alias",
+        "p",
+    ]
     args += reasoning_args
 
     code, _, err = run(capsys, "case", "model", "record", CASE_ID, *args)
@@ -152,7 +189,16 @@ def test_effort_and_budget_need_reasoning_enabled(api, capsys, reasoning_args):
 
 
 def test_a_budget_outside_the_limit_is_refused_before_any_request(api, capsys):
-    args = ["--model-name", "a", "--model-version", "1", "--runtime", "r", "--provider-alias", "p"]
+    args = [
+        "--model-name",
+        "a",
+        "--model-version",
+        "1",
+        "--runtime",
+        "r",
+        "--provider-alias",
+        "p",
+    ]
     args += ["--reasoning-mode", "enabled", "--reasoning-budget-tokens", "0"]
 
     code, _, err = run(capsys, "case", "model", "record", CASE_ID, *args)
@@ -202,11 +248,26 @@ def test_list_without_records_says_so(api, capsys):
 
 
 def test_revoke_posts_the_trimmed_reason_to_the_record_path(api, capsys):
-    revoked = {**RECORD_BODY, "version": 2, "revoked": True, "usable_as_current": False, "revocation_reason": "x"}
+    revoked = {
+        **RECORD_BODY,
+        "version": 2,
+        "revoked": True,
+        "usable_as_current": False,
+        "revocation_reason": "x",
+    }
     api.response = json.dumps(revoked).encode()
 
     code, out, _ = run(
-        capsys, "case", "model", "revoke", CASE_ID, RECORD_ID, "--reason", "  wrong alias  ", "--idempotency-key", "k2"
+        capsys,
+        "case",
+        "model",
+        "revoke",
+        CASE_ID,
+        RECORD_ID,
+        "--reason",
+        "  wrong alias  ",
+        "--idempotency-key",
+        "k2",
     )
 
     assert code == 0
@@ -220,7 +281,9 @@ def test_revoke_posts_the_trimmed_reason_to_the_record_path(api, capsys):
 
 
 def test_a_blank_revocation_reason_is_refused_before_any_request(api, capsys):
-    code, _, err = run(capsys, "case", "model", "revoke", CASE_ID, RECORD_ID, "--reason", "   ")
+    code, _, err = run(
+        capsys, "case", "model", "revoke", CASE_ID, RECORD_ID, "--reason", "   "
+    )
 
     assert code != 0
     assert "must not be blank" in err
@@ -228,7 +291,9 @@ def test_a_blank_revocation_reason_is_refused_before_any_request(api, capsys):
 
 
 def test_a_record_id_that_is_not_a_uuid_is_refused_before_any_request(api, capsys):
-    code, _, err = run(capsys, "case", "model", "revoke", CASE_ID, "not-a-uuid", "--reason", "x")
+    code, _, err = run(
+        capsys, "case", "model", "revoke", CASE_ID, "not-a-uuid", "--reason", "x"
+    )
 
     assert code != 0
     assert "RECORD_ID must be a UUID" in err

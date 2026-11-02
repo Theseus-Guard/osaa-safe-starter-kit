@@ -325,7 +325,9 @@ def export_disclosure_version(
     if result.outcome is Outcome.APPROVAL_MISMATCH:
         raise HTTPException(status_code=409, detail={"status": "approval_mismatch"})
     if result.outcome is Outcome.RELEASE_APPROVAL_MISSING:
-        raise HTTPException(status_code=409, detail={"status": "release_approval_missing"})
+        raise HTTPException(
+            status_code=409, detail={"status": "release_approval_missing"}
+        )
     if result.outcome is Outcome.RELEASE_TRACE_MISSING:
         raise HTTPException(status_code=409, detail={"status": "release_trace_missing"})
     assert result.outcome is Outcome.OK and result.value is not None

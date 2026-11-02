@@ -54,8 +54,12 @@ def multipart(filename: str, content_type: str, data: bytes) -> tuple[bytes, str
 # --- T13: no reusable secret in responses or logs -----------------------------------------------------------------
 
 
-def test_login_response_carries_no_password_no_signing_key_and_no_password_hash(client, store):
-    response = client.post("/api/v1/auth/token", json={"username": "alice", "password": PASSWORD})
+def test_login_response_carries_no_password_no_signing_key_and_no_password_hash(
+    client, store
+):
+    response = client.post(
+        "/api/v1/auth/token", json={"username": "alice", "password": PASSWORD}
+    )
 
     assert response.status_code == 200
     assert PASSWORD not in response.text
@@ -66,7 +70,9 @@ def test_login_response_carries_no_password_no_signing_key_and_no_password_hash(
 def test_failed_login_response_does_not_echo_the_submitted_password(client, store):
     attempt = wrong_password()
 
-    response = client.post("/api/v1/auth/token", json={"username": "alice", "password": attempt})
+    response = client.post(
+        "/api/v1/auth/token", json={"username": "alice", "password": attempt}
+    )
 
     assert response.status_code == 401
     assert attempt not in response.text
@@ -76,7 +82,9 @@ def test_failed_login_response_does_not_echo_the_submitted_password(client, stor
 def test_refresh_response_has_no_password_key_or_previous_refresh_token(client, store):
     first = login_tokens(client, "alice")
 
-    response = client.post("/api/v1/auth/refresh", json={"refresh_token": first["refresh_token"]})
+    response = client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": first["refresh_token"]}
+    )
 
     assert response.status_code == 200
     body = response.text
@@ -85,12 +93,16 @@ def test_refresh_response_has_no_password_key_or_previous_refresh_token(client, 
     assert signing_key_text() not in body
 
 
-def test_admin_reset_returns_no_body_and_the_new_password_is_not_in_the_response(client, store):
+def test_admin_reset_returns_no_body_and_the_new_password_is_not_in_the_response(
+    client, store
+):
     admin = login_tokens(client, "carol")["access_token"]
     temporary = "temporary passphrase"
 
     response = client.post(
-        f"/api/v1/users/{ALICE}/password", headers=bearer_header(admin), json={"temporary_password": temporary},
+        f"/api/v1/users/{ALICE}/password",
+        headers=bearer_header(admin),
+        json={"temporary_password": temporary},
     )
 
     assert response.status_code == 204
@@ -99,23 +111,35 @@ def test_admin_reset_returns_no_body_and_the_new_password_is_not_in_the_response
     assert PASSWORD not in response.text
 
 
-def test_login_and_refresh_write_no_password_or_token_to_the_logs(client, store, caplog):
+def test_login_and_refresh_write_no_password_or_token_to_the_logs(
+    client, store, caplog
+):
     caplog.set_level(logging.DEBUG)
     attempt = wrong_password()
     client.post("/api/v1/auth/token", json={"username": "alice", "password": attempt})
     tokens = login_tokens(client, "alice")
-    refreshed = client.post("/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}).json()
+    refreshed = client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    ).json()
 
     logged = caplog.text
-    for secret in (PASSWORD, attempt, signing_key_text(), tokens["refresh_token"], tokens["access_token"],
-                   refreshed["refresh_token"]):
+    for secret in (
+        PASSWORD,
+        attempt,
+        signing_key_text(),
+        tokens["refresh_token"],
+        tokens["access_token"],
+        refreshed["refresh_token"],
+    ):
         assert secret not in logged
 
 
 def test_validation_error_does_not_echo_the_submitted_password(client, store):
     too_long = "probe-" + uuid.uuid4().hex + "x" * 1024
 
-    response = client.post("/api/v1/auth/token", json={"username": "alice", "password": too_long})
+    response = client.post(
+        "/api/v1/auth/token", json={"username": "alice", "password": too_long}
+    )
 
     assert response.status_code == 400
     assert too_long not in response.text
@@ -141,7 +165,11 @@ def upload_client(monkeypatch, provider):
     app = FastAPI()
     app.include_router(evidence_api.evidence_router)
     app.dependency_overrides[auth.current_user] = lambda: INVESTIGATOR
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"evidence:read", "evidence:write"}))
+    monkeypatch.setattr(
+        auth,
+        "permissions_for_role",
+        lambda role: frozenset({"evidence:read", "evidence:write"}),
+    )
     monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope: True)
     monkeypatch.setattr(evidence_api, "_PROVIDER", provider)
     monkeypatch.setenv("SAFE_EVIDENCE_MAX_BYTES", "100000")
@@ -151,21 +179,29 @@ def upload_client(monkeypatch, provider):
 ZIP_BYTES = b"PK\x03\x04" + b"\x00" * 64
 
 
-def test_archive_bytes_declared_as_pdf_are_refused_and_nothing_is_stored(upload_client, monkeypatch):
+def test_archive_bytes_declared_as_pdf_are_refused_and_nothing_is_stored(
+    upload_client, monkeypatch
+):
     def must_not_run(*args, **kwargs):
-        raise AssertionError("create_evidence must not run when the bytes do not match the declared type")
+        raise AssertionError(
+            "create_evidence must not run when the bytes do not match the declared type"
+        )
 
     monkeypatch.setattr(evidence, "create_evidence", must_not_run)
     body, content_type = multipart("report.pdf", "application/pdf", ZIP_BYTES)
 
     response = upload_client.post(
-        f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={**idem(), "Content-Type": content_type},
+        f"/api/v1/cases/{uuid.uuid4()}/evidence",
+        content=body,
+        headers={**idem(), "Content-Type": content_type},
     )
 
     assert response.status_code == 415
 
 
-def test_archive_declared_as_an_archive_is_refused_before_storage(upload_client, monkeypatch):
+def test_archive_declared_as_an_archive_is_refused_before_storage(
+    upload_client, monkeypatch
+):
     def must_not_run(*args, **kwargs):
         raise AssertionError("create_evidence must not run for an archive")
 
@@ -173,7 +209,9 @@ def test_archive_declared_as_an_archive_is_refused_before_storage(upload_client,
     body, content_type = multipart("bundle.zip", "application/zip", ZIP_BYTES)
 
     response = upload_client.post(
-        f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={**idem(), "Content-Type": content_type},
+        f"/api/v1/cases/{uuid.uuid4()}/evidence",
+        content=body,
+        headers={**idem(), "Content-Type": content_type},
     )
 
     assert response.status_code == 415
@@ -188,8 +226,9 @@ def test_archive_declared_as_an_archive_is_refused_before_storage(upload_client,
         "nested/../../escape.pdf",
     ],
 )
-def test_archive_like_or_traversal_name_is_kept_as_a_plain_display_name(raw_name, ledger, provider, tmp_path,
-                                                                        monkeypatch):
+def test_archive_like_or_traversal_name_is_kept_as_a_plain_display_name(
+    raw_name, ledger, provider, tmp_path, monkeypatch
+):
     stored_names: list[str] = []
     real_insert = evidence._insert_pending
 
@@ -203,13 +242,25 @@ def test_archive_like_or_traversal_name_is_kept_as_a_plain_display_name(raw_name
     storage = LocalVolumeStorage(store_dir)
     scope = read_all(str(uuid.uuid4()))
 
-    evidence.create_evidence(str(uuid.uuid4()), str(uuid.uuid4()), raw_name, "application/pdf", PDF, storage,
-                             provider, scope)
+    evidence.create_evidence(
+        str(uuid.uuid4()),
+        str(uuid.uuid4()),
+        raw_name,
+        "application/pdf",
+        PDF,
+        storage,
+        provider,
+        scope,
+    )
 
     assert stored_names == ["escape.pdf"]
     # The object key is a generated UUID, so the object lands directly in the store and nowhere else. The only other
     # file under tmp_path is the key file written by the provider fixture.
-    outside = [entry.name for entry in tmp_path.rglob("*") if entry.is_file() and store_dir not in entry.parents]
+    outside = [
+        entry.name
+        for entry in tmp_path.rglob("*")
+        if entry.is_file() and store_dir not in entry.parents
+    ]
     assert outside == ["kek.bin"]
     stored_files = list(store_dir.iterdir())
     assert len(stored_files) == 1

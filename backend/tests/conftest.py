@@ -61,14 +61,25 @@ class FakeTimezoneDatabase:
     def connect(self):
         return _Connection(self)
 
-    def seed_timezone(self, timezone: str, effective_from: datetime, set_by: str | None = None) -> None:
+    def seed_timezone(
+        self, timezone: str, effective_from: datetime, set_by: str | None = None
+    ) -> None:
         self.timezone_rows.append(
-            {"id": str(uuid.uuid4()), "timezone": timezone, "effective_from": effective_from, "set_by": set_by}
+            {
+                "id": str(uuid.uuid4()),
+                "timezone": timezone,
+                "effective_from": effective_from,
+                "set_by": set_by,
+            }
         )
 
     def current_timezone(self) -> str | None:
         """The timezone in effect now, read the way the application reads it."""
-        rows = [row for row in self.timezone_rows if row["effective_from"] <= datetime.now(UTC)]
+        rows = [
+            row
+            for row in self.timezone_rows
+            if row["effective_from"] <= datetime.now(UTC)
+        ]
         if not rows:
             return None
         return max(rows, key=lambda row: row["effective_from"])["timezone"]
@@ -79,30 +90,60 @@ class FakeTimezoneDatabase:
         if sql.startswith("SELECT timezone, effective_from FROM system_timezone"):
             rows = self.timezone_rows
             if "effective_from <= now()" in sql:
-                rows = [row for row in rows if row["effective_from"] <= datetime.now(UTC)]
+                rows = [
+                    row for row in rows if row["effective_from"] <= datetime.now(UTC)
+                ]
             if not rows:
                 return _Result([])
             latest = max(rows, key=lambda row: row["effective_from"])
             return _Result([(latest["timezone"], latest["effective_from"])])
         if sql.startswith("INSERT INTO system_timezone"):
             timezone, set_by = params
-            row = {"id": str(uuid.uuid4()), "timezone": timezone, "effective_from": datetime.now(UTC), "set_by": set_by}
+            row = {
+                "id": str(uuid.uuid4()),
+                "timezone": timezone,
+                "effective_from": datetime.now(UTC),
+                "set_by": set_by,
+            }
             self.timezone_rows.append(row)
             return _Result([(row["id"], row["timezone"], row["effective_from"])])
         if sql.startswith("INSERT INTO audit_events"):
             actor_id, action, target_type, target_id, details = params
             self.audit_rows.append(
-                {"actor_id": actor_id, "action": action, "target_type": target_type,
-                 "target_id": target_id, "details": details.obj}
+                {
+                    "actor_id": actor_id,
+                    "action": action,
+                    "target_type": target_type,
+                    "target_id": target_id,
+                    "details": details.obj,
+                }
             )
             return _Result([])
         if sql == "SELECT nextval('case_reference_seq')":
             return _Result([(next(self._sequence),)])
         if sql.startswith("INSERT INTO cases"):
-            reference, title, awareness_time, created_by, calendar_version, calendar_timezone = params
+            (
+                reference,
+                title,
+                awareness_time,
+                created_by,
+                calendar_version,
+                calendar_timezone,
+            ) = params
             row = (
-                str(uuid.uuid4()), reference, title, awareness_time, "open", calendar_version,
-                datetime.now(UTC), created_by, calendar_timezone, None, None, None, 1,
+                str(uuid.uuid4()),
+                reference,
+                title,
+                awareness_time,
+                "open",
+                calendar_version,
+                datetime.now(UTC),
+                created_by,
+                calendar_timezone,
+                None,
+                None,
+                None,
+                1,
             )
             self.case_rows.append(row)
             return _Result([row])

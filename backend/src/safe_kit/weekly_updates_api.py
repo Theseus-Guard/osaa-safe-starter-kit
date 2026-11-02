@@ -28,7 +28,9 @@ def _scope(actor: User) -> CaseScope:
     return CaseScope.from_permissions(actor.id, permissions_of(actor))
 
 
-@weekly_updates_router.get("/api/v1/cases/{case_id}/weekly-updates", response_model=list[dict[str, Any]])
+@weekly_updates_router.get(
+    "/api/v1/cases/{case_id}/weekly-updates", response_model=list[dict[str, Any]]
+)
 def list_case_weekly_updates(
     case_id: uuid.UUID,
     actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS_FOR_RECORDS)),
@@ -47,7 +49,9 @@ def get_case_weekly_update(
     update_id: uuid.UUID,
     actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS_FOR_RECORDS)),
 ) -> dict[str, Any]:
-    case_visible, document = get_weekly_update(str(case_id), str(update_id), _scope(actor))
+    case_visible, document = get_weekly_update(
+        str(case_id), str(update_id), _scope(actor)
+    )
     if not case_visible:
         raise CASE_NOT_FOUND
     if document is None:

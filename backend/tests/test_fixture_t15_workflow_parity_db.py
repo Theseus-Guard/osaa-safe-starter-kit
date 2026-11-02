@@ -72,7 +72,9 @@ def version_url(world_data, version_id: str, suffix: str = "") -> str:
 
 
 @requires_database
-def test_the_version_list_is_the_same_through_the_api_and_the_cli(dworld, monkeypatch, capsys):
+def test_the_version_list_is_the_same_through_the_api_and_the_cli(
+    dworld, monkeypatch, capsys
+):
     first_version(dworld)
     approver = dworld["people"]["approver"]
 
@@ -87,14 +89,32 @@ def test_the_version_list_is_the_same_through_the_api_and_the_cli(dworld, monkey
 
 
 @requires_database
-def test_an_approved_export_is_the_same_document_through_the_api_and_the_cli(dworld, monkeypatch, capsys):
+def test_an_approved_export_is_the_same_document_through_the_api_and_the_cli(
+    dworld, monkeypatch, capsys
+):
     view, _ = first_version(dworld)
     approver = dworld["people"]["approver"]
-    assert approve(dworld, "approver", view["id"], view["recipient"], view["purpose"], view["digest"]).status_code == 201
+    assert (
+        approve(
+            dworld,
+            "approver",
+            view["id"],
+            view["recipient"],
+            view["purpose"],
+            view["digest"],
+        ).status_code
+        == 201
+    )
 
     api_export = api_as(approver, "get", version_url(dworld, view["id"], "/export"))
     code, out, err = cli_as(
-        monkeypatch, capsys, approver, "disclosure", "export", dworld["case_id"], view["id"]
+        monkeypatch,
+        capsys,
+        approver,
+        "disclosure",
+        "export",
+        dworld["case_id"],
+        view["id"],
     )
 
     assert api_export.status_code == 200, api_export.text
@@ -103,12 +123,22 @@ def test_an_approved_export_is_the_same_document_through_the_api_and_the_cli(dwo
 
 
 @requires_database
-def test_an_unapproved_export_is_refused_by_both_clients_and_no_document_is_printed(dworld, monkeypatch, capsys):
+def test_an_unapproved_export_is_refused_by_both_clients_and_no_document_is_printed(
+    dworld, monkeypatch, capsys
+):
     view, _ = first_version(dworld)
     triager = dworld["people"]["triager"]
 
     api_export = api_as(triager, "get", version_url(dworld, view["id"], "/export"))
-    code, out, err = cli_as(monkeypatch, capsys, triager, "disclosure", "export", dworld["case_id"], view["id"])
+    code, out, err = cli_as(
+        monkeypatch,
+        capsys,
+        triager,
+        "disclosure",
+        "export",
+        dworld["case_id"],
+        view["id"],
+    )
 
     assert api_export.status_code == 409
     assert api_export.json()["detail"] == {"status": "version_not_approved"}
@@ -118,11 +148,15 @@ def test_an_unapproved_export_is_refused_by_both_clients_and_no_document_is_prin
 
 
 @requires_database
-def test_a_wrong_digest_is_refused_by_both_clients_and_no_approval_is_stored(dworld, monkeypatch, capsys):
+def test_a_wrong_digest_is_refused_by_both_clients_and_no_approval_is_stored(
+    dworld, monkeypatch, capsys
+):
     view, _ = first_version(dworld)
     approver = dworld["people"]["approver"]
 
-    api_answer = approve(dworld, "approver", view["id"], view["recipient"], view["purpose"], ZERO_DIGEST)
+    api_answer = approve(
+        dworld, "approver", view["id"], view["recipient"], view["purpose"], ZERO_DIGEST
+    )
     code, out, err = cli_as(
         monkeypatch,
         capsys,
@@ -147,11 +181,22 @@ def test_a_wrong_digest_is_refused_by_both_clients_and_no_approval_is_stored(dwo
 
 
 @requires_database
-def test_an_approval_through_the_cli_reads_back_like_one_through_the_api(dworld, monkeypatch, capsys):
+def test_an_approval_through_the_cli_reads_back_like_one_through_the_api(
+    dworld, monkeypatch, capsys
+):
     api_view, _ = first_version(dworld)
-    cli_view, _ = first_version(dworld, purpose="Second rapid alert on the same gateway")
+    cli_view, _ = first_version(
+        dworld, purpose="Second rapid alert on the same gateway"
+    )
     approver = dworld["people"]["approver"]
-    api_answer = approve(dworld, "approver", api_view["id"], api_view["recipient"], api_view["purpose"], api_view["digest"])
+    api_answer = approve(
+        dworld,
+        "approver",
+        api_view["id"],
+        api_view["recipient"],
+        api_view["purpose"],
+        api_view["digest"],
+    )
     assert api_answer.status_code == 201, api_answer.text
 
     code, out, err = cli_as(
@@ -189,12 +234,24 @@ def test_a_case_the_caller_cannot_see_gives_the_same_answer_as_a_missing_case_th
     missing_case = str(uuid.uuid4())
 
     api_hidden = api_as(stranger, "get", version_url(dworld, view["id"], "/export"))
-    api_missing = api_as(stranger, "get", f"/api/v1/cases/{missing_case}/disclosures/{view['id']}/export")
+    api_missing = api_as(
+        stranger, "get", f"/api/v1/cases/{missing_case}/disclosures/{view['id']}/export"
+    )
     assert api_hidden.status_code == api_missing.status_code == 404
     assert without_request_id(api_hidden) == without_request_id(api_missing)
 
-    cli_hidden = cli_as(monkeypatch, capsys, stranger, "disclosure", "export", dworld["case_id"], view["id"])
-    cli_missing = cli_as(monkeypatch, capsys, stranger, "disclosure", "export", missing_case, view["id"])
+    cli_hidden = cli_as(
+        monkeypatch,
+        capsys,
+        stranger,
+        "disclosure",
+        "export",
+        dworld["case_id"],
+        view["id"],
+    )
+    cli_missing = cli_as(
+        monkeypatch, capsys, stranger, "disclosure", "export", missing_case, view["id"]
+    )
     assert cli_hidden == cli_missing
     assert cli_hidden[0] == 1 and cli_hidden[1] == ""
     assert "not found" in cli_hidden[2]
@@ -216,12 +273,16 @@ def open_round(world_data) -> dict:
 
 
 @requires_database
-def test_the_review_round_is_the_same_through_the_api_and_the_cli(dworld, monkeypatch, capsys):
+def test_the_review_round_is_the_same_through_the_api_and_the_cli(
+    dworld, monkeypatch, capsys
+):
     reviewer = dworld["people"]["reviewer"]
     open_round(dworld)
 
     api_rounds = api_as(reviewer, "get", f"/api/v1/reviews?case_id={dworld['case_id']}")
-    code, out, err = cli_as(monkeypatch, capsys, reviewer, "review", "list", dworld["case_id"], "--json")
+    code, out, err = cli_as(
+        monkeypatch, capsys, reviewer, "review", "list", dworld["case_id"], "--json"
+    )
 
     assert api_rounds.status_code == 200, api_rounds.text
     assert code == 0 and err == ""
@@ -229,7 +290,9 @@ def test_the_review_round_is_the_same_through_the_api_and_the_cli(dworld, monkey
 
 
 @requires_database
-def test_a_stale_layer_revision_gets_the_same_current_revision_from_the_api_and_the_cli(dworld, monkeypatch, capsys):
+def test_a_stale_layer_revision_gets_the_same_current_revision_from_the_api_and_the_cli(
+    dworld, monkeypatch, capsys
+):
     reviewer = dworld["people"]["reviewer"]
     round_view = open_round(dworld)
     current = round_view["revision"]
@@ -261,14 +324,19 @@ def test_a_stale_layer_revision_gets_the_same_current_revision_from_the_api_and_
     )
 
     assert api_answer.status_code == 412
-    assert api_answer.json()["detail"] == {"status": "precondition_failed", "current_revision": current}
+    assert api_answer.json()["detail"] == {
+        "status": "precondition_failed",
+        "current_revision": current,
+    }
     assert code == 1 and out == ""
     assert f"The current revision is {current}" in err
     assert "nothing was saved" in err
 
 
 @requires_database
-def test_a_layer_set_through_the_cli_is_read_back_the_same_way_through_the_api(dworld, monkeypatch, capsys):
+def test_a_layer_set_through_the_cli_is_read_back_the_same_way_through_the_api(
+    dworld, monkeypatch, capsys
+):
     reviewer = dworld["people"]["reviewer"]
     round_view = open_round(dworld)
 
@@ -301,7 +369,9 @@ def test_a_layer_set_through_the_cli_is_read_back_the_same_way_through_the_api(d
 
 
 @requires_database
-def test_a_pass_without_evidence_is_refused_by_both_clients_and_nothing_is_stored(dworld, monkeypatch, capsys):
+def test_a_pass_without_evidence_is_refused_by_both_clients_and_nothing_is_stored(
+    dworld, monkeypatch, capsys
+):
     reviewer = dworld["people"]["reviewer"]
     round_view = open_round(dworld)
 
@@ -310,7 +380,10 @@ def test_a_pass_without_evidence_is_refused_by_both_clients_and_nothing_is_store
         "patch",
         f"/api/v1/reviews/{round_view['id']}/layers/model",
         json={"outcome": "pass", "reason": None, "evidence_ids": []},
-        headers={"Idempotency-Key": uuid.uuid4().hex, "If-Match": f'"{round_view["revision"]}"'},
+        headers={
+            "Idempotency-Key": uuid.uuid4().hex,
+            "If-Match": f'"{round_view["revision"]}"',
+        },
     )
     code, out, err = cli_as(
         monkeypatch,
@@ -332,5 +405,7 @@ def test_a_pass_without_evidence_is_refused_by_both_clients_and_nothing_is_store
     assert code == 2 and out == ""
     assert "a pass needs at least one evidence item of this case" in err
     # Neither refused write changed the round.
-    unchanged = api_as(reviewer, "get", f"/api/v1/reviews?case_id={dworld['case_id']}").json()[0]
+    unchanged = api_as(
+        reviewer, "get", f"/api/v1/reviews?case_id={dworld['case_id']}"
+    ).json()[0]
     assert unchanged["revision"] == round_view["revision"]

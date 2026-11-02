@@ -3,20 +3,29 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from safe_kit.deadlines import BusinessCalendar, deadline_start, deadlines_for, next_weekly_update
+from safe_kit.deadlines import (
+    BusinessCalendar,
+    deadline_start,
+    deadlines_for,
+    next_weekly_update,
+)
 
 ISTANBUL = ZoneInfo("Europe/Istanbul")
 BERLIN = ZoneInfo("Europe/Berlin")
 
 
-def calendar(holidays: frozenset[date] = frozenset(), tz: ZoneInfo = ISTANBUL) -> BusinessCalendar:
+def calendar(
+    holidays: frozenset[date] = frozenset(), tz: ZoneInfo = ISTANBUL
+) -> BusinessCalendar:
     return BusinessCalendar(timezone=tz, holidays=holidays)
 
 
 def test_72_hours_is_elapsed_time_across_a_weekend():
     t0 = datetime(2026, 11, 6, 10, 0, tzinfo=UTC)  # Friday
     result = deadlines_for(t0, calendar())
-    assert result.affected_customers == datetime(2026, 11, 9, 10, 0, tzinfo=UTC)  # Monday
+    assert result.affected_customers == datetime(
+        2026, 11, 9, 10, 0, tzinfo=UTC
+    )  # Monday
 
 
 def test_four_business_days_skip_weekend_from_friday():
@@ -67,7 +76,9 @@ def test_business_day_keeps_wall_clock_time_across_the_autumn_dst_change():
 
 
 def test_hour_deadline_is_elapsed_time_across_a_dst_change():
-    t0 = datetime(2026, 10, 23, 9, 0, tzinfo=BERLIN)  # 07:00 UTC, before the change on 2026-10-25
+    t0 = datetime(
+        2026, 10, 23, 9, 0, tzinfo=BERLIN
+    )  # 07:00 UTC, before the change on 2026-10-25
     result = deadlines_for(t0, calendar(tz=BERLIN))
     assert result.affected_customers == datetime(2026, 10, 26, 7, 0, tzinfo=UTC)
 

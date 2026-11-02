@@ -10,7 +10,9 @@ from safe_kit.config_guard import ConfigError
 @pytest.fixture
 def signing_key(tmp_path, monkeypatch):
     key_file = tmp_path / "jwt_signing_key.txt"
-    key_file.write_text("test-signing-key-with-enough-length-1234567890", encoding="utf-8")
+    key_file.write_text(
+        "test-signing-key-with-enough-length-1234567890", encoding="utf-8"
+    )
     monkeypatch.setenv("SAFE_JWT_KEY_FILE", str(key_file))
     return key_file
 
@@ -27,12 +29,20 @@ def test_missing_hash_never_verifies():
 
 def test_password_expires_only_after_180_days():
     changed = datetime(2026, 1, 1, tzinfo=UTC)
-    assert security.password_expired(changed, now=changed + timedelta(days=180)) is False
-    assert security.password_expired(changed, now=changed + timedelta(days=180, seconds=1)) is True
+    assert (
+        security.password_expired(changed, now=changed + timedelta(days=180)) is False
+    )
+    assert (
+        security.password_expired(changed, now=changed + timedelta(days=180, seconds=1))
+        is True
+    )
 
 
 def test_recent_password_is_matched_through_salted_hashes():
-    recent = [security.hash_password("first passphrase here"), security.hash_password("second passphrase here")]
+    recent = [
+        security.hash_password("first passphrase here"),
+        security.hash_password("second passphrase here"),
+    ]
     assert security.is_recent_password("second passphrase here", recent)
     assert not security.is_recent_password("third passphrase here", recent)
     assert not security.is_recent_password("anything at all", [])
@@ -50,10 +60,14 @@ def test_access_token_round_trip_has_unique_jti(signing_key):
 def test_access_token_lifetime_is_the_configured_value(signing_key, monkeypatch):
     monkeypatch.setenv("SAFE_ACCESS_TTL_MINUTES", "45")
     _, expires_at = security.issue_access_token("user-1", "alice", "triager")
-    assert expires_at - datetime.now(UTC) == pytest.approx(timedelta(minutes=45), abs=timedelta(seconds=5))
+    assert expires_at - datetime.now(UTC) == pytest.approx(
+        timedelta(minutes=45), abs=timedelta(seconds=5)
+    )
 
 
-def test_refresh_token_lifetime_matches_the_access_token_with_the_compose_values(monkeypatch):
+def test_refresh_token_lifetime_matches_the_access_token_with_the_compose_values(
+    monkeypatch,
+):
     # Both start at issue time, so the frontend renews the pair before the access token expires.
     assert security.refresh_token_ttl() == timedelta(minutes=60)
     assert security.refresh_token_ttl() == security.access_token_ttl()
@@ -121,7 +135,9 @@ def test_token_for_other_audience_is_rejected(signing_key):
         "iat": now,
         "exp": now + timedelta(minutes=5),
     }
-    token = jwt.encode(claims, signing_key.read_text(encoding="utf-8"), algorithm="HS256")
+    token = jwt.encode(
+        claims, signing_key.read_text(encoding="utf-8"), algorithm="HS256"
+    )
     with pytest.raises(jwt.InvalidAudienceError):
         security.decode_access_token(token)
 

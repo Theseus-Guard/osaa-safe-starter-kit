@@ -172,9 +172,15 @@ class Outcome(Enum):
     BINDING_MISMATCH = "binding_mismatch"
     EVIDENCE_NOT_VISIBLE = "evidence_not_visible"
     INTEGRITY_FAILED = "integrity_failed"
-    APPROVAL_MISMATCH = "approval_mismatch"  # export: the approval does not match the version
-    RELEASE_APPROVAL_MISSING = "release_approval_missing"  # export: a CLEAR item has no release approval
-    RELEASE_TRACE_MISSING = "release_trace_missing"  # export: no open release attempt for the version
+    APPROVAL_MISMATCH = (
+        "approval_mismatch"  # export: the approval does not match the version
+    )
+    RELEASE_APPROVAL_MISSING = (
+        "release_approval_missing"  # export: a CLEAR item has no release approval
+    )
+    RELEASE_TRACE_MISSING = (
+        "release_trace_missing"  # export: no open release attempt for the version
+    )
 
 
 @dataclass(frozen=True)
@@ -883,7 +889,9 @@ def approve_version(
 # --- the send step's check ------------------------------------------------------------------------------------------
 
 
-def check_release(version_id: str, purpose: str = RELEASE_PURPOSE_NOTICE) -> ReleaseCheck:
+def check_release(
+    version_id: str, purpose: str = RELEASE_PURPOSE_NOTICE
+) -> ReleaseCheck:
     """Re-check a version right before a send. The send step of a package calls it, and so does the notice record
     (safe_kit.external_notices), which may only record a notice for a version that passes.
 
@@ -906,7 +914,11 @@ def check_release(version_id: str, purpose: str = RELEASE_PURPOSE_NOTICE) -> Rel
 
 
 def release_check_on(
-    conn, version: Version, purpose: str = RELEASE_PURPOSE_NOTICE, *, history: bool = False
+    conn,
+    version: Version,
+    purpose: str = RELEASE_PURPOSE_NOTICE,
+    *,
+    history: bool = False,
 ) -> ReleaseCheck:
     """The check of check_release for a version already loaded on the caller's connection (see the docstring above).
 
@@ -917,14 +929,18 @@ def release_check_on(
     if version.approval is None:
         return ReleaseCheck(ReleaseOutcome.NOT_APPROVED, version_id, version.digest)
     if not version.is_latest and not history:
-        return ReleaseCheck(ReleaseOutcome.REVOKED_BY_CHANGE, version_id, version.digest)
+        return ReleaseCheck(
+            ReleaseOutcome.REVOKED_BY_CHANGE, version_id, version.digest
+        )
     approval = version.approval
     if (approval.recipient, approval.purpose, approval.digest) != (
         version.recipient,
         version.purpose,
         version.digest,
     ):
-        return ReleaseCheck(ReleaseOutcome.APPROVAL_MISMATCH, version_id, version.digest)
+        return ReleaseCheck(
+            ReleaseOutcome.APPROVAL_MISMATCH, version_id, version.digest
+        )
     if digest_of_version(version) != version.digest:
         return ReleaseCheck(ReleaseOutcome.DIGEST_MISMATCH, version_id, version.digest)
     release_ok = all(
@@ -941,11 +957,15 @@ def release_check_on(
         external=False,
         approved=release_ok,
     ):
-        return ReleaseCheck(ReleaseOutcome.RELEASE_APPROVAL_MISSING, version_id, version.digest)
+        return ReleaseCheck(
+            ReleaseOutcome.RELEASE_APPROVAL_MISSING, version_id, version.digest
+        )
     # The trace rule (migration 0047): the release path opens the attempt before it calls the check, on the same
     # connection, so the attempt is visible here. It is checked last so that the rules above keep their own outcomes.
     if not _open_attempt_exists(conn, version_id, purpose):
-        return ReleaseCheck(ReleaseOutcome.RELEASE_TRACE_MISSING, version_id, version.digest)
+        return ReleaseCheck(
+            ReleaseOutcome.RELEASE_TRACE_MISSING, version_id, version.digest
+        )
     return ReleaseCheck(ReleaseOutcome.RELEASABLE, version_id, version.digest)
 
 
@@ -1159,7 +1179,9 @@ def export_version(
         version = load_version_on(conn, case_id, version_id)
         if version is None:
             return Result(Outcome.VERSION_NOT_FOUND)
-        attempt = open_release_attempt(conn, version, RELEASE_PURPOSE_EXPORT, scope.user_id)
+        attempt = open_release_attempt(
+            conn, version, RELEASE_PURPOSE_EXPORT, scope.user_id
+        )
         release = release_check_on(conn, version, RELEASE_PURPOSE_EXPORT, history=True)
         if release.outcome is not ReleaseOutcome.RELEASABLE:
             close_release_attempt(conn, attempt, reason_code=release.outcome.value)

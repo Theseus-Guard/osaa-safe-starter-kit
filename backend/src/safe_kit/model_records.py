@@ -133,13 +133,18 @@ def _latest(conn, case_id: str, record_id: str | None = None) -> list[ModelRecor
 
 def _lock_case(conn, case_id: str, scope: CaseScope) -> str | None:
     """Lock the case row, then check the caller's visibility. Returns the case status, or None when not visible."""
-    row = conn.execute("SELECT status FROM cases WHERE id = %s AND NOT is_deleted FOR UPDATE", (case_id,)).fetchone()
+    row = conn.execute(
+        "SELECT status FROM cases WHERE id = %s AND NOT is_deleted FOR UPDATE",
+        (case_id,),
+    ).fetchone()
     if row is None or not cases.is_visible_on(conn, case_id, scope):
         return None
     return row[0]
 
 
-def _reference_in_case(conn, case_id: str, evidence_item_id: str | None, review_round_id: str | None) -> bool:
+def _reference_in_case(
+    conn, case_id: str, evidence_item_id: str | None, review_round_id: str | None
+) -> bool:
     """The linked evidence item or review round must belong to this case.
 
     A missing item and an item of another case give the same answer.
@@ -332,7 +337,9 @@ def revoke_model_record(
     return ModelRecordOutcome.OK, revoked
 
 
-def list_model_records(case_id: str, scope: CaseScope, *, current_only: bool = False) -> list[ModelRecord] | None:
+def list_model_records(
+    case_id: str, scope: CaseScope, *, current_only: bool = False
+) -> list[ModelRecord] | None:
     """The latest version of every record of the case, or None when the caller may not see the case.
 
     current_only leaves out the revoked records: they are kept for audit, but are not the current configuration.
@@ -346,7 +353,9 @@ def list_model_records(case_id: str, scope: CaseScope, *, current_only: bool = F
     return records
 
 
-def read_model_record(case_id: str, record_id: str, scope: CaseScope) -> ModelRecord | None:
+def read_model_record(
+    case_id: str, record_id: str, scope: CaseScope
+) -> ModelRecord | None:
     """The latest version of one record, or None when the case is not visible or the record is not in it."""
     with connect() as conn:
         if not cases.is_visible_on(conn, case_id, scope):

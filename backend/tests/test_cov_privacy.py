@@ -15,7 +15,13 @@ import pytest
 
 from safe_kit import migrate, sessions, users
 from safe_kit.db import connect
-from safe_kit.privacy import CATALOG, CSV_COLUMNS, inventory, inventory_csv_rows, table_stats
+from safe_kit.privacy import (
+    CATALOG,
+    CSV_COLUMNS,
+    inventory,
+    inventory_csv_rows,
+    table_stats,
+)
 from safe_kit.security import hash_refresh_token
 
 pytestmark = pytest.mark.skipif(
@@ -37,7 +43,9 @@ def entry_for(table: str):
 def sql_count(table: str, condition: str = "TRUE") -> int:
     # The table names here are fixed by the test, never user input.
     with connect() as conn:
-        return conn.execute(f"SELECT count(*) FROM {table} WHERE {condition}").fetchone()[0]
+        return conn.execute(
+            f"SELECT count(*) FROM {table} WHERE {condition}"
+        ).fetchone()[0]
 
 
 def csv_text(items: list[dict]) -> str:
@@ -55,7 +63,9 @@ def test_stats_for_a_table_with_soft_delete_separate_active_and_deleted_rows():
     entry = entry_for("users")
     before = table_stats(entry)
 
-    user = users.create_user("t-" + uuid.uuid4().hex[:12], "temporary passphrase", "reporter")
+    user = users.create_user(
+        "t-" + uuid.uuid4().hex[:12], "temporary passphrase", "reporter"
+    )
     users.soft_delete_user(user)
     after = table_stats(entry)
 
@@ -80,9 +90,13 @@ def test_stats_for_a_table_without_soft_delete_count_every_row_as_active():
 
 
 def test_timestamps_follow_the_newest_row():
-    user = users.create_user("t-" + uuid.uuid4().hex[:12], "temporary passphrase", "reporter")
+    user = users.create_user(
+        "t-" + uuid.uuid4().hex[:12], "temporary passphrase", "reporter"
+    )
     with connect() as conn:
-        created_at = conn.execute("SELECT created_at FROM users WHERE id = %s", (user,)).fetchone()[0]
+        created_at = conn.execute(
+            "SELECT created_at FROM users WHERE id = %s", (user,)
+        ).fetchone()[0]
 
     stats = table_stats(entry_for("users"))
 
@@ -119,7 +133,9 @@ def test_inventory_row_counts_match_the_database():
 
     assert by_table["users"]["rows"]["total"] == sql_count("users")
     assert by_table["users"]["rows"]["active"] == sql_count("users", "NOT is_deleted")
-    assert by_table["schema_migrations"]["rows"]["total"] == sql_count("schema_migrations")
+    assert by_table["schema_migrations"]["rows"]["total"] == sql_count(
+        "schema_migrations"
+    )
 
 
 # --- CSV export -----------------------------------------------------------------------------------------------
@@ -141,15 +157,23 @@ def test_csv_rows_have_one_row_per_table_and_match_the_header():
 
 def test_csv_export_never_contains_secret_values():
     # A real password hash and a real refresh token, stored in the database during this test.
-    user = users.create_user("t-" + uuid.uuid4().hex[:12], "secret passphrase for the export test", "reporter")
+    user = users.create_user(
+        "t-" + uuid.uuid4().hex[:12],
+        "secret passphrase for the export test",
+        "reporter",
+    )
     token = sessions.open_session(user)
     with connect() as conn:
-        password_hash = conn.execute("SELECT password_hash FROM users WHERE id = %s", (user,)).fetchone()[0]
+        password_hash = conn.execute(
+            "SELECT password_hash FROM users WHERE id = %s", (user,)
+        ).fetchone()[0]
     token_hash = hash_refresh_token(token)
 
     text = csv_text(inventory(5))
 
-    assert "users" in text, "the export must contain the inventory, or the check below proves nothing"
+    assert "users" in text, (
+        "the export must contain the inventory, or the check below proves nothing"
+    )
     assert password_hash not in text
     assert "$argon2" not in text
     assert token not in text

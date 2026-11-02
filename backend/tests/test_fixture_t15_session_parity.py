@@ -49,7 +49,10 @@ def token_in_state(state: str, client, store, monkeypatch) -> str:
         return token
     if state == "revoked":
         token = login_tokens(client, "alice")["access_token"]
-        assert client.post("/api/v1/auth/logout", headers=bearer_header(token)).status_code == 204
+        assert (
+            client.post("/api/v1/auth/logout", headers=bearer_header(token)).status_code
+            == 204
+        )
         return token
     if state == "disabled":
         token = login_tokens(client, "alice")["access_token"]
@@ -61,7 +64,9 @@ def token_in_state(state: str, client, store, monkeypatch) -> str:
 # --- login ------------------------------------------------------------------------------------------------------------
 
 
-def test_a_wrong_password_is_refused_the_same_way_by_the_api_and_the_cli(client, store, monkeypatch, capsys):
+def test_a_wrong_password_is_refused_the_same_way_by_the_api_and_the_cli(
+    client, store, monkeypatch, capsys
+):
     wrong = "wrong-" + uuid.uuid4().hex
     api_answer = login(client, "alice", wrong)
     assert api_answer.status_code == 401
@@ -69,22 +74,31 @@ def test_a_wrong_password_is_refused_the_same_way_by_the_api_and_the_cli(client,
     assert "access_token" not in api_answer.json()
 
     install(monkeypatch, client)
-    code, out, err = run(capsys, monkeypatch, wrong, "case", "list", "--username", "alice")
+    code, out, err = run(
+        capsys, monkeypatch, wrong, "case", "list", "--username", "alice"
+    )
 
     assert code == 1
     assert out == ""
     assert err == "error: invalid credentials\n"
 
 
-def test_a_forced_password_change_is_refused_the_same_way_by_the_api_and_the_cli(client, store, monkeypatch, capsys):
+def test_a_forced_password_change_is_refused_the_same_way_by_the_api_and_the_cli(
+    client, store, monkeypatch, capsys
+):
     store.add_user(DAVE, "dave", "triager", must_change=True)
     tokens = login(client, "dave").json()
     assert tokens["password_change_required"] is True
     # The API refuses every business request with this token until the password is changed.
-    assert client.get(CASES_URL, headers=bearer_header(tokens["access_token"])).status_code == 403
+    assert (
+        client.get(CASES_URL, headers=bearer_header(tokens["access_token"])).status_code
+        == 403
+    )
 
     install(monkeypatch, client)
-    code, out, err = run(capsys, monkeypatch, PASSWORD, "case", "list", "--username", "dave")
+    code, out, err = run(
+        capsys, monkeypatch, PASSWORD, "case", "list", "--username", "dave"
+    )
 
     assert code == 1
     assert out == ""
@@ -114,18 +128,26 @@ def test_a_request_with_no_token_is_401_on_both_paths(client, store):
 
 
 @pytest.mark.parametrize("state", ["garbage", "revoked"])
-def test_a_refused_cookie_session_is_401_on_a_case_write_even_when_the_csrf_header_matches(client, store, monkeypatch, state):
+def test_a_refused_cookie_session_is_401_on_a_case_write_even_when_the_csrf_header_matches(
+    client, store, monkeypatch, state
+):
     token = token_in_state(state, client, store, monkeypatch)
     browser_client = presenting(("safe_access", token), ("safe_csrf", "value"))
 
-    response = browser_client.post(f"/api/v1/cases/{uuid.uuid4()}/close", json={"reason": "x"}, headers={"X-CSRF-Token": "value"})
+    response = browser_client.post(
+        f"/api/v1/cases/{uuid.uuid4()}/close",
+        json={"reason": "x"},
+        headers={"X-CSRF-Token": "value"},
+    )
 
     assert response.status_code == 401
     assert response.json()["detail"] == "invalid credentials"
 
 
 @pytest.mark.parametrize("state", TOKEN_STATES)
-def test_the_cli_reports_a_refused_token_as_an_authentication_error(client, store, monkeypatch, capsys, state):
+def test_the_cli_reports_a_refused_token_as_an_authentication_error(
+    client, store, monkeypatch, capsys, state
+):
     token = token_in_state(state, client, store, monkeypatch)
     issued = {
         "access_token": token,
@@ -136,7 +158,9 @@ def test_the_cli_reports_a_refused_token_as_an_authentication_error(client, stor
     }
 
     install(monkeypatch, client, issued=issued)
-    code, out, err = run(capsys, monkeypatch, PASSWORD, "case", "list", "--username", "alice")
+    code, out, err = run(
+        capsys, monkeypatch, PASSWORD, "case", "list", "--username", "alice"
+    )
 
     # The CLI's own message for a 401, one line on stderr, exit 1, and no traceback or stack text.
     assert code == 1
@@ -155,7 +179,9 @@ CASE_WRITES = [
 
 
 @pytest.mark.parametrize("method,path,body", CASE_WRITES)
-def test_a_cookie_case_write_without_the_csrf_header_is_refused(browser, store, method, path, body):
+def test_a_cookie_case_write_without_the_csrf_header_is_refused(
+    browser, store, method, path, body
+):
     login(browser, "alice")
 
     response = getattr(browser, method)(path.format(case_id=uuid.uuid4()), json=body)
@@ -165,11 +191,15 @@ def test_a_cookie_case_write_without_the_csrf_header_is_refused(browser, store, 
 
 
 @pytest.mark.parametrize("method,path,body", CASE_WRITES)
-def test_a_cookie_case_write_with_a_different_csrf_header_is_refused(browser, store, method, path, body):
+def test_a_cookie_case_write_with_a_different_csrf_header_is_refused(
+    browser, store, method, path, body
+):
     login(browser, "alice")
 
     response = getattr(browser, method)(
-        path.format(case_id=uuid.uuid4()), json=body, headers={"X-CSRF-Token": "not-the-token"}
+        path.format(case_id=uuid.uuid4()),
+        json=body,
+        headers={"X-CSRF-Token": "not-the-token"},
     )
 
     assert response.status_code == 403

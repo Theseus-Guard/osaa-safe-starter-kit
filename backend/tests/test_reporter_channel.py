@@ -20,8 +20,16 @@ from safe_kit import api, audit, auth, system_timezone, users
 from safe_kit.cases import Case, HistoryEntry
 from safe_kit.db import connect
 from test_case_records_db import reporter_contact_granted_directly
-from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS, list_role_permissions, set_role_permissions
-from safe_kit.reporter_channel import REPORTER_CONTACT_READ, ContactOutcome, hide_reporter
+from safe_kit.rbac import (
+    DEFAULT_ROLE_PERMISSIONS,
+    list_role_permissions,
+    set_role_permissions,
+)
+from safe_kit.reporter_channel import (
+    REPORTER_CONTACT_READ,
+    ContactOutcome,
+    hide_reporter,
+)
 from safe_kit.users import User
 from error_body import without_request_id
 
@@ -29,6 +37,7 @@ from error_body import without_request_id
 def idem() -> dict:
     """A fresh Idempotency-Key header for one request."""
     return {"Idempotency-Key": str(uuid.uuid4())}
+
 
 REPORTER_ID = "11111111-1111-1111-1111-111111111111"
 TRIAGER_ID = "22222222-2222-2222-2222-222222222222"
@@ -76,8 +85,20 @@ def sample_case() -> Case:
 
 def test_hide_reporter_blanks_only_the_case_creation_actor():
     entries = [
-        HistoryEntry(id="e1", action=audit.CASE_CREATE, created_at=NOW, actor_id=REPORTER_ID, details={"a": 1}),
-        HistoryEntry(id="e2", action=audit.CASE_REVIEW, created_at=NOW, actor_id=REVIEWER_ID, details={"b": 2}),
+        HistoryEntry(
+            id="e1",
+            action=audit.CASE_CREATE,
+            created_at=NOW,
+            actor_id=REPORTER_ID,
+            details={"a": 1},
+        ),
+        HistoryEntry(
+            id="e2",
+            action=audit.CASE_REVIEW,
+            created_at=NOW,
+            actor_id=REVIEWER_ID,
+            details={"b": 2},
+        ),
     ]
     hidden = hide_reporter(entries)
     assert [entry.actor_id for entry in hidden] == [None, REVIEWER_ID]
@@ -92,7 +113,11 @@ def test_hide_reporter_blanks_only_the_case_creation_actor():
 def caller(monkeypatch):
     state = {"user": make_user(REPORTER_ID, "reporter")}
     api.app.dependency_overrides[auth.current_user] = lambda: state["user"]
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()))
+    monkeypatch.setattr(
+        auth,
+        "permissions_for_role",
+        lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()),
+    )
     yield state
     api.app.dependency_overrides.clear()
 
@@ -106,7 +131,9 @@ def as_role(caller, user_id, role):
     caller["user"] = make_user(user_id, role)
 
 
-def test_report_passes_the_stripped_contact_and_returns_no_reporter_fields(client, caller, monkeypatch):
+def test_report_passes_the_stripped_contact_and_returns_no_reporter_fields(
+    client, caller, monkeypatch
+):
     seen = {}
 
     def fake_submit(title, awareness_time, contact, reporter_id, **kwargs):
@@ -116,16 +143,27 @@ def test_report_passes_the_stripped_contact_and_returns_no_reporter_fields(clien
     monkeypatch.setattr(api, "submit_report", fake_submit)
     response = client.post(
         "/api/v1/reports",
-        json={"title": "Case", "awareness_time": PAST_AWARENESS, "contact": "  reach me at the desk  "}, headers=idem(),
+        json={
+            "title": "Case",
+            "awareness_time": PAST_AWARENESS,
+            "contact": "  reach me at the desk  ",
+        },
+        headers=idem(),
     )
     assert response.status_code == 201, response.text
-    assert seen == {"title": "Case", "contact": "reach me at the desk", "reporter_id": REPORTER_ID}
+    assert seen == {
+        "title": "Case",
+        "contact": "reach me at the desk",
+        "reporter_id": REPORTER_ID,
+    }
     body = response.json()
     assert "contact" not in body and "created_by" not in body
     assert REPORTER_ID not in response.text
 
 
-def test_report_without_contact_or_with_blank_contact_stores_none(client, caller, monkeypatch):
+def test_report_without_contact_or_with_blank_contact_stores_none(
+    client, caller, monkeypatch
+):
     seen = []
 
     def fake_submit(title, awareness_time, contact, reporter_id, **kwargs):
@@ -133,29 +171,57 @@ def test_report_without_contact_or_with_blank_contact_stores_none(client, caller
         return sample_case()
 
     monkeypatch.setattr(api, "submit_report", fake_submit)
-    assert client.post("/api/v1/reports", json={"title": "Case", "awareness_time": PAST_AWARENESS}, headers=idem()).status_code == 201
-    assert client.post(
-        "/api/v1/reports", json={"title": "Case", "awareness_time": PAST_AWARENESS, "contact": "   "}, headers=idem()
-    ).status_code == 201
+    assert (
+        client.post(
+            "/api/v1/reports",
+            json={"title": "Case", "awareness_time": PAST_AWARENESS},
+            headers=idem(),
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/api/v1/reports",
+            json={"title": "Case", "awareness_time": PAST_AWARENESS, "contact": "   "},
+            headers=idem(),
+        ).status_code
+        == 201
+    )
     assert seen == [None, None]
 
 
 def test_contact_longer_than_200_characters_is_refused(client, caller, monkeypatch):
-    monkeypatch.setattr(api, "submit_report", lambda *args, **kwargs: pytest.fail("must not reach the service"))
+    monkeypatch.setattr(
+        api,
+        "submit_report",
+        lambda *args, **kwargs: pytest.fail("must not reach the service"),
+    )
     response = client.post(
-        "/api/v1/reports", json={"title": "Case", "awareness_time": PAST_AWARENESS, "contact": "x" * 201}, headers=idem()
+        "/api/v1/reports",
+        json={"title": "Case", "awareness_time": PAST_AWARENESS, "contact": "x" * 201},
+        headers=idem(),
     )
     assert response.status_code == 400
 
 
 def test_report_needs_the_submit_permission(client, caller, monkeypatch):
-    monkeypatch.setattr(api, "submit_report", lambda *args, **kwargs: pytest.fail("must not reach the service"))
+    monkeypatch.setattr(
+        api,
+        "submit_report",
+        lambda *args, **kwargs: pytest.fail("must not reach the service"),
+    )
     as_role(caller, TRIAGER_ID, "triager")
-    response = client.post("/api/v1/reports", json={"title": "Case", "awareness_time": PAST_AWARENESS}, headers=idem())
+    response = client.post(
+        "/api/v1/reports",
+        json={"title": "Case", "awareness_time": PAST_AWARENESS},
+        headers=idem(),
+    )
     assert response.status_code == 403
 
 
-def test_history_hides_the_reporter_account_from_triagers_too(client, caller, monkeypatch):
+def test_history_hides_the_reporter_account_from_triagers_too(
+    client, caller, monkeypatch
+):
     entries = [
         HistoryEntry(
             id="e1",
@@ -164,9 +230,19 @@ def test_history_hides_the_reporter_account_from_triagers_too(client, caller, mo
             actor_id=REPORTER_ID,
             details={"calendar_version": "provisional-1"},
         ),
-        HistoryEntry(id="e2", action=audit.CASE_REVIEW, created_at=NOW, actor_id=REVIEWER_ID, details={"outcome": "pass"}),
+        HistoryEntry(
+            id="e2",
+            action=audit.CASE_REVIEW,
+            created_at=NOW,
+            actor_id=REVIEWER_ID,
+            details={"outcome": "pass"},
+        ),
     ]
-    monkeypatch.setattr(api, "case_history", lambda case_id, scope, limit, offset, **kwargs: (entries, 2))
+    monkeypatch.setattr(
+        api,
+        "case_history",
+        lambda case_id, scope, limit, offset, **kwargs: (entries, 2),
+    )
 
     as_role(caller, TRIAGER_ID, "triager")
     response = client.get(f"/api/v1/cases/{CASE_ID}/history")
@@ -179,7 +255,11 @@ def test_history_hides_the_reporter_account_from_triagers_too(client, caller, mo
 
 
 def test_contact_needs_the_reporter_contact_permission(client, caller, monkeypatch):
-    monkeypatch.setattr(api, "read_reporter_contact", lambda *args, **kwargs: pytest.fail("must not reach the service"))
+    monkeypatch.setattr(
+        api,
+        "read_reporter_contact",
+        lambda *args, **kwargs: pytest.fail("must not reach the service"),
+    )
     # The reporter's own role has no reporter_contact:read, and neither does the triager.
     assert client.get(f"/api/v1/reports/{CASE_ID}/contact").status_code == 403
     as_role(caller, TRIAGER_ID, "triager")
@@ -188,7 +268,9 @@ def test_contact_needs_the_reporter_contact_permission(client, caller, monkeypat
 
 def test_contact_is_returned_to_a_holder(client, caller, monkeypatch):
     as_role(caller, TRIAGER_ID, "triager")
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"reporter_contact:read"}))
+    monkeypatch.setattr(
+        auth, "permissions_for_role", lambda role: frozenset({"reporter_contact:read"})
+    )
     seen = {}
 
     def fake_read(case_id, scope):
@@ -199,24 +281,41 @@ def test_contact_is_returned_to_a_holder(client, caller, monkeypatch):
     response = client.get(f"/api/v1/reports/{CASE_ID}/contact")
     assert response.status_code == 200, response.text
     assert response.json() == {"case_id": CASE_ID, "contact": "reach me at the desk"}
-    assert seen["scope"].reporter_contact is True and seen["scope"].user_id == TRIAGER_ID
+    assert (
+        seen["scope"].reporter_contact is True and seen["scope"].user_id == TRIAGER_ID
+    )
 
 
 @pytest.mark.parametrize(
     "outcome, detail",
-    [(ContactOutcome.NOT_FOUND, "case not found"), (ContactOutcome.NO_REPORTER, "reporter contact not found")],
+    [
+        (ContactOutcome.NOT_FOUND, "case not found"),
+        (ContactOutcome.NO_REPORTER, "reporter contact not found"),
+    ],
 )
 def test_contact_refusals_are_404(client, caller, monkeypatch, outcome, detail):
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"reporter_contact:read"}))
-    monkeypatch.setattr(api, "read_reporter_contact", lambda case_id, scope: (outcome, None))
+    monkeypatch.setattr(
+        auth, "permissions_for_role", lambda role: frozenset({"reporter_contact:read"})
+    )
+    monkeypatch.setattr(
+        api, "read_reporter_contact", lambda case_id, scope: (outcome, None)
+    )
     response = client.get(f"/api/v1/reports/{CASE_ID}/contact")
     assert response.status_code == 404
     assert response.json()["detail"] == detail
 
 
-def test_contact_refused_after_the_window_is_409_with_a_stable_code(client, caller, monkeypatch):
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"reporter_contact:read"}))
-    monkeypatch.setattr(api, "read_reporter_contact", lambda case_id, scope: (ContactOutcome.WINDOW_CLOSED, None))
+def test_contact_refused_after_the_window_is_409_with_a_stable_code(
+    client, caller, monkeypatch
+):
+    monkeypatch.setattr(
+        auth, "permissions_for_role", lambda role: frozenset({"reporter_contact:read"})
+    )
+    monkeypatch.setattr(
+        api,
+        "read_reporter_contact",
+        lambda case_id, scope: (ContactOutcome.WINDOW_CLOSED, None),
+    )
     response = client.get(f"/api/v1/reports/{CASE_ID}/contact")
     assert response.status_code == 409
     assert response.json()["detail"] == {"status": "reporter_contact_window_closed"}
@@ -236,9 +335,13 @@ def system_timezone_configured():
 
     migrate()  # idempotent: applies pending migrations on a fresh test database
     with connect() as conn:
-        exists = conn.execute("SELECT EXISTS (SELECT 1 FROM system_timezone WHERE NOT is_deleted)").fetchone()[0]
+        exists = conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM system_timezone WHERE NOT is_deleted)"
+        ).fetchone()[0]
         if not exists:
-            conn.execute("INSERT INTO system_timezone (timezone) VALUES ('Europe/Istanbul')")
+            conn.execute(
+                "INSERT INTO system_timezone (timezone) VALUES ('Europe/Istanbul')"
+            )
     yield
 
 
@@ -323,7 +426,8 @@ def open_report_via_api(db_client, reporter: str, contact: str | None = CONTACT)
             "title": "Reporter channel case",
             "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
             "contact": contact,
-        }, headers=idem(),
+        },
+        headers=idem(),
     )
     assert response.status_code == 201, response.text
     return response.json()["id"]
@@ -347,7 +451,9 @@ def test_no_caller_gets_the_reporter_account_or_contact(db_client, people):
     # who holds reporter_contact:read, makes the assignment.
     with role_holds("triager", "reporter_contact:read"):
         assigned = db_client(people["triager"]).post(
-            f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["investigator"]}, headers=idem()
+            f"/api/v1/cases/{case_id}/assignments",
+            json={"user_id": people["investigator"]},
+            headers=idem(),
         )
     assert assigned.status_code == 201, assigned.text
     triager = db_client(people["triager"])
@@ -373,14 +479,18 @@ def test_no_caller_gets_the_reporter_account_or_contact(db_client, people):
 def test_contact_holder_reads_the_contact_and_the_read_is_audited(db_client, people):
     case_id = open_report_via_api(db_client, people["reporter"])
     with role_holds("triager", "reporter_contact:read"):
-        response = db_client(people["triager"]).get(f"/api/v1/reports/{case_id}/contact")
+        response = db_client(people["triager"]).get(
+            f"/api/v1/reports/{case_id}/contact"
+        )
     assert response.status_code == 200, response.text
     assert response.json() == {"case_id": case_id, "contact": CONTACT}
     assert contact_audit_rows(case_id) == [(people["triager"], "case", case_id)]
 
 
 @requires_database
-def test_contact_read_without_the_permission_is_refused_and_not_audited(db_client, people):
+def test_contact_read_without_the_permission_is_refused_and_not_audited(
+    db_client, people
+):
     case_id = open_report_via_api(db_client, people["reporter"])
     for actor in (people["reporter"], people["triager"]):
         response = db_client(actor).get(f"/api/v1/reports/{case_id}/contact")
@@ -390,12 +500,18 @@ def test_contact_read_without_the_permission_is_refused_and_not_audited(db_clien
 
 
 @requires_database
-def test_contact_of_a_case_the_holder_cannot_see_is_404_and_not_audited(db_client, people):
+def test_contact_of_a_case_the_holder_cannot_see_is_404_and_not_audited(
+    db_client, people
+):
     case_id = open_report_via_api(db_client, people["reporter"])
     # Investigators have read_assigned only. With the permission, an unassigned investigator still cannot see the case.
     with role_holds("investigator", "reporter_contact:read"):
-        hidden = db_client(people["investigator"]).get(f"/api/v1/reports/{case_id}/contact")
-        absent = db_client(people["investigator"]).get(f"/api/v1/reports/{uuid.uuid4()}/contact")
+        hidden = db_client(people["investigator"]).get(
+            f"/api/v1/reports/{case_id}/contact"
+        )
+        absent = db_client(people["investigator"]).get(
+            f"/api/v1/reports/{uuid.uuid4()}/contact"
+        )
     assert hidden.status_code == absent.status_code == 404
     assert without_request_id(hidden) == without_request_id(absent)
     assert CONTACT not in hidden.text
@@ -403,34 +519,50 @@ def test_contact_of_a_case_the_holder_cannot_see_is_404_and_not_audited(db_clien
 
 
 @requires_database
-def test_contact_of_a_case_without_reporter_identity_is_404_and_not_audited(db_client, people):
+def test_contact_of_a_case_without_reporter_identity_is_404_and_not_audited(
+    db_client, people
+):
     # A case opened through the ordinary intake, which has no reporter identity.
     created = db_client(people["reporter"]).post(
         "/api/v1/cases",
-        json={"title": "Not from the reporter channel", "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat()}, headers=idem(),
+        json={
+            "title": "Not from the reporter channel",
+            "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
+        },
+        headers=idem(),
     )
     assert created.status_code == 201, created.text
     case_id = created.json()["id"]
     with role_holds("triager", "reporter_contact:read"):
-        response = db_client(people["triager"]).get(f"/api/v1/reports/{case_id}/contact")
+        response = db_client(people["triager"]).get(
+            f"/api/v1/reports/{case_id}/contact"
+        )
     assert response.status_code == 404
     assert response.json()["detail"] == "reporter contact not found"
     assert contact_audit_rows(case_id) == []
 
 
 @requires_database
-def test_contact_holder_sees_the_contact_of_a_reporter_case_before_assignment(db_client, people):
+def test_contact_holder_sees_the_contact_of_a_reporter_case_before_assignment(
+    db_client, people
+):
     case_id = open_report_via_api(db_client, people["reporter"])
     with role_holds("triager", "reporter_contact:read"):
-        response = db_client(people["triager"]).get(f"/api/v1/reports/{case_id}/contact")
+        response = db_client(people["triager"]).get(
+            f"/api/v1/reports/{case_id}/contact"
+        )
     assert response.status_code == 200 and response.json()["contact"] == CONTACT
 
 
 @requires_database
-def test_contact_of_a_report_without_contact_is_null_and_still_audited(db_client, people):
+def test_contact_of_a_report_without_contact_is_null_and_still_audited(
+    db_client, people
+):
     case_id = open_report_via_api(db_client, people["reporter"], contact=None)
     with role_holds("triager", "reporter_contact:read"):
-        response = db_client(people["triager"]).get(f"/api/v1/reports/{case_id}/contact")
+        response = db_client(people["triager"]).get(
+            f"/api/v1/reports/{case_id}/contact"
+        )
     assert response.status_code == 200
     assert response.json()["contact"] is None
     assert len(contact_audit_rows(case_id)) == 1
@@ -443,9 +575,15 @@ def close_reporter_case(db_client, people, case_id: str) -> None:
     """
     triager = db_client(people["triager"])
     with role_holds("triager", "reporter_contact:read"):
-        assigned = triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]}, headers=idem())
+        assigned = triager.post(
+            f"/api/v1/cases/{case_id}/assignments",
+            json={"user_id": people["reviewer"]},
+            headers=idem(),
+        )
     assert assigned.status_code == 201, assigned.text
-    opened = db_client(people["reviewer"]).post("/api/v1/reviews", headers=idem(), json={"case_id": case_id})
+    opened = db_client(people["reviewer"]).post(
+        "/api/v1/reviews", headers=idem(), json={"case_id": case_id}
+    )
     assert opened.status_code == 201, opened.text
     reviewed = db_client(people["reviewer"]).patch(
         f"/api/v1/reviews/{opened.json()['id']}/layers/model",
@@ -455,9 +593,17 @@ def close_reporter_case(db_client, people, case_id: str) -> None:
     assert reviewed.status_code == 200, reviewed.text
     body = triager.get(f"/api/v1/cases/{case_id}").json()
     for task in body["deadlines"]:
-        patched = triager.patch(f"/api/v1/cases/{case_id}/deadlines/{task['id']}", json={"status": "done"}, headers=idem())
+        patched = triager.patch(
+            f"/api/v1/cases/{case_id}/deadlines/{task['id']}",
+            json={"status": "done"},
+            headers=idem(),
+        )
         assert patched.status_code == 200, patched.text
-    closed = triager.post(f"/api/v1/cases/{case_id}/close", json={"reason": "Closed for the contact window test"}, headers=idem())
+    closed = triager.post(
+        f"/api/v1/cases/{case_id}/close",
+        json={"reason": "Closed for the contact window test"},
+        headers=idem(),
+    )
     assert closed.status_code == 200, closed.text
 
 
@@ -502,7 +648,9 @@ def test_contact_is_readable_71_hours_after_closure(db_client, people):
 
 
 @requires_database
-def test_contact_is_refused_73_hours_after_closure_and_writes_no_audit_row(db_client, people):
+def test_contact_is_refused_73_hours_after_closure_and_writes_no_audit_row(
+    db_client, people
+):
     case_id = open_report_via_api(db_client, people["reporter"])
     close_reporter_case(db_client, people, case_id)
     backdate_closure(case_id, hours=73)
@@ -514,14 +662,20 @@ def test_contact_is_refused_73_hours_after_closure_and_writes_no_audit_row(db_cl
 
 
 @requires_database
-def test_reopened_case_is_readable_again_and_the_latest_closure_counts(db_client, people):
+def test_reopened_case_is_readable_again_and_the_latest_closure_counts(
+    db_client, people
+):
     case_id = open_report_via_api(db_client, people["reporter"])
     triager = db_client(people["triager"])
     close_reporter_case(db_client, people, case_id)
     backdate_closure(case_id, hours=73)
     assert read_contact_as_holder(db_client, people, case_id).status_code == 409
 
-    reopened = triager.post(f"/api/v1/cases/{case_id}/reopen", json={"reason": "New facts found"}, headers=idem())
+    reopened = triager.post(
+        f"/api/v1/cases/{case_id}/reopen",
+        json={"reason": "New facts found"},
+        headers=idem(),
+    )
     assert reopened.status_code == 200, reopened.text
     response = read_contact_as_holder(db_client, people, case_id)
     assert response.status_code == 200, response.text
@@ -529,7 +683,11 @@ def test_reopened_case_is_readable_again_and_the_latest_closure_counts(db_client
     assert len(contact_audit_rows(case_id)) == 1
 
     # A second closure starts a new window. The first closure is 73 hours old, but the latest one is new.
-    closed_again = triager.post(f"/api/v1/cases/{case_id}/close", json={"reason": "Closed again"}, headers=idem())
+    closed_again = triager.post(
+        f"/api/v1/cases/{case_id}/close",
+        json={"reason": "Closed again"},
+        headers=idem(),
+    )
     assert closed_again.status_code == 200, closed_again.text
     backdate_closure(case_id, hours=73, closure=0)
     response = read_contact_as_holder(db_client, people, case_id)

@@ -36,7 +36,12 @@ from psycopg.types.json import Jsonb
 
 from safe_kit import system_timezone
 from safe_kit.cases import CALENDAR_VERSION, calendar_for, deadline_tasks_for
-from safe_kit.config_guard import MODE_DEMO, SYNTHETIC_DEMO_DATASET, ConfigError, load_settings
+from safe_kit.config_guard import (
+    MODE_DEMO,
+    SYNTHETIC_DEMO_DATASET,
+    ConfigError,
+    load_settings,
+)
 from safe_kit.db import connect
 from safe_kit.deadlines import deadline_start
 from safe_kit.demo_auth import DEMO_ADMIN_ID, DEMO_ADMIN_USERNAME, DEMO_ROLES
@@ -61,9 +66,30 @@ SEED_LOCK_KEY = 0x5AFE0004
 # Fixed identifiers. Top-level rows use these literals; child rows use uuid5 names derived from them.
 USERS = (
     # (id, username, role, first name, last name, title)
-    ("5afe0d00-0000-4000-8000-000000000001", "demo-admin", "admin", "Demo", "Administrator", "Synthetic admin"),
-    ("5afe0d00-0000-4000-8000-000000000002", "demo-reporter", "reporter", "Demo", "Reporter", "Synthetic reporter"),
-    ("5afe0d00-0000-4000-8000-000000000003", "demo-triager", "triager", "Demo", "Triager", "Synthetic triager"),
+    (
+        "5afe0d00-0000-4000-8000-000000000001",
+        "demo-admin",
+        "admin",
+        "Demo",
+        "Administrator",
+        "Synthetic admin",
+    ),
+    (
+        "5afe0d00-0000-4000-8000-000000000002",
+        "demo-reporter",
+        "reporter",
+        "Demo",
+        "Reporter",
+        "Synthetic reporter",
+    ),
+    (
+        "5afe0d00-0000-4000-8000-000000000003",
+        "demo-triager",
+        "triager",
+        "Demo",
+        "Triager",
+        "Synthetic triager",
+    ),
     (
         "5afe0d00-0000-4000-8000-000000000004",
         "demo-investigator",
@@ -72,7 +98,14 @@ USERS = (
         "Investigator",
         "Synthetic investigator",
     ),
-    ("5afe0d00-0000-4000-8000-000000000005", "demo-reviewer", "reviewer", "Demo", "Reviewer", "Synthetic reviewer"),
+    (
+        "5afe0d00-0000-4000-8000-000000000005",
+        "demo-reviewer",
+        "reviewer",
+        "Demo",
+        "Reviewer",
+        "Synthetic reviewer",
+    ),
     (
         "5afe0d00-0000-4000-8000-000000000006",
         "demo-approver",
@@ -81,7 +114,14 @@ USERS = (
         "Approver",
         "Synthetic approver",
     ),
-    ("5afe0d00-0000-4000-8000-000000000007", "demo-auditor", "auditor", "Demo", "Auditor", "Synthetic auditor"),
+    (
+        "5afe0d00-0000-4000-8000-000000000007",
+        "demo-auditor",
+        "auditor",
+        "Demo",
+        "Auditor",
+        "Synthetic auditor",
+    ),
     (
         "5afe0d00-0000-4000-8000-000000000008",
         "demo-reporting-owner",
@@ -97,9 +137,27 @@ DEMO_TIMEZONE = "UTC"
 
 CASES = (
     # (id, n, title, awareness time, status)
-    ("5afe0d00-0000-4000-8000-000000000201", 1, "Demo: tool call outside the approved scope", datetime(2026, 10, 20, 8, 0, tzinfo=UTC), "open"),
-    ("5afe0d00-0000-4000-8000-000000000202", 2, "Demo: sample identifier in a generated report", datetime(2026, 10, 25, 14, 30, tzinfo=UTC), "open"),
-    ("5afe0d00-0000-4000-8000-000000000203", 3, "Demo: near miss, closed after review", datetime(2026, 9, 30, 9, 0, tzinfo=UTC), "closed"),
+    (
+        "5afe0d00-0000-4000-8000-000000000201",
+        1,
+        "Demo: tool call outside the approved scope",
+        datetime(2026, 10, 20, 8, 0, tzinfo=UTC),
+        "open",
+    ),
+    (
+        "5afe0d00-0000-4000-8000-000000000202",
+        2,
+        "Demo: sample identifier in a generated report",
+        datetime(2026, 10, 25, 14, 30, tzinfo=UTC),
+        "open",
+    ),
+    (
+        "5afe0d00-0000-4000-8000-000000000203",
+        3,
+        "Demo: near miss, closed after review",
+        datetime(2026, 9, 30, 9, 0, tzinfo=UTC),
+        "closed",
+    ),
 )
 CASE_ONE, CASE_TWO, CASE_THREE = (case[0] for case in CASES)
 CLOSED_AT = datetime(2026, 10, 15, 10, 0, tzinfo=UTC)
@@ -129,8 +187,16 @@ ROUND_ONE = "5afe0d00-0000-4000-8000-000000000501"
 # Layer decisions of the demo review round. Layers not listed stay unset, as the template has them.
 LAYER_DECISIONS = {
     "model": ("pass", None, [EVIDENCE_ONE]),
-    "safeguards": ("fail", "Demo: the approval step did not stop the out-of-scope call.", [EVIDENCE_ONE]),
-    "monitoring": ("insufficient_evidence", "Demo: no monitoring extract was supplied for this period.", []),
+    "safeguards": (
+        "fail",
+        "Demo: the approval step did not stop the out-of-scope call.",
+        [EVIDENCE_ONE],
+    ),
+    "monitoring": (
+        "insufficient_evidence",
+        "Demo: no monitoring extract was supplied for this period.",
+        [],
+    ),
     "tools": ("not_applicable", "Demo: this scenario uses no external tool.", []),
 }
 
@@ -192,9 +258,13 @@ def _write_credential_file(path: str, credential: str) -> None:
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
-        raise SeedError("a demo credential file already exists; the seed never overwrites a credential") from None
+        raise SeedError(
+            "a demo credential file already exists; the seed never overwrites a credential"
+        ) from None
     except OSError:
-        raise SeedError(f"a demo credential file cannot be created; check {CREDENTIAL_DIR_ENV} exists and is writable") from None
+        raise SeedError(
+            f"a demo credential file cannot be created; check {CREDENTIAL_DIR_ENV} exists and is writable"
+        ) from None
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write(credential + "\n")
 
@@ -211,11 +281,15 @@ def _credential_dir(env: Mapping[str, str]) -> str:
     """The directory of the demo credential files. Created with mode 0700 when it does not exist yet."""
     value = env.get(CREDENTIAL_DIR_ENV, "").strip()
     if not value:
-        raise SeedError(f"{CREDENTIAL_DIR_ENV} is required: the directory that receives one demo credential file per role")
+        raise SeedError(
+            f"{CREDENTIAL_DIR_ENV} is required: the directory that receives one demo credential file per role"
+        )
     try:
         os.makedirs(value, mode=0o700, exist_ok=True)
     except OSError:
-        raise SeedError(f"{CREDENTIAL_DIR_ENV} cannot be created; check its parent directory") from None
+        raise SeedError(
+            f"{CREDENTIAL_DIR_ENV} cannot be created; check its parent directory"
+        ) from None
     if not os.path.isdir(value):
         raise SeedError(f"{CREDENTIAL_DIR_ENV} must name a directory")
     return value
@@ -274,7 +348,11 @@ def _insert_timezone(conn) -> str:
     current = system_timezone.read_current(conn)
     if current is not None:
         return current.timezone
-    _insert(conn, "system_timezone", {"id": TIMEZONE_ROW_ID, "timezone": DEMO_TIMEZONE, "set_by": DEMO_ADMIN_ID})
+    _insert(
+        conn,
+        "system_timezone",
+        {"id": TIMEZONE_ROW_ID, "timezone": DEMO_TIMEZONE, "set_by": DEMO_ADMIN_ID},
+    )
     return DEMO_TIMEZONE
 
 
@@ -283,7 +361,11 @@ def _insert_cases(conn, timezone: str) -> None:
     for case_id, index, title, awareness, status in CASES:
         closed = {}
         if status == "closed":
-            closed = {"closed_at": CLOSED_AT, "closed_by": admin, "close_reason": "Demo: closed after review (synthetic)"}
+            closed = {
+                "closed_at": CLOSED_AT,
+                "closed_by": admin,
+                "close_reason": "Demo: closed after review (synthetic)",
+            }
         _insert(
             conn,
             "cases",
@@ -459,7 +541,15 @@ def _insert_disclosure(conn) -> None:
     # function the API uses, so the stored version checks out.
     manifest: dict[str, Any] = {"items": []}
     digest = digest_of(
-        canonical_content(CASE_ONE, DISCLOSURE_TEMPLATE, DISCLOSURE_TLP, DISCLOSURE_RECIPIENT, DISCLOSURE_PURPOSE, [], manifest)
+        canonical_content(
+            CASE_ONE,
+            DISCLOSURE_TEMPLATE,
+            DISCLOSURE_TLP,
+            DISCLOSURE_RECIPIENT,
+            DISCLOSURE_PURPOSE,
+            [],
+            manifest,
+        )
     )
     _insert(
         conn,
@@ -491,7 +581,11 @@ def _insert_dataset(conn, credential_hash: str, storage, provider) -> None:
     _insert(
         conn,
         "demo_dataset",
-        {"id": MARKER_ID, "dataset": SYNTHETIC_DEMO_DATASET, "credential_hash": credential_hash},
+        {
+            "id": MARKER_ID,
+            "dataset": SYNTHETIC_DEMO_DATASET,
+            "credential_hash": credential_hash,
+        },
     )
 
 
@@ -501,7 +595,9 @@ V2_CASE_ASSIGNMENTS = ((CASE_THREE, "investigator"),)
 
 def _ensure_demo_user(conn, username: str) -> str:
     """The user ID of a demo role. A missing account is created from the fixed table (version 1 rows are never changed)."""
-    row = conn.execute("SELECT id FROM users WHERE username = %s AND NOT is_deleted", (username,)).fetchone()
+    row = conn.execute(
+        "SELECT id FROM users WHERE username = %s AND NOT is_deleted", (username,)
+    ).fetchone()
     if row is not None:
         return str(row[0])
     for user_row in USERS:
@@ -516,19 +612,29 @@ def _apply_version_2(conn, credential_dir: str, written: list[str]) -> None:
     for demo_role in DEMO_ROLES:
         user_id = _ensure_demo_user(conn, demo_role.username)
         has_credential = conn.execute(
-            "SELECT 1 FROM demo_user_credentials WHERE user_id = %s AND NOT is_deleted", (user_id,)
+            "SELECT 1 FROM demo_user_credentials WHERE user_id = %s AND NOT is_deleted",
+            (user_id,),
         ).fetchone()
         if has_credential is not None:
             continue
         path = _role_credential_path(credential_dir, demo_role.username)
-        _insert(conn, "demo_user_credentials", {"user_id": user_id, "credential_hash": _new_credential(path, written)})
+        _insert(
+            conn,
+            "demo_user_credentials",
+            {"user_id": user_id, "credential_hash": _new_credential(path, written)},
+        )
     for case_id, role in V2_CASE_ASSIGNMENTS:
         user_id = USER_BY_ROLE[role]
         active = conn.execute(
-            "SELECT 1 FROM case_assignments WHERE case_id = %s AND user_id = %s AND NOT is_deleted", (case_id, user_id)
+            "SELECT 1 FROM case_assignments WHERE case_id = %s AND user_id = %s AND NOT is_deleted",
+            (case_id, user_id),
         ).fetchone()
         if active is None:
-            _insert(conn, "case_assignments", {"case_id": case_id, "user_id": user_id, "assigned_by": DEMO_ADMIN_ID})
+            _insert(
+                conn,
+                "case_assignments",
+                {"case_id": case_id, "user_id": user_id, "assigned_by": DEMO_ADMIN_ID},
+            )
     conn.execute(
         "UPDATE demo_dataset SET seed_version = %s WHERE dataset = %s AND NOT is_deleted",
         (SEED_VERSION, SYNTHETIC_DEMO_DATASET),
@@ -545,7 +651,9 @@ def _apply(env: Mapping[str, str], *, upgrade_only: bool) -> SeedOutcome:
     """Applies the seed versions the marker row does not have yet. Nothing is written when there is nothing to apply."""
     settings = load_settings(env)
     if settings.mode != MODE_DEMO or settings.dataset != SYNTHETIC_DEMO_DATASET:
-        raise SeedRefused(f"the demo seed runs only with SAFE_MODE={MODE_DEMO} and SAFE_DATASET={SYNTHETIC_DEMO_DATASET}")
+        raise SeedRefused(
+            f"the demo seed runs only with SAFE_MODE={MODE_DEMO} and SAFE_DATASET={SYNTHETIC_DEMO_DATASET}"
+        )
     credential_dir = _credential_dir(env)
     admin_path = _admin_credential_path(env, credential_dir)
     storage = storage_from_env()
@@ -558,10 +666,16 @@ def _apply(env: Mapping[str, str], *, upgrade_only: bool) -> SeedOutcome:
             version = _marker_version(conn)
             if version is None:
                 if upgrade_only:
-                    raise SeedError("this database holds no demo dataset; run `python -m safe_kit.demo_seed seed` instead")
+                    raise SeedError(
+                        "this database holds no demo dataset; run `python -m safe_kit.demo_seed seed` instead"
+                    )
                 admin_hash = _new_credential(admin_path, written)
                 _insert_dataset(conn, admin_hash, storage, provider)
-                _insert(conn, "demo_user_credentials", {"user_id": DEMO_ADMIN_ID, "credential_hash": admin_hash})
+                _insert(
+                    conn,
+                    "demo_user_credentials",
+                    {"user_id": DEMO_ADMIN_ID, "credential_hash": admin_hash},
+                )
                 applied.append(1)
                 version = 1
             if version < SEED_VERSION:
@@ -595,17 +709,30 @@ def main(argv: list[str] | None = None) -> int:
     run = seed if args.command == "seed" else upgrade
     try:
         outcome = run(os.environ)
-    except (ConfigError, SeedRefused, SeedError, KeyProviderError, StorageError) as error:
+    except (
+        ConfigError,
+        SeedRefused,
+        SeedError,
+        KeyProviderError,
+        StorageError,
+    ) as error:
         print(str(error), file=sys.stderr)
         return 1
     except psycopg.Error:
-        print("the demo seed could not write to the database; nothing was committed", file=sys.stderr)
+        print(
+            "the demo seed could not write to the database; nothing was committed",
+            file=sys.stderr,
+        )
         return 1
     if outcome.created:
         versions = ", ".join(str(version) for version in outcome.applied)
-        print(f"demo dataset seed version(s) {versions} applied; the demo credential files are in the directory named by {CREDENTIAL_DIR_ENV}")
+        print(
+            f"demo dataset seed version(s) {versions} applied; the demo credential files are in the directory named by {CREDENTIAL_DIR_ENV}"
+        )
     else:
-        print("demo dataset already seeded at the current seed version; nothing was written")
+        print(
+            "demo dataset already seeded at the current seed version; nothing was written"
+        )
     return 0
 
 

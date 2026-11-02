@@ -27,9 +27,22 @@ from enum import Enum
 from typing import Any
 
 from safe_kit import audit
-from safe_kit.cases import CaseScope, _is_assigned, _lock_visible_case, _text_marker, is_visible_on
+from safe_kit.cases import (
+    CaseScope,
+    _is_assigned,
+    _lock_visible_case,
+    _text_marker,
+    is_visible_on,
+)
 from safe_kit.db import connect
-from safe_kit.idempotency import KeyLookup, KeyScope, StoredResponse, lock_scope, lookup, store
+from safe_kit.idempotency import (
+    KeyLookup,
+    KeyScope,
+    StoredResponse,
+    lock_scope,
+    lookup,
+    store,
+)
 
 REASON_LIMIT = 1000
 GROUNDS_LIMIT = 2000
@@ -95,14 +108,17 @@ class AppealEntry:
 def _visible_round_case(conn, round_id: str, scope: CaseScope) -> str | None:
     """The case of a round that the scope may see, or None when the round is missing or its case is not visible."""
     row = conn.execute(
-        "SELECT case_id::text FROM review_rounds WHERE id = %s AND NOT is_deleted", (round_id,)
+        "SELECT case_id::text FROM review_rounds WHERE id = %s AND NOT is_deleted",
+        (round_id,),
     ).fetchone()
     if row is None or not is_visible_on(conn, row[0], scope):
         return None
     return row[0]
 
 
-def _replay(conn, idempotency: KeyScope | None) -> tuple[IndependenceOutcome, StoredResponse | None] | None:
+def _replay(
+    conn, idempotency: KeyScope | None
+) -> tuple[IndependenceOutcome, StoredResponse | None] | None:
     """Take the scope lock and look up the key. Returns the outcome for a replay or a reused key, None for a new request."""
     if idempotency is None:
         return None
@@ -264,7 +280,12 @@ def declare_conflict(
         if not _is_assigned(conn, case_id, scope.user_id):
             return IndependenceOutcome.NOT_ASSIGNED, None, None
         head = _conflict_head(conn, round_id, scope.user_id)
-        if kind == DECLARED and head is not None and head[1] == DECLARED and supersedes_id is None:
+        if (
+            kind == DECLARED
+            and head is not None
+            and head[1] == DECLARED
+            and supersedes_id is None
+        ):
             return IndependenceOutcome.ALREADY_DECLARED, None, None
         if kind == WITHDRAWN and (head is None or head[1] != DECLARED):
             return IndependenceOutcome.NO_DECLARED_CONFLICT, None, None
@@ -293,7 +314,9 @@ def declare_conflict(
         )
         created = _select_conflicts(conn, "c.id = %s", (entry_id,))[0]
         if idempotency is not None and render is not None:
-            store(conn, idempotency, StoredResponse(status_code=201, body=render(created)))
+            store(
+                conn, idempotency, StoredResponse(status_code=201, body=render(created))
+            )
     return IndependenceOutcome.OK, created, None
 
 
@@ -371,7 +394,9 @@ def record_recusal(
         )
         created = _select_recusals(conn, "r.id = %s", (entry_id,))[0]
         if idempotency is not None and render is not None:
-            store(conn, idempotency, StoredResponse(status_code=201, body=render(created)))
+            store(
+                conn, idempotency, StoredResponse(status_code=201, body=render(created))
+            )
     return IndependenceOutcome.OK, created, None
 
 
@@ -383,7 +408,9 @@ def list_recusals(round_id: str, scope: CaseScope) -> list[RecusalEntry] | None:
         return _select_recusals(conn, "r.round_id = %s", (round_id,))
 
 
-def _choose_independent_reviewer(conn, round_id: str, case_id: str, filer_id: str) -> str | None:
+def _choose_independent_reviewer(
+    conn, round_id: str, case_id: str, filer_id: str
+) -> str | None:
     """The reviewer the system names for an appeal, or None when nobody is eligible.
 
     Eligible users pass _eligible_reviewer (active, not a reporter, reviews:write, assigned to the case), are not the
@@ -393,13 +420,17 @@ def _choose_independent_reviewer(conn, round_id: str, case_id: str, filer_id: st
     """
     candidates = [
         row[0]
-        for row in conn.execute("SELECT id::text FROM users WHERE NOT is_deleted AND is_active ORDER BY id").fetchall()
+        for row in conn.execute(
+            "SELECT id::text FROM users WHERE NOT is_deleted AND is_active ORDER BY id"
+        ).fetchall()
     ]
     best: tuple[int, str] | None = None
     for user_id in candidates:
         if user_id == filer_id or not _eligible_reviewer(conn, case_id, user_id):
             continue
-        if _took_part(conn, round_id, user_id) or has_declared_conflict(conn, round_id, user_id):
+        if _took_part(conn, round_id, user_id) or has_declared_conflict(
+            conn, round_id, user_id
+        ):
             continue
         open_appeals = conn.execute(
             """
@@ -439,7 +470,9 @@ def file_appeal(
         # Locks the case so the eligibility checks and the choice see the state that the insert commits against.
         if _lock_visible_case(conn, case_id, scope) is None:
             return IndependenceOutcome.NOT_FOUND, None, None
-        independent_reviewer_id = _choose_independent_reviewer(conn, round_id, case_id, scope.user_id)
+        independent_reviewer_id = _choose_independent_reviewer(
+            conn, round_id, case_id, scope.user_id
+        )
         if independent_reviewer_id is None:
             return IndependenceOutcome.NO_ELIGIBLE_REVIEWER, None, None
         entry_id = conn.execute(
@@ -464,7 +497,9 @@ def file_appeal(
         )
         created = _select_appeals(conn, "a.id = %s", (entry_id,))[0]
         if idempotency is not None and render is not None:
-            store(conn, idempotency, StoredResponse(status_code=201, body=render(created)))
+            store(
+                conn, idempotency, StoredResponse(status_code=201, body=render(created))
+            )
     return IndependenceOutcome.OK, created, None
 
 

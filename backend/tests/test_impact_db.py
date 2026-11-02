@@ -30,9 +30,13 @@ def system_timezone_configured():
     """Case creation needs a system timezone. Set one on a freshly migrated test database."""
     migrate()  # idempotent: applies pending migrations on a fresh test database
     with connect() as conn:
-        exists = conn.execute("SELECT EXISTS (SELECT 1 FROM system_timezone WHERE NOT is_deleted)").fetchone()[0]
+        exists = conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM system_timezone WHERE NOT is_deleted)"
+        ).fetchone()[0]
         if not exists:
-            conn.execute("INSERT INTO system_timezone (timezone) VALUES ('Europe/Istanbul')")
+            conn.execute(
+                "INSERT INTO system_timezone (timezone) VALUES ('Europe/Istanbul')"
+            )
     yield
 
 
@@ -84,7 +88,11 @@ def past(hours: int = 2) -> str:
 
 
 def new_case(reporter: ActingClient) -> str:
-    response = reporter.post("/api/v1/cases", json={"title": "Case", "awareness_time": past()}, headers=idem())
+    response = reporter.post(
+        "/api/v1/cases",
+        json={"title": "Case", "awareness_time": past()},
+        headers=idem(),
+    )
     assert response.status_code == 201, response.text
     return response.json()["id"]
 
@@ -136,30 +144,52 @@ def test_a_new_case_has_no_values_and_no_score(people):
         assert body["risk_score"] is None
     detail = people["reporter"].get(f"/api/v1/cases/{case_id}").json()
     assert detail["risk_score"] is None and detail["impact_c"] is None
-    listed = [item for item in people["reporter"].get("/api/v1/cases?limit=200").json()["items"] if item["id"] == case_id]
+    listed = [
+        item
+        for item in people["reporter"].get("/api/v1/cases?limit=200").json()["items"]
+        if item["id"] == case_id
+    ]
     assert listed[0]["risk_score"] is None
 
 
 def test_setting_the_values_stores_a_version_and_shows_the_score_everywhere(people):
     case_id = new_case(people["reporter"])
     triager = people["triager"]
-    response = triager.post(scores_path(case_id), json=values(0, 2, 3, 4), headers=idem())
+    response = triager.post(
+        scores_path(case_id), json=values(0, 2, 3, 4), headers=idem()
+    )
     assert response.status_code == 200, response.text
     assert response.json()["version"] == 1
     assert response.json()["risk_score"] == 3.0
     assert stored_versions(case_id) == [(1, 2, 3, 4)]
     assert triager.get(scores_path(case_id)).json()["risk_score"] == 3.0
     detail = people["reporter"].get(f"/api/v1/cases/{case_id}").json()
-    assert (detail["risk_score"], detail["impact_c"], detail["impact_b"], detail["impact_a"]) == (3.0, 2, 3, 4)
-    listed = [item for item in people["reporter"].get("/api/v1/cases?limit=200").json()["items"] if item["id"] == case_id]
+    assert (
+        detail["risk_score"],
+        detail["impact_c"],
+        detail["impact_b"],
+        detail["impact_a"],
+    ) == (3.0, 2, 3, 4)
+    listed = [
+        item
+        for item in people["reporter"].get("/api/v1/cases?limit=200").json()["items"]
+        if item["id"] == case_id
+    ]
     assert listed[0]["risk_score"] == 3.0
 
 
 def test_a_new_version_leaves_the_older_versions_unchanged(people):
     case_id = new_case(people["reporter"])
     triager = people["triager"]
-    assert triager.post(scores_path(case_id), json=values(0, 2, 3, 4), headers=idem()).status_code == 200
-    response = triager.post(scores_path(case_id), json=values(1, 5, 3, 4), headers=idem())
+    assert (
+        triager.post(
+            scores_path(case_id), json=values(0, 2, 3, 4), headers=idem()
+        ).status_code
+        == 200
+    )
+    response = triager.post(
+        scores_path(case_id), json=values(1, 5, 3, 4), headers=idem()
+    )
     assert response.status_code == 200
     assert response.json()["version"] == 2
     assert response.json()["risk_score"] == 4.0
@@ -172,14 +202,21 @@ def test_a_stale_expected_version_is_a_409_and_stores_nothing(people):
     triager.post(scores_path(case_id), json=values(0, 2, 3, 4), headers=idem())
     triager.post(scores_path(case_id), json=values(1, 5, 3, 4), headers=idem())
     before = len(audit_rows(case_id))
-    response = triager.post(scores_path(case_id), json=values(1, 1, 1, 1), headers=idem())
+    response = triager.post(
+        scores_path(case_id), json=values(1, 1, 1, 1), headers=idem()
+    )
     assert response.status_code == 409
-    assert response.json()["detail"] == {"status": "impact_version_conflict", "current_version": 2}
+    assert response.json()["detail"] == {
+        "status": "impact_version_conflict",
+        "current_version": 2,
+    }
     assert len(stored_versions(case_id)) == 2
     assert len(audit_rows(case_id)) == before
 
 
-def test_each_change_writes_one_audit_row_with_the_actor_and_the_old_and_new_values(people):
+def test_each_change_writes_one_audit_row_with_the_actor_and_the_old_and_new_values(
+    people,
+):
     case_id = new_case(people["reporter"])
     triager = people["triager"]
     triager.post(scores_path(case_id), json=values(0, 2, 3, 4), headers=idem())
@@ -200,7 +237,9 @@ def test_a_save_that_changes_nothing_stores_nothing_and_writes_no_audit_row(peop
     triager = people["triager"]
     triager.post(scores_path(case_id), json=values(0, 2, 3, 4), headers=idem())
     before = len(audit_rows(case_id))
-    response = triager.post(scores_path(case_id), json=values(1, 2, 3, 4), headers=idem())
+    response = triager.post(
+        scores_path(case_id), json=values(1, 2, 3, 4), headers=idem()
+    )
     assert response.status_code == 200
     assert response.json()["version"] == 1
     assert stored_versions(case_id) == [(1, 2, 3, 4)]
@@ -210,14 +249,20 @@ def test_a_save_that_changes_nothing_stores_nothing_and_writes_no_audit_row(peop
 def test_a_value_left_unset_gives_no_score_until_all_three_are_set(people):
     case_id = new_case(people["reporter"])
     triager = people["triager"]
-    response = triager.post(scores_path(case_id), json=values(0, 5, None, None), headers=idem())
+    response = triager.post(
+        scores_path(case_id), json=values(0, 5, None, None), headers=idem()
+    )
     assert response.json()["risk_score"] is None
     assert triager.get(scores_path(case_id)).json()["risk_score"] is None
-    response = triager.post(scores_path(case_id), json=values(1, 5, 1, 1), headers=idem())
+    response = triager.post(
+        scores_path(case_id), json=values(1, 5, 1, 1), headers=idem()
+    )
     assert response.json()["risk_score"] == 2.3
 
 
-def test_a_repeated_request_with_the_same_key_returns_the_first_answer_and_writes_nothing(people):
+def test_a_repeated_request_with_the_same_key_returns_the_first_answer_and_writes_nothing(
+    people,
+):
     case_id = new_case(people["reporter"])
     triager = people["triager"]
     key = {"Idempotency-Key": str(uuid.uuid4())}
@@ -248,14 +293,27 @@ def test_a_closed_case_refuses_the_write_but_still_reads(people):
             "UPDATE cases SET status = 'closed', closed_at = now(), closed_by = %s, close_reason = 'test' WHERE id = %s",
             (triager.user_id, case_id),
         )
-    assert triager.post(scores_path(case_id), json=values(0, 1, 1, 1), headers=idem()).status_code == 409
+    assert (
+        triager.post(
+            scores_path(case_id), json=values(0, 1, 1, 1), headers=idem()
+        ).status_code
+        == 409
+    )
     assert triager.get(scores_path(case_id)).status_code == 200
 
 
 def test_only_the_triager_role_writes_and_every_case_reader_reads(people):
     case_id = new_case(people["reporter"])
-    for who in ("reviewer", "investigator", "auditor", "reporting_owner", "other_reporter"):
-        response = people[who].post(scores_path(case_id), json=values(0, 1, 1, 1), headers=idem())
+    for who in (
+        "reviewer",
+        "investigator",
+        "auditor",
+        "reporting_owner",
+        "other_reporter",
+    ):
+        response = people[who].post(
+            scores_path(case_id), json=values(0, 1, 1, 1), headers=idem()
+        )
         assert response.status_code in (403, 404), (who, response.text)
     assert stored_versions(case_id) == []
     # The owner (read_own) reads the values. A reporter who did not open the case gets 404.
@@ -268,7 +326,9 @@ def test_only_the_triager_role_writes_and_every_case_reader_reads(people):
 def test_the_database_refuses_a_value_outside_one_to_five(people):
     case_id = new_case(people["reporter"])
     with connect() as conn:
-        user_id = conn.execute("SELECT id::text FROM users WHERE NOT is_deleted LIMIT 1").fetchone()[0]
+        user_id = conn.execute(
+            "SELECT id::text FROM users WHERE NOT is_deleted LIMIT 1"
+        ).fetchone()[0]
     for column in ("confidentiality", "integrity", "availability"):
         for value in (0, 6):
             with pytest.raises(psycopg.errors.CheckViolation):
@@ -282,7 +342,9 @@ def test_the_database_refuses_a_value_outside_one_to_five(people):
 def test_the_database_refuses_a_version_below_one(people):
     case_id = new_case(people["reporter"])
     with connect() as conn:
-        user_id = conn.execute("SELECT id::text FROM users WHERE NOT is_deleted LIMIT 1").fetchone()[0]
+        user_id = conn.execute(
+            "SELECT id::text FROM users WHERE NOT is_deleted LIMIT 1"
+        ).fetchone()[0]
     with pytest.raises(psycopg.errors.CheckViolation):
         with connect() as conn:
             conn.execute(
@@ -294,7 +356,9 @@ def test_the_database_refuses_a_version_below_one(people):
 def test_the_database_accepts_an_unset_value_and_the_bounds(people):
     case_id = new_case(people["reporter"])
     with connect() as conn:
-        user_id = conn.execute("SELECT id::text FROM users WHERE NOT is_deleted LIMIT 1").fetchone()[0]
+        user_id = conn.execute(
+            "SELECT id::text FROM users WHERE NOT is_deleted LIMIT 1"
+        ).fetchone()[0]
         conn.execute(
             "INSERT INTO case_impact_scores (case_id, version, confidentiality, integrity, availability, created_by) "
             "VALUES (%s, 1, NULL, 1, 5, %s)",
@@ -322,7 +386,9 @@ def test_the_table_has_the_standard_columns_and_the_updated_at_trigger():
 
 def test_a_soft_deleted_version_is_not_read(people):
     case_id = new_case(people["reporter"])
-    people["triager"].post(scores_path(case_id), json=values(0, 2, 3, 4), headers=idem())
+    people["triager"].post(
+        scores_path(case_id), json=values(0, 2, 3, 4), headers=idem()
+    )
     with connect() as conn:
         conn.execute(
             "UPDATE case_impact_scores SET is_deleted = true, deleted_at = now() WHERE case_id = %s",

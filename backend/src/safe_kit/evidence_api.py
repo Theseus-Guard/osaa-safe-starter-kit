@@ -35,7 +35,13 @@ from safe_kit.cases import CaseScope, is_visible
 from safe_kit.evidence_keys import KeyProvider, KeyProviderError, key_provider_from_env
 from safe_kit.evidence_storage import StorageError, storage_from_env
 from safe_kit.evidence_crypto import sha256_hex
-from safe_kit.idempotency import KeyScope, checked_key, fingerprint, key_scope, valid_key
+from safe_kit.idempotency import (
+    KeyScope,
+    checked_key,
+    fingerprint,
+    key_scope,
+    valid_key,
+)
 from safe_kit.users import User
 
 EVIDENCE_READ = "evidence:read"
@@ -47,9 +53,18 @@ UPLOAD_ROUTE = "/api/v1/cases/{case_id}/evidence"
 REFUSAL_DETAILS: dict[str, tuple[int, str]] = {
     "not_found": (404, "evidence not found"),
     "not_available": (409, "evidence is not available"),
-    "unsupported_media_type": (422, "redaction is supported for text/plain evidence only"),
-    "invalid_removal": (422, "removed line ranges must be inside the document, in order, and not overlap"),
-    "label_less_restrictive": (422, "the TLP label must be at least as restrictive as the original's label"),
+    "unsupported_media_type": (
+        422,
+        "redaction is supported for text/plain evidence only",
+    ),
+    "invalid_removal": (
+        422,
+        "removed line ranges must be inside the document, in order, and not overlap",
+    ),
+    "label_less_restrictive": (
+        422,
+        "the TLP label must be at least as restrictive as the original's label",
+    ),
     "integrity_failed": (500, "evidence failed its integrity check"),
     "expired": (409, "the redaction expired before it finished; retry"),
 }
@@ -60,7 +75,10 @@ READ_CHUNK = 64 * 1024
 
 
 def _load_provider_at_startup() -> KeyProvider | None:
-    if not (os.environ.get("SAFE_EVIDENCE_KEK_FILE") or os.environ.get("SAFE_EVIDENCE_KEY_PROVIDER")):
+    if not (
+        os.environ.get("SAFE_EVIDENCE_KEK_FILE")
+        or os.environ.get("SAFE_EVIDENCE_KEY_PROVIDER")
+    ):
         return None
     # Raises KeyProviderError (or NotImplementedError for the Vault stub) when the configuration is unusable.
     return key_provider_from_env()
@@ -106,7 +124,9 @@ class _BodyTooLarge(Exception):
 
 def _key_provider() -> KeyProvider:
     if _PROVIDER is None:
-        raise HTTPException(status_code=503, detail="evidence storage is not configured")
+        raise HTTPException(
+            status_code=503, detail="evidence storage is not configured"
+        )
     return _PROVIDER
 
 
@@ -150,26 +170,38 @@ async def _read_limited(part: UploadFile, max_bytes: int) -> bytes:
     while chunk := await part.read(READ_CHUNK):
         buffer.extend(chunk)
         if len(buffer) > max_bytes:
-            raise HTTPException(status_code=413, detail=f"file exceeds the limit of {max_bytes} bytes")
+            raise HTTPException(
+                status_code=413, detail=f"file exceeds the limit of {max_bytes} bytes"
+            )
     return bytes(buffer)
 
 
-async def _read_file_field(request: Request, max_bytes: int) -> tuple[str | None, str | None, bytes]:
+async def _read_file_field(
+    request: Request, max_bytes: int
+) -> tuple[str | None, str | None, bytes]:
     body_limit = max_bytes + MULTIPART_OVERHEAD
     declared = request.headers.get("content-length")
     if declared is not None and declared.isdigit() and int(declared) > body_limit:
-        raise HTTPException(status_code=413, detail=f"request exceeds the limit of {max_bytes} bytes")
+        raise HTTPException(
+            status_code=413, detail=f"request exceeds the limit of {max_bytes} bytes"
+        )
     parser = ParserRequest(request.scope, _bounded_receive(request.receive, body_limit))
     try:
         form = await parser.form()
     except _BodyTooLarge:
-        raise HTTPException(status_code=413, detail=f"request exceeds the limit of {max_bytes} bytes") from None
+        raise HTTPException(
+            status_code=413, detail=f"request exceeds the limit of {max_bytes} bytes"
+        ) from None
     except MultiPartException:
-        raise HTTPException(status_code=400, detail="malformed multipart body") from None
+        raise HTTPException(
+            status_code=400, detail="malformed multipart body"
+        ) from None
     try:
         part = form.get("file")
         if not isinstance(part, UploadFile):
-            raise HTTPException(status_code=422, detail="multipart field 'file' is required")
+            raise HTTPException(
+                status_code=422, detail="multipart field 'file' is required"
+            )
         data = await _read_limited(part, max_bytes)
         return part.filename, part.content_type, data
     finally:
@@ -177,7 +209,12 @@ async def _read_file_field(request: Request, max_bytes: int) -> tuple[str | None
 
 
 def _content_disposition(name: str) -> str:
-    ascii_name = name.encode("ascii", "replace").decode("ascii").replace("?", "_").replace('"', "_")
+    ascii_name = (
+        name.encode("ascii", "replace")
+        .decode("ascii")
+        .replace("?", "_")
+        .replace('"', "_")
+    )
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name, safe='')}"
 
 
@@ -190,7 +227,9 @@ def _readable_stored(evidence_id: str, user: User) -> evidence.StoredEvidence:
     return stored
 
 
-@evidence_router.post("/api/v1/cases/{case_id}/evidence", status_code=201, response_model=EvidenceResponse)
+@evidence_router.post(
+    "/api/v1/cases/{case_id}/evidence", status_code=201, response_model=EvidenceResponse
+)
 async def upload_evidence(
     request: Request,
     case_id: uuid.UUID,
@@ -206,20 +245,28 @@ async def upload_evidence(
     if not await run_in_threadpool(is_visible, str(case_id), _scope(actor)):
         raise HTTPException(status_code=404, detail="case not found")
     key = checked_key(idempotency_key)
-    filename, content_type, data = await _read_file_field(request, evidence.max_bytes_from_env())
+    filename, content_type, data = await _read_file_field(
+        request, evidence.max_bytes_from_env()
+    )
     if not data:
         raise HTTPException(status_code=422, detail="file is empty")
     try:
         media_type = evidence.check_media_type(content_type, data)
     except evidence.UnsupportedMediaType:
-        raise HTTPException(status_code=415, detail="media type is not allowed") from None
+        raise HTTPException(
+            status_code=415, detail="media type is not allowed"
+        ) from None
     scope_key = key_scope(
         actor.id,
         "POST",
         UPLOAD_ROUTE,
         key,
         request.url.path,
-        {"file_sha256": sha256_hex(data), "filename": filename, "media_type": media_type},
+        {
+            "file_sha256": sha256_hex(data),
+            "filename": filename,
+            "media_type": media_type,
+        },
     )
     try:
         item = await run_in_threadpool(
@@ -239,9 +286,13 @@ async def upload_evidence(
         # The case stopped being visible after the check above; refused the same way as a missing case.
         raise HTTPException(status_code=404, detail="case not found") from None
     except evidence.UploadExpired:
-        raise HTTPException(status_code=409, detail="the upload expired before it finished; retry") from None
+        raise HTTPException(
+            status_code=409, detail="the upload expired before it finished; retry"
+        ) from None
     except (StorageError, KeyProviderError):
-        raise HTTPException(status_code=500, detail="evidence could not be stored") from None
+        raise HTTPException(
+            status_code=500, detail="evidence could not be stored"
+        ) from None
     return _response(item)
 
 
@@ -254,12 +305,21 @@ def list_case_evidence(
 ) -> EvidencePage:
     if not is_visible(str(case_id), _scope(user)):
         raise HTTPException(status_code=404, detail="case not found")
-    items, total = evidence.list_evidence(str(case_id), limit, offset, tlp.recipient_for(user))
-    return EvidencePage(items=[_response(item) for item in items], total=total, limit=limit, offset=offset)
+    items, total = evidence.list_evidence(
+        str(case_id), limit, offset, tlp.recipient_for(user)
+    )
+    return EvidencePage(
+        items=[_response(item) for item in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @evidence_router.get("/api/v1/evidence/{evidence_id}/download")
-def download_evidence(evidence_id: uuid.UUID, user: User = Depends(require_permission(EVIDENCE_READ))) -> Response:
+def download_evidence(
+    evidence_id: uuid.UUID, user: User = Depends(require_permission(EVIDENCE_READ))
+) -> Response:
     stored = _readable_stored(str(evidence_id), user)
     if stored.status != evidence.AVAILABLE:
         raise HTTPException(status_code=409, detail="evidence is not available")
@@ -268,7 +328,9 @@ def download_evidence(evidence_id: uuid.UUID, user: User = Depends(require_permi
     except evidence.VerificationFailed as failure:
         # The failure is recorded in the custody log. No content is returned.
         evidence.record_failure(stored.id, user.id, failure.reason)
-        raise HTTPException(status_code=500, detail="evidence failed its integrity check") from None
+        raise HTTPException(
+            status_code=500, detail="evidence failed its integrity check"
+        ) from None
     # The read marker commits before any byte is returned. If it cannot be recorded, nothing is returned.
     evidence.record_download(stored.id, user.id, stored.case_id)
     return Response(
@@ -283,7 +345,9 @@ def download_evidence(evidence_id: uuid.UUID, user: User = Depends(require_permi
 
 
 @evidence_router.get("/api/v1/evidence/{evidence_id}", response_model=EvidenceResponse)
-def get_evidence(evidence_id: uuid.UUID, user: User = Depends(require_permission(EVIDENCE_READ))) -> EvidenceResponse:
+def get_evidence(
+    evidence_id: uuid.UUID, user: User = Depends(require_permission(EVIDENCE_READ))
+) -> EvidenceResponse:
     """The metadata of one item, with its TLP label (null for an original). A missing item, one the case ACL hides, and one
     the TLP rule hides all answer the same 404."""
     stored = _readable_stored(str(evidence_id), user)
@@ -293,14 +357,25 @@ def get_evidence(evidence_id: uuid.UUID, user: User = Depends(require_permission
     return _response(item)
 
 
-@evidence_router.get("/api/v1/evidence/{evidence_id}/derivatives", response_model=list[EvidenceResponse])
-def list_derivatives(evidence_id: uuid.UUID, user: User = Depends(require_permission(EVIDENCE_READ))) -> list[EvidenceResponse]:
+@evidence_router.get(
+    "/api/v1/evidence/{evidence_id}/derivatives", response_model=list[EvidenceResponse]
+)
+def list_derivatives(
+    evidence_id: uuid.UUID, user: User = Depends(require_permission(EVIDENCE_READ))
+) -> list[EvidenceResponse]:
     """The redacted derived items of an original the caller may read. Derived items the TLP rule hides are left out."""
     _readable_stored(str(evidence_id), user)
-    return [_response(item) for item in redaction.list_derivatives(str(evidence_id), tlp.recipient_for(user))]
+    return [
+        _response(item)
+        for item in redaction.list_derivatives(
+            str(evidence_id), tlp.recipient_for(user)
+        )
+    ]
 
 
-@evidence_router.get("/api/v1/evidence/{evidence_id}/custody", response_model=list[CustodyEventResponse])
+@evidence_router.get(
+    "/api/v1/evidence/{evidence_id}/custody", response_model=list[CustodyEventResponse]
+)
 def custody_log(
     evidence_id: uuid.UUID, user: User = Depends(require_permission(EVIDENCE_READ))
 ) -> list[CustodyEventResponse]:
@@ -333,7 +408,9 @@ class RemovedRangeRequest(BaseModel):
 
 class RedactionRequest(BaseModel):
     # The lines to remove, 1-based and inclusive. Every removed line is replaced by a marker, and the reason is kept.
-    removed: list[RemovedRangeRequest] = Field(min_length=1, max_length=redaction.MAX_REMOVED_RANGES)
+    removed: list[RemovedRangeRequest] = Field(
+        min_length=1, max_length=redaction.MAX_REMOVED_RANGES
+    )
     tlp_label: Literal["RED", "AMBER", "AMBER+STRICT", "GREEN", "CLEAR"]
 
 
@@ -372,7 +449,9 @@ def _derivation_response(derivation: redaction.Derivation) -> DerivationResponse
     )
 
 
-@evidence_router.post(DERIVATIVES_ROUTE, status_code=201, response_model=DerivationResponse)
+@evidence_router.post(
+    DERIVATIVES_ROUTE, status_code=201, response_model=DerivationResponse
+)
 def create_derivative(
     evidence_id: uuid.UUID,
     body: RedactionRequest,
@@ -386,9 +465,13 @@ def create_derivative(
     returns the first answer."""
     # Checked after the permission checks, so a caller without them learns nothing about keys (see reviews_api).
     if idempotency_key is None:
-        raise HTTPException(status_code=400, detail={"status": "idempotency_key_required"})
+        raise HTTPException(
+            status_code=400, detail={"status": "idempotency_key_required"}
+        )
     if not valid_key(idempotency_key):
-        raise HTTPException(status_code=400, detail={"status": "idempotency_key_invalid"})
+        raise HTTPException(
+            status_code=400, detail={"status": "idempotency_key_invalid"}
+        )
     provider = _key_provider()
     original = _readable_stored(str(evidence_id), actor)
     scope = _scope(actor)
@@ -397,10 +480,13 @@ def create_derivative(
         method="POST",
         route=DERIVATIVES_ROUTE,
         key=idempotency_key,
-        fingerprint=fingerprint("POST", request.url.path, request.url.query, body.model_dump(mode="json")),
+        fingerprint=fingerprint(
+            "POST", request.url.path, request.url.query, body.model_dump(mode="json")
+        ),
     )
     removed = [
-        redaction.RemovedRange(item.from_line, item.to_line, item.reason) for item in body.removed
+        redaction.RemovedRange(item.from_line, item.to_line, item.reason)
+        for item in body.removed
     ]
     try:
         result = redaction.create_derivative(
@@ -412,26 +498,38 @@ def create_derivative(
             storage_from_env(),
             provider,
             idempotency=key_scope,
-            render=lambda derivation: _derivation_response(derivation).model_dump(mode="json"),
+            render=lambda derivation: _derivation_response(derivation).model_dump(
+                mode="json"
+            ),
         )
     except redaction.RedactionRefused as refusal:
         status_code, detail = REFUSAL_DETAILS[refusal.code]
         raise HTTPException(status_code=status_code, detail=detail) from None
     except evidence.CaseNotVisible:
-        raise HTTPException(status_code=404, detail=REFUSAL_DETAILS["not_found"][1]) from None
+        raise HTTPException(
+            status_code=404, detail=REFUSAL_DETAILS["not_found"][1]
+        ) from None
     except (StorageError, KeyProviderError):
-        raise HTTPException(status_code=500, detail="evidence could not be stored") from None
+        raise HTTPException(
+            status_code=500, detail="evidence could not be stored"
+        ) from None
     if result.outcome is redaction.Outcome.REPLAY:
         # The same request again: the first answer, with its status and body. Nothing was written.
         assert result.stored is not None
-        return JSONResponse(status_code=result.stored.status_code, content=result.stored.body)
+        return JSONResponse(
+            status_code=result.stored.status_code, content=result.stored.body
+        )
     if result.outcome is redaction.Outcome.KEY_REUSED:
-        raise HTTPException(status_code=409, detail={"status": "idempotency_key_reused"})
+        raise HTTPException(
+            status_code=409, detail={"status": "idempotency_key_reused"}
+        )
     assert result.derivation is not None
     return _derivation_response(result.derivation)
 
 
-@evidence_router.get("/api/v1/evidence/{evidence_id}/redaction", response_model=DerivationResponse)
+@evidence_router.get(
+    "/api/v1/evidence/{evidence_id}/redaction", response_model=DerivationResponse
+)
 def get_redaction(
     evidence_id: uuid.UUID, user: User = Depends(require_permission(EVIDENCE_READ))
 ) -> DerivationResponse:

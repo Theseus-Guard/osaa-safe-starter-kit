@@ -108,16 +108,30 @@ SYSTEM_TIMEZONE_SET = "system.timezone_set"
 SYSTEM_TIMEZONE_CHANGED = "system.timezone_changed"
 
 # A key is rejected when any word in it starts with one of these stems, or equals one of the network words.
-_SECRET_STEMS = ("password", "passwd", "pwd", "secret", "token", "credential", "cookie", "authorization", "hash")
+_SECRET_STEMS = (
+    "password",
+    "passwd",
+    "pwd",
+    "secret",
+    "token",
+    "credential",
+    "cookie",
+    "authorization",
+    "hash",
+)
 _NETWORK_WORDS = frozenset({"ip", "ips", "addr", "address"})
 # Identity words are rejected like network words, unless an action lists the key explicitly.
 _RESTRICTED_WORDS = _NETWORK_WORDS | {"username"}
 _WORD_SPLIT = re.compile(r"[^a-z0-9]+")
 
 # Top-level keys that one action may carry in addition to the generic rules. Secret stems are never allowed.
-_ACTION_EXTRA_KEYS: dict[str, frozenset[str]] = {LOGIN_FAILED: frozenset({"username", "client_ip"})}
+_ACTION_EXTRA_KEYS: dict[str, frozenset[str]] = {
+    LOGIN_FAILED: frozenset({"username", "client_ip"})
+}
 # Of those, the keys whose values may be an IP address. Only the client address of a login failure qualifies.
-_ACTION_ADDRESS_KEYS: dict[str, frozenset[str]] = {LOGIN_FAILED: frozenset({"client_ip"})}
+_ACTION_ADDRESS_KEYS: dict[str, frozenset[str]] = {
+    LOGIN_FAILED: frozenset({"client_ip"})
+}
 _NO_KEYS: frozenset[str] = frozenset()
 
 
@@ -148,7 +162,9 @@ def _check_value(value: Any, where: str, address_ok: bool = False) -> None:
         return
     if isinstance(value, str):
         if not address_ok and _looks_like_ip(value):
-            raise ValueError(f"{where}: IP addresses are allowed only as client_ip of a login failure")
+            raise ValueError(
+                f"{where}: IP addresses are allowed only as client_ip of a login failure"
+            )
         return
     if isinstance(value, Mapping):
         for key, item in value.items():
@@ -191,7 +207,9 @@ def record(
     )
 
 
-def record_login_failure(user_id: str | None, reason: str, username: str, client_ip: str) -> None:
+def record_login_failure(
+    user_id: str | None, reason: str, username: str, client_ip: str
+) -> None:
     """Log a failed login with the account, the submitted username, and the client address.
 
     user_id is None when no account matches the submitted name. The reason is one of

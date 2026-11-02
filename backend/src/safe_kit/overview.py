@@ -45,7 +45,11 @@ TIMESERIES_METRICS = (
     *MY_TIMESERIES_METRICS,
 )
 # The templates of a disclosure version (migration 0040). Every one is listed, with zero counts when nothing waits.
-APPROVAL_TEMPLATES = ("confidential_rapid_alert", "de_identified_member_advisory", "redacted_public_safety_report")
+APPROVAL_TEMPLATES = (
+    "confidential_rapid_alert",
+    "de_identified_member_advisory",
+    "redacted_public_safety_report",
+)
 # The roles that get the weekly update panel (role matrix: investigator and reviewer).
 WEEKLY_UPDATE_ROLES = frozenset({"investigator", "reviewer"})
 AUDIT_TOP_ACTIONS = 5
@@ -191,20 +195,30 @@ _OWN_CASE = """
 
 def timeseries(metric: str, window: Window) -> list[dict[str, Any]]:
     with connect() as conn:
-        rows = conn.execute(_DAILY_SQL[metric], {"tz": window.timezone, "start": window.start}).fetchall()
+        rows = conn.execute(
+            _DAILY_SQL[metric], {"tz": window.timezone, "start": window.start}
+        ).fetchall()
     counts = {day: int(total) for day, total in rows}
-    return [{"date": day.isoformat(), "count": counts.get(day, 0)} for day in window.dates]
+    return [
+        {"date": day.isoformat(), "count": counts.get(day, 0)} for day in window.dates
+    ]
 
 
-def my_timeseries(metric: str, user_id: str, permissions: frozenset[str], window: Window) -> list[dict[str, Any]]:
+def my_timeseries(
+    metric: str, user_id: str, permissions: frozenset[str], window: Window
+) -> list[dict[str, Any]]:
     """A daily series for the caller only: its cases by status, or its own audit actions of one kind."""
     if metric in MY_CASE_STATUS_METRICS:
         status = MY_CASE_STATUS_METRICS[metric]
         by_day = _my_case_status_counts(user_id, window)
         per_day = {day: counts.get(status, 0) for day, counts in by_day.items()}
     else:
-        per_day = _my_action_counts(user_id, permissions, window, MY_ACTION_METRICS[metric])
-    return [{"date": day.isoformat(), "count": per_day.get(day, 0)} for day in window.dates]
+        per_day = _my_action_counts(
+            user_id, permissions, window, MY_ACTION_METRICS[metric]
+        )
+    return [
+        {"date": day.isoformat(), "count": per_day.get(day, 0)} for day in window.dates
+    ]
 
 
 def _my_case_status_counts(user_id: str, window: Window) -> dict[date, dict[str, int]]:
@@ -248,7 +262,9 @@ def _my_action_counts(
     The actor must be the caller, so another user's actions never count. The case must be visible under the caller's
     case scope (safe_kit.cases.CaseScope), so a case the caller cannot see is not counted either.
     """
-    visibility, visibility_params = CaseScope.from_permissions(user_id, permissions).visibility_sql()
+    visibility, visibility_params = CaseScope.from_permissions(
+        user_id, permissions
+    ).visibility_sql()
     with connect() as conn:
         rows = conn.execute(
             f"""
@@ -275,7 +291,9 @@ def _case_counts(conn, start: datetime) -> dict[str, int]:
     return {"open_cases": int(open_cases), "opened_in_period": int(opened)}
 
 
-def _own_case_counts(conn, user_id: str, start: datetime, now: datetime) -> dict[str, int]:
+def _own_case_counts(
+    conn, user_id: str, start: datetime, now: datetime
+) -> dict[str, int]:
     open_cases, opened = conn.execute(
         f"""
         SELECT count(*) FILTER (WHERE c.status = 'open'), count(*) FILTER (WHERE c.created_at >= %(start)s)
@@ -301,7 +319,9 @@ def _own_case_counts(conn, user_id: str, start: datetime, now: datetime) -> dict
 
 
 def _worker_status(conn, now: datetime) -> dict[str, Any]:
-    beat_at = conn.execute("SELECT max(beat_at) FROM worker_heartbeat WHERE NOT is_deleted").fetchone()[0]
+    beat_at = conn.execute(
+        "SELECT max(beat_at) FROM worker_heartbeat WHERE NOT is_deleted"
+    ).fetchone()[0]
     if beat_at is None:
         return {"status": "no_data", "heartbeat_age_seconds": None}
     age = max(now - beat_at, timedelta(0))
@@ -311,7 +331,9 @@ def _worker_status(conn, now: datetime) -> dict[str, Any]:
 
 def _failed_outbox_jobs(conn) -> int:
     return int(
-        conn.execute("SELECT count(*) FROM outbox_jobs WHERE NOT is_deleted AND status = 'failed'").fetchone()[0]
+        conn.execute(
+            "SELECT count(*) FROM outbox_jobs WHERE NOT is_deleted AND status = 'failed'"
+        ).fetchone()[0]
     )
 
 
@@ -368,7 +390,11 @@ def _approval_counts(conn, now: datetime) -> dict[str, Any]:
     for template in APPROVAL_TEMPLATES:
         total, oldest = found.get(template, (0, None))
         items.append(
-            {"template": template, "pending": total, "oldest_pending_age_days": _age_days(oldest, now)}
+            {
+                "template": template,
+                "pending": total,
+                "oldest_pending_age_days": _age_days(oldest, now),
+            }
         )
         if oldest is not None and (oldest_overall is None or oldest < oldest_overall):
             oldest_overall = oldest
@@ -387,9 +413,13 @@ def _local_date(moment: datetime | None, zone: ZoneInfo) -> str | None:
 
 def _weekly_counts(conn, user_id: str, window: Window) -> dict[str, Any]:
     rows = conn.execute(
-        _WEEKLY_CASES_SQL, {"user_id": user_id, "severities": list(SIGNIFICANT_SEVERITIES)}
+        _WEEKLY_CASES_SQL,
+        {"user_id": user_id, "severities": list(SIGNIFICANT_SEVERITIES)},
     ).fetchall()
-    found = {status: (int(total), int(with_update), latest) for status, total, with_update, latest in rows}
+    found = {
+        status: (int(total), int(with_update), latest)
+        for status, total, with_update, latest in rows
+    }
     zone = ZoneInfo(window.timezone)
     items = []
     latest_overall: datetime | None = None
@@ -413,7 +443,9 @@ def _weekly_counts(conn, user_id: str, window: Window) -> dict[str, Any]:
     }
 
 
-def summary(user_id: str, role: str, permissions: frozenset[str], window: Window, now: datetime) -> dict[str, Any]:
+def summary(
+    user_id: str, role: str, permissions: frozenset[str], window: Window, now: datetime
+) -> dict[str, Any]:
     """Stat cards. A section the caller may not see is None, so the response never carries a hidden count."""
     result: dict[str, Any] = {
         "own_cases": None,
@@ -433,7 +465,9 @@ def summary(user_id: str, role: str, permissions: frozenset[str], window: Window
                 **_worker_status(conn, now),
             }
         if sees_users(permissions):
-            result["users"] = {"pending_password_change": _pending_password_changes(conn)}
+            result["users"] = {
+                "pending_password_change": _pending_password_changes(conn)
+            }
         if sees_approvals(permissions):
             result["approvals"] = _approval_counts(conn, now)
         if sees_weekly_updates(role):
@@ -462,7 +496,13 @@ def deadline_summary(user_id: str, now: datetime) -> list[dict[str, Any]]:
     for kind in DEADLINE_KINDS:
         open_, overdue, done, not_applicable = by_kind.get(kind, (0, 0, 0, 0))
         items.append(
-            {"kind": kind, "open": open_, "overdue": overdue, "done": done, "not_applicable": not_applicable}
+            {
+                "kind": kind,
+                "open": open_,
+                "overdue": overdue,
+                "done": done,
+                "not_applicable": not_applicable,
+            }
         )
     return items
 
@@ -481,21 +521,29 @@ def audit_summary(window: Window) -> dict[str, Any]:
     return bucket_audit_rows(rows, window)
 
 
-def bucket_audit_rows(rows: Iterable[tuple[date, str, int]], window: Window) -> dict[str, Any]:
+def bucket_audit_rows(
+    rows: Iterable[tuple[date, str, int]], window: Window
+) -> dict[str, Any]:
     """Pure part of audit_summary: (day, action, count) rows into the top actions and the "other" bucket."""
     days = set(window.dates)
     inside = [(day, action, int(total)) for day, action, total in rows if day in days]
     totals: Counter[str] = Counter()
     for _, action, total in inside:
         totals[action] += total
-    top = sorted(totals, key=lambda action: (-totals[action], action))[:AUDIT_TOP_ACTIONS]
+    top = sorted(totals, key=lambda action: (-totals[action], action))[
+        :AUDIT_TOP_ACTIONS
+    ]
     actions = [*top, OTHER_BUCKET] if len(totals) > len(top) else list(top)
-    per_day: dict[date, dict[str, int]] = {day: dict.fromkeys(actions, 0) for day in window.dates}
+    per_day: dict[date, dict[str, int]] = {
+        day: dict.fromkeys(actions, 0) for day in window.dates
+    }
     for day, action, total in inside:
         per_day[day][action if action in top else OTHER_BUCKET] += total
     return {
         "actions": actions,
-        "points": [{"date": day.isoformat(), "counts": per_day[day]} for day in window.dates],
+        "points": [
+            {"date": day.isoformat(), "counts": per_day[day]} for day in window.dates
+        ],
     }
 
 
@@ -536,4 +584,3 @@ def outbox_summary(now: datetime) -> dict[str, Any]:
 def worker_status(now: datetime) -> dict[str, Any]:
     with connect() as conn:
         return _worker_status(conn, now)
-

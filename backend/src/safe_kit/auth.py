@@ -41,7 +41,9 @@ INVALID_CREDENTIALS = HTTPException(
 )
 
 CSRF_REFUSED = HTTPException(status_code=403, detail="csrf_token_invalid")
-PASSWORD_CHANGE_REQUIRED = HTTPException(status_code=403, detail="password change required")
+PASSWORD_CHANGE_REQUIRED = HTTPException(
+    status_code=403, detail="password change required"
+)
 SYSTEM_SETUP_REQUIRED = HTTPException(status_code=403, detail="system setup required")
 
 
@@ -77,7 +79,9 @@ def require_csrf(request: Request) -> None:
         raise CSRF_REFUSED
 
 
-def set_session_cookies(response: Response, access_token: str, refresh_token: str, csrf_token: str) -> None:
+def set_session_cookies(
+    response: Response, access_token: str, refresh_token: str, csrf_token: str
+) -> None:
     """Sets the three session cookies. The access and refresh cookies are HttpOnly; the CSRF cookie must be readable by the page."""
     response.set_cookie(
         ACCESS_COOKIE,
@@ -109,9 +113,19 @@ def set_session_cookies(response: Response, access_token: str, refresh_token: st
 
 
 def clear_session_cookies(response: Response) -> None:
-    response.delete_cookie(ACCESS_COOKIE, path="/", secure=True, httponly=True, samesite="strict")
-    response.delete_cookie(REFRESH_COOKIE, path=REFRESH_COOKIE_PATH, secure=True, httponly=True, samesite="strict")
-    response.delete_cookie(CSRF_COOKIE, path="/", secure=True, httponly=False, samesite="strict")
+    response.delete_cookie(
+        ACCESS_COOKIE, path="/", secure=True, httponly=True, samesite="strict"
+    )
+    response.delete_cookie(
+        REFRESH_COOKIE,
+        path=REFRESH_COOKIE_PATH,
+        secure=True,
+        httponly=True,
+        samesite="strict",
+    )
+    response.delete_cookie(
+        CSRF_COOKIE, path="/", secure=True, httponly=False, samesite="strict"
+    )
 
 
 def _authenticated_user(request: Request, credential: AccessCredential | None) -> User:
@@ -187,7 +201,9 @@ def require_any_permission(*permissions: str) -> Callable[[User], User]:
     return dependency
 
 
-def require_any_permission_except_role(excluded_role: str, *permissions: str) -> Callable[[User], User]:
+def require_any_permission_except_role(
+    excluded_role: str, *permissions: str
+) -> Callable[[User], User]:
     """Like require_any_permission, but refuses a caller whose role is excluded_role, whatever permissions it holds.
 
     Used where a permission that a role needs for reading also reaches a write that this role must not make. The
@@ -196,7 +212,9 @@ def require_any_permission_except_role(excluded_role: str, *permissions: str) ->
     """
 
     def dependency(user: User = Depends(current_user)) -> User:
-        if user.role == excluded_role or not set(permissions) & permissions_for_role(user.role):
+        if user.role == excluded_role or not set(permissions) & permissions_for_role(
+            user.role
+        ):
             raise HTTPException(status_code=403, detail="forbidden")
         return user
 

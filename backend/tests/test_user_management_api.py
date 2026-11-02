@@ -33,7 +33,11 @@ def actor():
 def client(actor, monkeypatch):
     # Authentication is covered by test_auth_api. Here the caller is injected directly.
     api.app.dependency_overrides[auth.current_user] = lambda: actor["user"]
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()))
+    monkeypatch.setattr(
+        auth,
+        "permissions_for_role",
+        lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()),
+    )
     yield TestClient(api.app)
     api.app.dependency_overrides.clear()
 
@@ -44,7 +48,11 @@ def users(monkeypatch):
         TARGET_ID: make_user(TARGET_ID, "alice", "triager"),
         ADMIN_ID: make_user(ADMIN_ID, "osaa-safe-admin", "admin"),
     }
-    monkeypatch.setattr(api, "list_users", lambda limit, offset: list(store.values())[offset : offset + limit])
+    monkeypatch.setattr(
+        api,
+        "list_users",
+        lambda limit, offset: list(store.values())[offset : offset + limit],
+    )
     monkeypatch.setattr(api, "count_users", lambda: len(store))
     monkeypatch.setattr(api, "find_user_by_id", lambda user_id: store.get(user_id))
     return store
@@ -56,7 +64,19 @@ def test_admin_lists_users_with_pagination(client, users):
     body = response.json()
     assert body["total"] == 2
     assert len(body["items"]) == 1
-    assert set(body["items"][0]) == {"id", "username", "role", "is_active", "password_change_required", "created_at", "is_protected", "email", "first_name", "last_name", "title"}
+    assert set(body["items"][0]) == {
+        "id",
+        "username",
+        "role",
+        "is_active",
+        "password_change_required",
+        "created_at",
+        "is_protected",
+        "email",
+        "first_name",
+        "last_name",
+        "title",
+    }
 
 
 def test_list_rejects_out_of_range_paging(client, users):
@@ -71,7 +91,11 @@ def test_non_admin_cannot_list_users(client, actor, users):
 
 
 def test_admin_changes_role(client, users, monkeypatch):
-    monkeypatch.setattr(api, "update_user", lambda user_id, role=None, is_active=None, **kwargs: UpdateOutcome.OK)
+    monkeypatch.setattr(
+        api,
+        "update_user",
+        lambda user_id, role=None, is_active=None, **kwargs: UpdateOutcome.OK,
+    )
     users[TARGET_ID] = make_user(TARGET_ID, "alice", "reviewer")
     response = client.patch(f"/api/v1/users/{TARGET_ID}", json={"role": "reviewer"})
     assert response.status_code == 200
@@ -102,26 +126,43 @@ def test_empty_update_is_rejected(client, users):
 
 
 def test_unknown_role_in_update_is_rejected(client, users):
-    assert client.patch(f"/api/v1/users/{TARGET_ID}", json={"role": "root"}).status_code == 400
+    assert (
+        client.patch(f"/api/v1/users/{TARGET_ID}", json={"role": "root"}).status_code
+        == 400
+    )
 
 
 def test_last_active_admin_cannot_be_removed(client, users, monkeypatch):
-    monkeypatch.setattr(api, "update_user", lambda user_id, role=None, is_active=None, **kwargs: UpdateOutcome.LAST_ADMIN)
+    monkeypatch.setattr(
+        api,
+        "update_user",
+        lambda user_id, role=None, is_active=None, **kwargs: UpdateOutcome.LAST_ADMIN,
+    )
     response = client.patch(f"/api/v1/users/{TARGET_ID}", json={"role": "auditor"})
     assert response.status_code == 409
     assert "last active admin" in response.json()["detail"]
 
 
 def test_update_of_unknown_user_returns_404(client, users, monkeypatch):
-    monkeypatch.setattr(api, "update_user", lambda user_id, role=None, is_active=None, **kwargs: UpdateOutcome.NOT_FOUND)
-    response = client.patch("/api/v1/users/55555555-5555-5555-5555-555555555555", json={"is_active": False})
+    monkeypatch.setattr(
+        api,
+        "update_user",
+        lambda user_id, role=None, is_active=None, **kwargs: UpdateOutcome.NOT_FOUND,
+    )
+    response = client.patch(
+        "/api/v1/users/55555555-5555-5555-5555-555555555555", json={"is_active": False}
+    )
     assert response.status_code == 404
 
 
 def test_create_user_rejects_reserved_username(client):
     response = client.post(
         "/api/v1/users",
-        json={"username": "root", "role": "auditor", "temporary_password": "temporary passphrase"},
+        json={
+            "username": "root",
+            "role": "auditor",
+            "temporary_password": "temporary passphrase",
+        },
     )
     assert response.status_code == 422
     assert response.json()["detail"] == "username is reserved"
@@ -145,13 +186,20 @@ def test_admin_cannot_delete_own_account(client, users):
 
 
 def test_delete_of_last_active_admin_is_refused(client, users, monkeypatch):
-    monkeypatch.setattr(api, "soft_delete_user", lambda user_id, **kwargs: UpdateOutcome.LAST_ADMIN)
+    monkeypatch.setattr(
+        api, "soft_delete_user", lambda user_id, **kwargs: UpdateOutcome.LAST_ADMIN
+    )
     assert client.delete(f"/api/v1/users/{TARGET_ID}").status_code == 409
 
 
 def test_delete_of_unknown_user_returns_404(client, users, monkeypatch):
-    monkeypatch.setattr(api, "soft_delete_user", lambda user_id, **kwargs: UpdateOutcome.NOT_FOUND)
-    assert client.delete("/api/v1/users/55555555-5555-5555-5555-555555555555").status_code == 404
+    monkeypatch.setattr(
+        api, "soft_delete_user", lambda user_id, **kwargs: UpdateOutcome.NOT_FOUND
+    )
+    assert (
+        client.delete("/api/v1/users/55555555-5555-5555-5555-555555555555").status_code
+        == 404
+    )
 
 
 def test_non_admin_cannot_delete_users(client, actor, users):
@@ -160,14 +208,20 @@ def test_non_admin_cannot_delete_users(client, actor, users):
 
 
 def test_protected_admin_cannot_be_demoted_or_disabled(client, users, monkeypatch):
-    monkeypatch.setattr(api, "update_user", lambda user_id, role=None, is_active=None, **kwargs: UpdateOutcome.PROTECTED)
+    monkeypatch.setattr(
+        api,
+        "update_user",
+        lambda user_id, role=None, is_active=None, **kwargs: UpdateOutcome.PROTECTED,
+    )
     response = client.patch(f"/api/v1/users/{TARGET_ID}", json={"is_active": False})
     assert response.status_code == 409
     assert "protected admin" in response.json()["detail"]
 
 
 def test_protected_admin_cannot_be_deleted(client, users, monkeypatch):
-    monkeypatch.setattr(api, "soft_delete_user", lambda user_id, **kwargs: UpdateOutcome.PROTECTED)
+    monkeypatch.setattr(
+        api, "soft_delete_user", lambda user_id, **kwargs: UpdateOutcome.PROTECTED
+    )
     response = client.delete(f"/api/v1/users/{TARGET_ID}")
     assert response.status_code == 409
     assert "protected admin" in response.json()["detail"]
@@ -182,7 +236,12 @@ def test_update_is_attributed_to_the_acting_admin(client, users, monkeypatch):
 
     monkeypatch.setattr(api, "update_user", fake_update)
     users[TARGET_ID] = make_user(TARGET_ID, "alice", "reviewer")
-    assert client.patch(f"/api/v1/users/{TARGET_ID}", json={"role": "reviewer"}).status_code == 200
+    assert (
+        client.patch(
+            f"/api/v1/users/{TARGET_ID}", json={"role": "reviewer"}
+        ).status_code
+        == 200
+    )
     assert seen["actor_id"] == ADMIN_ID
 
 

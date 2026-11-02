@@ -246,7 +246,10 @@ CATALOG: tuple[TableEntry, ...] = (
         description="Investigator and reviewer assignments to each case.",
         category="case",
         contains_personal_data=True,
-        personal_fields=("user_id (links to a person)", "assigned_by (links to a person)"),
+        personal_fields=(
+            "user_id (links to a person)",
+            "assigned_by (links to a person)",
+        ),
         purpose="Deciding who may read and work on a case, and recording who assigned them.",
         retention="Kept with its case. Removed assignments remain as soft-deleted rows.",
         retention_defined=True,
@@ -259,7 +262,10 @@ CATALOG: tuple[TableEntry, ...] = (
         description="F1 whole-case reviews: outcome and an optional note. Read-only history; each row is copied into review_rounds by migration 0030.",
         category="case",
         contains_personal_data=True,
-        personal_fields=("reviewer_id (links to a person)", "note (free text, may name people)"),
+        personal_fields=(
+            "reviewer_id (links to a person)",
+            "note (free text, may name people)",
+        ),
         purpose="History of the reviews recorded before review rounds existed.",
         retention="Kept with its case. Follows the case retention.",
         retention_defined=True,
@@ -272,7 +278,10 @@ CATALOG: tuple[TableEntry, ...] = (
         description="Idempotency-Key records of side-effect POST requests: the caller's key, a fingerprint of the request, and the stored response.",
         category="operations",
         contains_personal_data=True,
-        personal_fields=("principal_id (links to a person)", "response_body (the stored answer, which may name a case)"),
+        personal_fields=(
+            "principal_id (links to a person)",
+            "response_body (the stored answer, which may name a case)",
+        ),
         purpose="Returning the first answer to a repeated request, so that a retry does not write twice.",
         retention="Replay window of 7 days. An older record is soft-deleted and the request counts as new.",
         retention_defined=True,
@@ -298,7 +307,10 @@ CATALOG: tuple[TableEntry, ...] = (
         description="One layer of a review round: the outcome, the reason, and the evidence references.",
         category="case",
         contains_personal_data=True,
-        personal_fields=("set_by (links to a person)", "reason (free text, may name people)"),
+        personal_fields=(
+            "set_by (links to a person)",
+            "reason (free text, may name people)",
+        ),
         purpose="Recording the decision on each review layer and the reason for it.",
         retention="Kept with its review round. Follows the case retention.",
         retention_defined=True,
@@ -311,7 +323,10 @@ CATALOG: tuple[TableEntry, ...] = (
         description="A reviewer's declaration of their own conflict on one review round, its withdrawal, or a correction of it. Append-only.",
         category="case",
         contains_personal_data=True,
-        personal_fields=("reviewer_id (links to a person)", "description (free text, may name people)"),
+        personal_fields=(
+            "reviewer_id (links to a person)",
+            "description (free text, may name people)",
+        ),
         purpose="Keeping the record of conflicts of interest on a review, so a conflicted reviewer cannot decide it.",
         retention="Kept with its review round. Follows the case retention.",
         retention_defined=True,
@@ -324,7 +339,11 @@ CATALOG: tuple[TableEntry, ...] = (
         description="A reviewer's withdrawal from one review round, with the replacement the reviewer names. Append-only.",
         category="case",
         contains_personal_data=True,
-        personal_fields=("reviewer_id (links to a person)", "replacement_id (links to a person)", "reason (free text, may name people)"),
+        personal_fields=(
+            "reviewer_id (links to a person)",
+            "replacement_id (links to a person)",
+            "reason (free text, may name people)",
+        ),
         purpose="Recording who withdrew from a review and who replaced them.",
         retention="Kept with its review round. Follows the case retention.",
         retention_defined=True,
@@ -337,7 +356,11 @@ CATALOG: tuple[TableEntry, ...] = (
         description="An appeal against one review round, filed by a user who can see the case and assigned to an independent reviewer. Append-only; the product does not decide it.",
         category="case",
         contains_personal_data=True,
-        personal_fields=("filed_by (links to a person)", "independent_reviewer_id (links to a person)", "grounds (free text, may name people)"),
+        personal_fields=(
+            "filed_by (links to a person)",
+            "independent_reviewer_id (links to a person)",
+            "grounds (free text, may name people)",
+        ),
         purpose="Recording that a review round is appealed and which independent reviewer takes the appeal.",
         retention="Kept with its review round. Follows the case retention.",
         retention_defined=True,
@@ -376,7 +399,10 @@ CATALOG: tuple[TableEntry, ...] = (
         description="Facts that made the organization aware of a case: the operator, an affected party, or an external report, with its time and basis.",
         category="case",
         contains_personal_data=True,
-        personal_fields=("recorded_by (links to a person)", "basis (free text, may name people)"),
+        personal_fields=(
+            "recorded_by (links to a person)",
+            "basis (free text, may name people)",
+        ),
         purpose="Recording when and how the organization became aware, which starts the notification clocks.",
         retention="Kept with its case. Append-only. Follows the case retention.",
         retention_defined=True,
@@ -389,7 +415,10 @@ CATALOG: tuple[TableEntry, ...] = (
         description="Assessment of each impact area of a case: scope text and severity, with an explicit unknown value.",
         category="case",
         contains_personal_data=True,
-        personal_fields=("updated_by (links to a person)", "scope (free text, may name affected people or groups)"),
+        personal_fields=(
+            "updated_by (links to a person)",
+            "scope (free text, may name affected people or groups)",
+        ),
         purpose="Recording who and what is affected, and how badly, for the notification and the preliminary report.",
         retention="Kept with its case. Follows the case retention.",
         retention_defined=True,
@@ -402,7 +431,11 @@ CATALOG: tuple[TableEntry, ...] = (
         description="Statutory or contractual duties attached to a case, with their own due times.",
         category="case",
         contains_personal_data=True,
-        personal_fields=("created_by (links to a person)", "description (free text, may name people)", "jurisdiction (may name a place)"),
+        personal_fields=(
+            "created_by (links to a person)",
+            "description (free text, may name people)",
+            "jurisdiction (may name a place)",
+        ),
         purpose="Tracking legal and contractual duties separately from the SAFE deadlines.",
         retention="Kept with its case. Follows the case retention.",
         retention_defined=True,
@@ -504,7 +537,10 @@ CATALOG: tuple[TableEntry, ...] = (
         description="Chain of custody: uploads, downloads, and failed integrity checks of evidence.",
         category="case",
         contains_personal_data=True,
-        personal_fields=("actor_id (links to a person)", "evidence_id (links to an evidence item)"),
+        personal_fields=(
+            "actor_id (links to a person)",
+            "evidence_id (links to an evidence item)",
+        ),
         purpose="Showing who handled each evidence item and whether its content passed the integrity checks.",
         retention="Append-only, kept with its evidence.",
         retention_defined=True,
@@ -517,7 +553,10 @@ CATALOG: tuple[TableEntry, ...] = (
         description="The manifest of a redaction: the original, the derived item, who made it, and which line ranges were removed and why.",
         category="case",
         contains_personal_data=True,
-        personal_fields=("actor_id (links to a person)", "manifest reasons (free text, may name people)"),
+        personal_fields=(
+            "actor_id (links to a person)",
+            "manifest reasons (free text, may name people)",
+        ),
         purpose="Showing what was removed from an evidence item, why, and by whom, without keeping the removed text.",
         retention="Kept with its evidence.",
         retention_defined=True,
@@ -556,7 +595,10 @@ CATALOG: tuple[TableEntry, ...] = (
         description="Each closure and reopening of a case: the action, the reason as given, and who did it.",
         category="case",
         contains_personal_data=True,
-        personal_fields=("actor_id (links to a person)", "reason (free text, may name people)"),
+        personal_fields=(
+            "actor_id (links to a person)",
+            "reason (free text, may name people)",
+        ),
         purpose="Keeping the reason for each closure and reopening, so that it can be read by triagers.",
         retention="Kept with its case. Follows the case retention.",
         retention_defined=True,
@@ -585,7 +627,10 @@ CATALOG: tuple[TableEntry, ...] = (
         description="Reporter of each case opened through the intake: the submitting account and an optional contact.",
         category="case",
         contains_personal_data=True,
-        personal_fields=("reporter_id (links to a person)", "contact (how to reach the reporter)"),
+        personal_fields=(
+            "reporter_id (links to a person)",
+            "contact (how to reach the reporter)",
+        ),
         purpose="Keeping the reporter's identity apart from the case content, so the reporter is not exposed to retaliation.",
         retention="Kept with its case. Follows the case retention.",
         retention_defined=True,
@@ -598,7 +643,10 @@ CATALOG: tuple[TableEntry, ...] = (
         description="A suggested control for a failure or affected system: the minimum control, the responsible party, the due time, and the evidence to keep. It has no result.",
         category="catalog",
         contains_personal_data=True,
-        personal_fields=("created_by (links to a person)", "responsible (a name or role, as written)"),
+        personal_fields=(
+            "created_by (links to a person)",
+            "responsible (a name or role, as written)",
+        ),
         purpose="Recording a suggestion apart from any verification of it.",
         retention="Kept while the catalog is kept.",
         retention_defined=True,
@@ -611,7 +659,10 @@ CATALOG: tuple[TableEntry, ...] = (
         description="A verification run of a recommendation: what was checked, its scope, assumptions, method, result, and when and by whom it was checked.",
         category="catalog",
         contains_personal_data=True,
-        personal_fields=("verified_by (links to a person)", "evidence_path (an internal location, may name a person)"),
+        personal_fields=(
+            "verified_by (links to a person)",
+            "evidence_path (an internal location, may name a person)",
+        ),
         purpose="Recording a checked result with its limits, separately from the suggestion it checked.",
         retention="Kept while the catalog is kept.",
         retention_defined=True,
@@ -637,7 +688,10 @@ CATALOG: tuple[TableEntry, ...] = (
         description="Every version of a catalog entry: create, version, correction, dispute, withdrawal, or supersession, with its status, title, body, reason, and replacement.",
         category="catalog",
         contains_personal_data=True,
-        personal_fields=("created_by (links to a person)", "reason (free text, may name a person)"),
+        personal_fields=(
+            "created_by (links to a person)",
+            "reason (free text, may name a person)",
+        ),
         purpose="Keeping the complete history of a catalog entry, so an old version is never changed.",
         retention="Kept while the catalog is kept.",
         retention_defined=True,
@@ -676,7 +730,11 @@ CATALOG: tuple[TableEntry, ...] = (
         description="One version of a disclosure package: recipient, purpose, TLP audience, template, manifest, and digest.",
         category="disclosure",
         contains_personal_data=True,
-        personal_fields=("recipient (may name a person or an organisation)", "purpose (free text, may name people)", "created_by (links to a person)"),
+        personal_fields=(
+            "recipient (may name a person or an organisation)",
+            "purpose (free text, may name people)",
+            "created_by (links to a person)",
+        ),
         purpose="Keeping the exact package that was prepared and approved, so a changed package is a new version and the old one is kept.",
         retention="Kept with its case.",
         retention_defined=True,
@@ -702,7 +760,11 @@ CATALOG: tuple[TableEntry, ...] = (
         description="The human approval of one disclosure version: the recipient, purpose, and digest confirmed, the preparer, and the approver.",
         category="disclosure",
         contains_personal_data=True,
-        personal_fields=("recipient (may name a person or an organisation)", "purpose (free text, may name people)", "preparer_id and approved_by (link to people)"),
+        personal_fields=(
+            "recipient (may name a person or an organisation)",
+            "purpose (free text, may name people)",
+            "preparer_id and approved_by (link to people)",
+        ),
         purpose="Showing who approved which exact package, for which recipient and purpose, and that the preparer did not approve it.",
         retention="Kept with its version.",
         retention_defined=True,
@@ -767,10 +829,14 @@ def table_stats(entry: TableEntry) -> RowStats:
     with connect() as conn:
         if _has_soft_delete(conn, entry.table):
             totals = conn.execute(
-                sql.SQL("SELECT count(*), count(*) FILTER (WHERE NOT is_deleted) FROM {}").format(table)
+                sql.SQL(
+                    "SELECT count(*), count(*) FILTER (WHERE NOT is_deleted) FROM {}"
+                ).format(table)
             ).fetchone()
         else:
-            totals = conn.execute(sql.SQL("SELECT count(*), count(*) FROM {}").format(table)).fetchone()
+            totals = conn.execute(
+                sql.SQL("SELECT count(*), count(*) FROM {}").format(table)
+            ).fetchone()
         total, active = totals
         oldest = newest = None
         if entry.created_column:
@@ -804,9 +870,17 @@ def inventory(retention_years: int) -> list[dict]:
         data["retention"] = f"{period} {entry.retention}"
         data["retention_years"] = retention_years
         stats = table_stats(entry)
-        data["rows"] = {"total": stats.total, "active": stats.active, "soft_deleted": stats.soft_deleted}
-        data["oldest_created_at"] = stats.oldest_created_at.isoformat() if stats.oldest_created_at else None
-        data["newest_created_at"] = stats.newest_created_at.isoformat() if stats.newest_created_at else None
+        data["rows"] = {
+            "total": stats.total,
+            "active": stats.active,
+            "soft_deleted": stats.soft_deleted,
+        }
+        data["oldest_created_at"] = (
+            stats.oldest_created_at.isoformat() if stats.oldest_created_at else None
+        )
+        data["newest_created_at"] = (
+            stats.newest_created_at.isoformat() if stats.newest_created_at else None
+        )
         items.append(data)
     return items
 

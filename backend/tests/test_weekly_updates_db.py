@@ -26,7 +26,9 @@ pytestmark = pytest.mark.skipif(
 
 ROOT = Path(__file__).resolve().parents[2]
 VALIDATOR = Draft202012Validator(
-    json.loads((ROOT / "schemas" / "weekly-update.v0.json").read_text(encoding="utf-8")),
+    json.loads(
+        (ROOT / "schemas" / "weekly-update.v0.json").read_text(encoding="utf-8")
+    ),
     format_checker=FormatChecker(),
 )
 START = datetime(2026, 11, 2, 9, 0, tzinfo=UTC)
@@ -44,9 +46,13 @@ def system_timezone_configured():
     """Case creation needs a system timezone. Set one on a freshly migrated test database."""
     migrate()  # idempotent: applies pending migrations on a fresh test database
     with connect() as conn:
-        exists = conn.execute("SELECT EXISTS (SELECT 1 FROM system_timezone WHERE NOT is_deleted)").fetchone()[0]
+        exists = conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM system_timezone WHERE NOT is_deleted)"
+        ).fetchone()[0]
         if not exists:
-            conn.execute("INSERT INTO system_timezone (timezone) VALUES ('Europe/Istanbul')")
+            conn.execute(
+                "INSERT INTO system_timezone (timezone) VALUES ('Europe/Istanbul')"
+            )
     yield
 
 
@@ -66,9 +72,13 @@ def people():
     }
 
 
-def set_impact(triager: ActingClient, case_id: str, area: str = "severity", severity: str = "high") -> None:
+def set_impact(
+    triager: ActingClient, case_id: str, area: str = "severity", severity: str = "high"
+) -> None:
     response = triager.put(
-        f"/api/v1/cases/{case_id}/impacts/{area}", json={"severity": severity, "scope": SCOPE_SECRET}, headers=idem()
+        f"/api/v1/cases/{case_id}/impacts/{area}",
+        json={"severity": severity, "scope": SCOPE_SECRET},
+        headers=idem(),
     )
     assert response.status_code == 200, response.text
 
@@ -76,7 +86,8 @@ def set_impact(triager: ActingClient, case_id: str, area: str = "severity", seve
 def weekly_count(case_id: str) -> int:
     with connect() as conn:
         return conn.execute(
-            "SELECT count(*) FROM weekly_updates WHERE case_id = %s AND NOT is_deleted", (case_id,)
+            "SELECT count(*) FROM weekly_updates WHERE case_id = %s AND NOT is_deleted",
+            (case_id,),
         ).fetchone()[0]
 
 
@@ -122,7 +133,9 @@ def test_open_significant_risk_gets_one_weekly_update(people):
     listed = people["triager"].get(f"/api/v1/cases/{case_id}/weekly-updates")
     assert listed.status_code == 200
     assert [item["sequence"] for item in listed.json()] == [1]
-    assert listed.json()[0]["significant_risks"] == [{"area": "severity", "severity": "high"}]
+    assert listed.json()[0]["significant_risks"] == [
+        {"area": "severity", "severity": "high"}
+    ]
     # The update changes no deadline task, and the closure rule is not touched.
     assert deadline_rows(case_id) == tasks_before
 
@@ -180,7 +193,11 @@ def test_no_update_without_a_significant_risk(people):
 
     generate_due_updates(START)
 
-    assert [weekly_count(case_id) for case_id in (medium, unknown, no_impacts)] == [0, 0, 0]
+    assert [weekly_count(case_id) for case_id in (medium, unknown, no_impacts)] == [
+        0,
+        0,
+        0,
+    ]
 
 
 def test_a_closed_case_gets_no_new_update(people):
@@ -201,12 +218,28 @@ def test_only_visible_cases_are_listed_and_hidden_cases_answer_404(people):
     update_id = first_update_id(people["triager"], case_id)
 
     for hidden in ("other_reporter", "investigator"):
-        assert people[hidden].get(f"/api/v1/cases/{case_id}/weekly-updates").status_code == 404
-        assert people[hidden].get(f"/api/v1/cases/{case_id}/weekly-updates/{update_id}").status_code == 404
+        assert (
+            people[hidden].get(f"/api/v1/cases/{case_id}/weekly-updates").status_code
+            == 404
+        )
+        assert (
+            people[hidden]
+            .get(f"/api/v1/cases/{case_id}/weekly-updates/{update_id}")
+            .status_code
+            == 404
+        )
 
     # The creator (read_own) and a triager (read_all) see the case, so they see its updates.
-    assert people["reporter"].get(f"/api/v1/cases/{case_id}/weekly-updates").status_code == 200
-    assert people["triager"].get(f"/api/v1/cases/{case_id}/weekly-updates/{update_id}").status_code == 200
+    assert (
+        people["reporter"].get(f"/api/v1/cases/{case_id}/weekly-updates").status_code
+        == 200
+    )
+    assert (
+        people["triager"]
+        .get(f"/api/v1/cases/{case_id}/weekly-updates/{update_id}")
+        .status_code
+        == 200
+    )
 
 
 def test_an_update_of_another_case_is_not_found_under_this_case(people):
@@ -217,7 +250,9 @@ def test_an_update_of_another_case_is_not_found_under_this_case(people):
     generate_due_updates(START)
     update_of_a = first_update_id(people["triager"], case_a)
 
-    response = people["triager"].get(f"/api/v1/cases/{case_b}/weekly-updates/{update_of_a}")
+    response = people["triager"].get(
+        f"/api/v1/cases/{case_b}/weekly-updates/{update_of_a}"
+    )
 
     assert response.status_code == 404
     assert response.json()["detail"] == "weekly update not found"
@@ -238,7 +273,9 @@ def test_document_follows_the_schema_and_holds_no_free_text(people):
     generate_due_updates(START)
     update_id = first_update_id(people["triager"], case_id)
 
-    response = people["reporter"].get(f"/api/v1/cases/{case_id}/weekly-updates/{update_id}")
+    response = people["reporter"].get(
+        f"/api/v1/cases/{case_id}/weekly-updates/{update_id}"
+    )
 
     assert response.status_code == 200
     document = response.json()
@@ -253,7 +290,9 @@ def test_weekly_updates_are_read_only_over_the_api(people):
     set_impact(people["triager"], case_id)
     generate_due_updates(START)
 
-    response = people["triager"].post(f"/api/v1/cases/{case_id}/weekly-updates", json={})
+    response = people["triager"].post(
+        f"/api/v1/cases/{case_id}/weekly-updates", json={}
+    )
 
     assert response.status_code == 405
     assert weekly_count(case_id) == 1

@@ -30,7 +30,9 @@ def migrated_database():
 
 
 def new_user() -> str:
-    return users.create_user("t-" + uuid.uuid4().hex[:12], "temporary passphrase", "reporter")
+    return users.create_user(
+        "t-" + uuid.uuid4().hex[:12], "temporary passphrase", "reporter"
+    )
 
 
 def family_rows(token: str) -> list[dict]:
@@ -44,7 +46,10 @@ def family_rows(token: str) -> list[dict]:
             """,
             (hash_refresh_token(token),),
         ).fetchall()
-    return [{"token_hash": h, "revoked": revoked, "deleted": deleted} for h, revoked, deleted in rows]
+    return [
+        {"token_hash": h, "revoked": revoked, "deleted": deleted}
+        for h, revoked, deleted in rows
+    ]
 
 
 def expire_refresh_token(token: str) -> None:
@@ -75,7 +80,10 @@ def test_rotation_returns_a_new_token_in_the_same_family_and_revokes_the_old_one
     assert user_id == user
     assert second != first
     rows = family_rows(first)
-    assert [row["token_hash"] for row in rows] == [hash_refresh_token(first), hash_refresh_token(second)]
+    assert [row["token_hash"] for row in rows] == [
+        hash_refresh_token(first),
+        hash_refresh_token(second),
+    ]
     assert [row["revoked"] for row in rows] == [True, False]
 
 
@@ -142,7 +150,9 @@ def test_revoke_refresh_token_applies_only_for_the_matching_user():
 
 def test_revoke_refresh_token_for_an_unknown_token_changes_nothing():
     token = sessions.open_session(new_user())
-    sessions.revoke_refresh_token(new_refresh_token(), "00000000-0000-0000-0000-000000000000")
+    sessions.revoke_refresh_token(
+        new_refresh_token(), "00000000-0000-0000-0000-000000000000"
+    )
     assert family_rows(token)[0]["revoked"] is False
 
 

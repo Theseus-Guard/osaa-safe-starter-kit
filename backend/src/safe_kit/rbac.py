@@ -12,7 +12,9 @@ from safe_kit.db import connect
 from safe_kit.users import ROLES
 
 # The admin role must always keep these, so the system cannot lock itself out of administration.
-ADMIN_REQUIRED_PERMISSIONS = frozenset({"users:manage", "users:reset_password", "roles:manage"})
+ADMIN_REQUIRED_PERMISSIONS = frozenset(
+    {"users:manage", "users:reset_password", "roles:manage"}
+)
 
 ROLE_LOCK_KEY = 0x5AFE0004
 
@@ -28,10 +30,21 @@ DISCLOSURE_APPROVER_ROLE = "disclosure_approver"
 DEFAULT_ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "reporter": frozenset({"cases:submit", "cases:read_own"}),
     "triager": frozenset(
-        {"cases:read_assigned", "cases:read_all", "cases:triage", "cases:assign", "cases:close", "evidence:read"}
+        {
+            "cases:read_assigned",
+            "cases:read_all",
+            "cases:triage",
+            "cases:assign",
+            "cases:close",
+            "evidence:read",
+        }
     ),
-    "investigator": frozenset({"cases:read_assigned", "cases:assignable", "evidence:read", "evidence:write"}),
-    "reviewer": frozenset({"cases:read_assigned", "cases:assignable", "evidence:read", "reviews:write"}),
+    "investigator": frozenset(
+        {"cases:read_assigned", "cases:assignable", "evidence:read", "evidence:write"}
+    ),
+    "reviewer": frozenset(
+        {"cases:read_assigned", "cases:assignable", "evidence:read", "reviews:write"}
+    ),
     # Reads the case it approves: cases:read_all, granted by migration 0044 (see DISCLOSURE_APPROVER_ROLE).
     "disclosure_approver": frozenset({"disclosures:approve", "cases:read_all"}),
     "auditor": frozenset({"audit:read"}),
@@ -56,7 +69,13 @@ class RoleOutcome(Enum):
 
 # Permissions that read or change case content, including the reporter contact. The admin role never holds them:
 # platform administration does not reach case content (see DEFAULT_ROLE_PERMISSIONS and plans/01, R08).
-CASE_CONTENT_PERMISSION_PREFIXES = ("cases:", "evidence:", "reviews:", "reporter_contact:", "disclosures:")
+CASE_CONTENT_PERMISSION_PREFIXES = (
+    "cases:",
+    "evidence:",
+    "reviews:",
+    "reporter_contact:",
+    "disclosures:",
+)
 # Only the reporting_owner role may hold a reporter contact permission, and only its fixed grant. The matrix refuses every
 # other reporter contact permission for every role, administrators included.
 REPORTER_CONTACT_PREFIX = "reporter_contact:"
@@ -101,7 +120,9 @@ def list_role_permissions() -> dict[str, list[str]]:
     return matrix
 
 
-def set_role_permissions(role: str, permissions: frozenset[str], actor_id: str | None = None) -> RoleOutcome:
+def set_role_permissions(
+    role: str, permissions: frozenset[str], actor_id: str | None = None
+) -> RoleOutcome:
     """Replace the permission set of a role. Granting is an undelete; revoking is a soft delete.
 
     The audit row lists the granted and revoked permissions and commits with the change.
@@ -114,7 +135,9 @@ def set_role_permissions(role: str, permissions: frozenset[str], actor_id: str |
     if role == "admin":
         if not ADMIN_REQUIRED_PERMISSIONS <= permissions:
             return RoleOutcome.ADMIN_GUARD
-        if any(name.startswith(CASE_CONTENT_PERMISSION_PREFIXES) for name in permissions):
+        if any(
+            name.startswith(CASE_CONTENT_PERMISSION_PREFIXES) for name in permissions
+        ):
             return RoleOutcome.ADMIN_CASE_CONTENT
     if any(name.startswith(REPORTER_CONTACT_PREFIX) for name in permissions):
         return RoleOutcome.REPORTER_CONTACT_NOT_GRANTABLE

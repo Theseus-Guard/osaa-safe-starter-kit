@@ -30,9 +30,13 @@ def system_timezone_configured():
 
     migrate()  # idempotent: applies pending migrations on a fresh test database
     with connect() as conn:
-        exists = conn.execute("SELECT EXISTS (SELECT 1 FROM system_timezone WHERE NOT is_deleted)").fetchone()[0]
+        exists = conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM system_timezone WHERE NOT is_deleted)"
+        ).fetchone()[0]
         if not exists:
-            conn.execute("INSERT INTO system_timezone (timezone) VALUES ('Europe/Istanbul')")
+            conn.execute(
+                "INSERT INTO system_timezone (timezone) VALUES ('Europe/Istanbul')"
+            )
     yield
 
 
@@ -61,7 +65,9 @@ def past(hours: int = 2) -> str:
 def browser_login(username: str, password: str) -> TestClient:
     """A client that behaves like the browser: it keeps the cookies and talks over https, so Secure cookies are sent."""
     browser = TestClient(api.app, base_url="https://testserver")
-    response = browser.post("/api/v1/auth/token", json={"username": username, "password": password})
+    response = browser.post(
+        "/api/v1/auth/token", json={"username": username, "password": password}
+    )
     assert response.status_code == 200, response.text
     return browser
 
@@ -82,7 +88,8 @@ def test_cookie_login_write_and_logout_against_postgresql():
     # The login wrote a refresh-token row for this user.
     with connect() as conn:
         open_sessions = conn.execute(
-            "SELECT count(*) FROM refresh_tokens WHERE user_id = %s AND revoked_at IS NULL", (user_id,)
+            "SELECT count(*) FROM refresh_tokens WHERE user_id = %s AND revoked_at IS NULL",
+            (user_id,),
         ).fetchone()[0]
     assert open_sessions >= 1
 
@@ -92,7 +99,9 @@ def test_cookie_login_write_and_logout_against_postgresql():
     assert refused.status_code == 403
     assert refused.json()["detail"] == "csrf_token_invalid"
 
-    created = browser.post("/api/v1/cases", json=body, headers={**idem(), "X-CSRF-Token": csrf_value})
+    created = browser.post(
+        "/api/v1/cases", json=body, headers={**idem(), "X-CSRF-Token": csrf_value}
+    )
     assert created.status_code == 201, created.text
     assert created.json()["title"] == "Cookie session case"
 
@@ -104,7 +113,8 @@ def test_cookie_login_write_and_logout_against_postgresql():
 
     with connect() as conn:
         still_open = conn.execute(
-            "SELECT count(*) FROM refresh_tokens WHERE user_id = %s AND revoked_at IS NULL", (user_id,)
+            "SELECT count(*) FROM refresh_tokens WHERE user_id = %s AND revoked_at IS NULL",
+            (user_id,),
         ).fetchone()[0]
     assert still_open == 0
 

@@ -32,7 +32,12 @@ from safe_kit import api, cli, demo_seed
 from safe_kit import migrate as migrate_module
 from safe_kit.config_guard import ConfigError, is_demo
 from safe_kit.db import connect
-from safe_kit.demo_auth import DEMO_ADMIN_ID, DEMO_ADMIN_USERNAME, DEMO_ROLES, demo_credential_hash
+from safe_kit.demo_auth import (
+    DEMO_ADMIN_ID,
+    DEMO_ADMIN_USERNAME,
+    DEMO_ROLES,
+    demo_credential_hash,
+)
 from safe_kit.evidence_keys import key_provider_from_env
 from error_body import without_request_id
 from safe_kit.evidence_storage import storage_from_env
@@ -47,7 +52,13 @@ requires_database = pytest.mark.skipif(
     reason="set SAFE_TEST_DATABASE=1 and the SAFE_DB_* settings to run the database tests",
 )
 
-DB_KEYS = ("SAFE_DB_HOST", "SAFE_DB_PORT", "SAFE_DB_NAME", "SAFE_DB_USER", "SAFE_DB_PASSWORD_FILE")
+DB_KEYS = (
+    "SAFE_DB_HOST",
+    "SAFE_DB_PORT",
+    "SAFE_DB_NAME",
+    "SAFE_DB_USER",
+    "SAFE_DB_PASSWORD_FILE",
+)
 DB_DEFAULTS = {
     "SAFE_DB_HOST": "127.0.0.1",
     "SAFE_DB_PORT": "5432",
@@ -77,7 +88,11 @@ def _db_settings() -> dict[str, str]:
 
 
 def demo_env(**changes: str | None) -> dict[str, str]:
-    env = {"SAFE_MODE": "demo", "SAFE_BIND_HOST": "127.0.0.1", "SAFE_DATASET": "synthetic-demo"}
+    env = {
+        "SAFE_MODE": "demo",
+        "SAFE_BIND_HOST": "127.0.0.1",
+        "SAFE_DATASET": "synthetic-demo",
+    }
     env.update(_db_settings())
     env.update(TOKEN_TTL)
     for name, value in changes.items():
@@ -133,8 +148,12 @@ def _fake_database(monkeypatch) -> None:
 
 
 @pytest.mark.parametrize("run", [demo_seed.seed, demo_seed.upgrade])
-def test_seed_and_upgrade_refuse_production_mode_before_touching_anything(tmp_path, monkeypatch, run):
-    monkeypatch.setattr(demo_seed, "connect", lambda: pytest.fail("must not connect in production mode"))
+def test_seed_and_upgrade_refuse_production_mode_before_touching_anything(
+    tmp_path, monkeypatch, run
+):
+    monkeypatch.setattr(
+        demo_seed, "connect", lambda: pytest.fail("must not connect in production mode")
+    )
     credential_dir = tmp_path / "credentials"
     env = production_env() | {CREDENTIAL_DIR: str(credential_dir)}
     with pytest.raises(demo_seed.SeedRefused):
@@ -144,19 +163,31 @@ def test_seed_and_upgrade_refuse_production_mode_before_touching_anything(tmp_pa
 
 @pytest.mark.parametrize("run", [demo_seed.seed, demo_seed.upgrade])
 @pytest.mark.parametrize("dataset", [None, "", "customer-data", "Synthetic-Demo"])
-def test_seed_and_upgrade_refuse_any_dataset_but_the_synthetic_marker(tmp_path, monkeypatch, run, dataset):
+def test_seed_and_upgrade_refuse_any_dataset_but_the_synthetic_marker(
+    tmp_path, monkeypatch, run, dataset
+):
     monkeypatch.setattr(demo_seed, "connect", lambda: pytest.fail("must not connect"))
-    env = demo_env(SAFE_DATASET=dataset) | {CREDENTIAL_DIR: str(tmp_path / "credentials")}
+    env = demo_env(SAFE_DATASET=dataset) | {
+        CREDENTIAL_DIR: str(tmp_path / "credentials")
+    }
     with pytest.raises(ConfigError):
         run(env)
     assert not (tmp_path / "credentials").exists()
 
 
 @pytest.mark.parametrize("value", [None, "", "   "])
-def test_seed_requires_the_credential_directory_and_has_no_default(tmp_path, monkeypatch, value):
+def test_seed_requires_the_credential_directory_and_has_no_default(
+    tmp_path, monkeypatch, value
+):
     """The single-file setting alone is not enough: the other demo roles need the directory."""
-    monkeypatch.setattr(demo_seed, "connect", lambda: pytest.fail("must not connect without a directory"))
-    env = demo_env(**{CREDENTIAL_DIR: value, CREDENTIAL_FILE: str(tmp_path / "legacy-credential")})
+    monkeypatch.setattr(
+        demo_seed,
+        "connect",
+        lambda: pytest.fail("must not connect without a directory"),
+    )
+    env = demo_env(
+        **{CREDENTIAL_DIR: value, CREDENTIAL_FILE: str(tmp_path / "legacy-credential")}
+    )
     with pytest.raises(demo_seed.SeedError, match="SAFE_DEMO_CREDENTIAL_DIR"):
         demo_seed.seed(env)
     assert not (tmp_path / "legacy-credential").exists()
@@ -182,33 +213,60 @@ def test_demo_status_lists_the_demo_roles_only_in_demo_mode():
 
 
 def test_roster_matches_the_seeded_users():
-    seeded = {username: (role, f"{first} {last}") for _, username, role, first, last, _ in demo_seed.USERS}
+    seeded = {
+        username: (role, f"{first} {last}")
+        for _, username, role, first, last, _ in demo_seed.USERS
+    }
     for demo_role in DEMO_ROLES:
         assert seeded[demo_role.username] == (demo_role.role, demo_role.name)
 
 
-def test_demo_sign_in_is_refused_in_production_mode_without_reading_the_database(monkeypatch):
-    monkeypatch.setattr(api, "find_user", lambda username: pytest.fail("production must not look up a user"))
+def test_demo_sign_in_is_refused_in_production_mode_without_reading_the_database(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        api,
+        "find_user",
+        lambda username: pytest.fail("production must not look up a user"),
+    )
     client = TestClient(api.app, client=LOOPBACK)
     with process_env(production_env()):
-        response = client.post(SIGN_IN, json={"username": "demo-admin", "credential": "anything-at-all"})
+        response = client.post(
+            SIGN_IN, json={"username": "demo-admin", "credential": "anything-at-all"}
+        )
     assert response.status_code == 403
     assert "safe_access" not in response.cookies
 
 
 def test_demo_sign_in_is_refused_for_a_non_loopback_caller(monkeypatch):
-    monkeypatch.setattr(api, "find_user", lambda username: pytest.fail("a remote caller must not reach it"))
+    monkeypatch.setattr(
+        api,
+        "find_user",
+        lambda username: pytest.fail("a remote caller must not reach it"),
+    )
     client = TestClient(api.app, client=REMOTE)
     with process_env(demo_env()):
-        response = client.post(SIGN_IN, json={"username": "demo-admin", "credential": "anything-at-all"})
+        response = client.post(
+            SIGN_IN, json={"username": "demo-admin", "credential": "anything-at-all"}
+        )
     assert response.status_code == 403
 
 
 @pytest.mark.parametrize("trusted", [None, GATEWAY])
-def test_demo_sign_in_is_refused_for_a_forged_loopback_claim_from_an_untrusted_peer(monkeypatch, trusted):
+def test_demo_sign_in_is_refused_for_a_forged_loopback_claim_from_an_untrusted_peer(
+    monkeypatch, trusted
+):
     """A client that sends X-Forwarded-For: 127.0.0.1 itself is not on loopback, with or without a trusted gateway."""
-    monkeypatch.setattr(api, "find_user", lambda username: pytest.fail("a forged caller must not reach it"))
-    monkeypatch.setattr(api, "record_login_failure", lambda *args: pytest.fail("a forged caller is not audited here"))
+    monkeypatch.setattr(
+        api,
+        "find_user",
+        lambda username: pytest.fail("a forged caller must not reach it"),
+    )
+    monkeypatch.setattr(
+        api,
+        "record_login_failure",
+        lambda *args: pytest.fail("a forged caller is not audited here"),
+    )
     client = TestClient(api.app, client=REMOTE)
     with process_env(demo_env(SAFE_TRUSTED_PROXIES=trusted)):
         response = client.post(
@@ -219,7 +277,9 @@ def test_demo_sign_in_is_refused_for_a_forged_loopback_claim_from_an_untrusted_p
     assert response.status_code == 403
 
 
-def test_demo_sign_in_checks_the_credential_for_a_roster_user_through_the_trusted_gateway(monkeypatch):
+def test_demo_sign_in_checks_the_credential_for_a_roster_user_through_the_trusted_gateway(
+    monkeypatch,
+):
     """Without a database: a wrong credential for a roster user from the resolved loopback address is a 401 and is audited."""
     audited = []
     user = SimpleNamespace(id="5afe0d00-0000-4000-8000-000000000003", is_active=True)
@@ -238,22 +298,36 @@ def test_demo_sign_in_checks_the_credential_for_a_roster_user_through_the_truste
     assert audited == [(user.id, "wrong_password", "demo-triager", "127.0.0.1")]
 
 
-def test_demo_sign_in_refuses_a_username_outside_the_demo_roles_without_a_lookup(monkeypatch):
+def test_demo_sign_in_refuses_a_username_outside_the_demo_roles_without_a_lookup(
+    monkeypatch,
+):
     monkeypatch.setattr(api, "hit_rate_limit", lambda key, window: 1)
-    monkeypatch.setattr(api, "find_user", lambda username: pytest.fail("a non-demo username must not be looked up"))
+    monkeypatch.setattr(
+        api,
+        "find_user",
+        lambda username: pytest.fail("a non-demo username must not be looked up"),
+    )
     audited = []
     monkeypatch.setattr(api, "record_login_failure", lambda *args: audited.append(args))
     client = TestClient(api.app, client=LOOPBACK)
     with process_env(demo_env()):
-        response = client.post(SIGN_IN, json={"username": "example-user", "credential": "anything-at-all"})
+        response = client.post(
+            SIGN_IN, json={"username": "example-user", "credential": "anything-at-all"}
+        )
     assert response.status_code == 401
     assert response.json()["detail"] == "invalid credentials"
     assert audited == [(None, "unknown_user", "example-user", "127.0.0.1")]
 
 
 @pytest.mark.parametrize("peer", [LOOPBACK, (GATEWAY, 50000)])
-def test_production_mode_refuses_demo_sign_in_even_through_the_trusted_gateway(monkeypatch, peer):
-    monkeypatch.setattr(api, "find_user", lambda username: pytest.fail("production must not look up a user"))
+def test_production_mode_refuses_demo_sign_in_even_through_the_trusted_gateway(
+    monkeypatch, peer
+):
+    monkeypatch.setattr(
+        api,
+        "find_user",
+        lambda username: pytest.fail("production must not look up a user"),
+    )
     client = TestClient(api.app, client=peer)
     with process_env(production_env() | {"SAFE_TRUSTED_PROXIES": GATEWAY}):
         response = client.post(
@@ -268,13 +342,23 @@ def test_production_mode_refuses_demo_sign_in_even_through_the_trusted_gateway(m
 # --- creation paths against a fake connection (no database) -------------------------------------------------------
 
 
-def test_fresh_seed_writes_the_admin_file_with_mode_0600_and_prints_nothing(tmp_path, monkeypatch, capsys, caplog):
+def test_fresh_seed_writes_the_admin_file_with_mode_0600_and_prints_nothing(
+    tmp_path, monkeypatch, capsys, caplog
+):
     _fake_database(monkeypatch)
     recorded = {}
     monkeypatch.setattr(
-        demo_seed, "_insert_dataset", lambda conn, credential_hash, storage, provider: recorded.update(hash=credential_hash)
+        demo_seed,
+        "_insert_dataset",
+        lambda conn, credential_hash, storage, provider: recorded.update(
+            hash=credential_hash
+        ),
     )
-    monkeypatch.setattr(demo_seed, "_apply_version_2", lambda conn, credential_dir, written: recorded.update(v2=True))
+    monkeypatch.setattr(
+        demo_seed,
+        "_apply_version_2",
+        lambda conn, credential_dir, written: recorded.update(v2=True),
+    )
     credential_dir = tmp_path / "credentials"
     env = demo_env(**{CREDENTIAL_DIR: str(credential_dir)})
 
@@ -298,15 +382,23 @@ def test_the_single_file_setting_still_names_the_admin_file(tmp_path, monkeypatc
     monkeypatch.setattr(demo_seed, "_apply_version_2", lambda *args: None)
     credential_dir = tmp_path / "credentials"
     legacy = tmp_path / "legacy-credential"
-    demo_seed.seed(demo_env(**{CREDENTIAL_DIR: str(credential_dir), CREDENTIAL_FILE: str(legacy)}))
+    demo_seed.seed(
+        demo_env(**{CREDENTIAL_DIR: str(credential_dir), CREDENTIAL_FILE: str(legacy)})
+    )
     assert legacy.exists()
     assert stat.S_IMODE(legacy.stat().st_mode) == 0o600
-    assert not (credential_dir / f"{DEMO_ADMIN_USERNAME}{demo_seed.CREDENTIAL_SUFFIX}").exists()
+    assert not (
+        credential_dir / f"{DEMO_ADMIN_USERNAME}{demo_seed.CREDENTIAL_SUFFIX}"
+    ).exists()
 
 
 def test_seed_never_overwrites_an_existing_credential_file(tmp_path, monkeypatch):
     _fake_database(monkeypatch)
-    monkeypatch.setattr(demo_seed, "_insert_dataset", lambda *args: pytest.fail("nothing must be written"))
+    monkeypatch.setattr(
+        demo_seed,
+        "_insert_dataset",
+        lambda *args: pytest.fail("nothing must be written"),
+    )
     credential_dir = tmp_path / "credentials"
     credential_dir.mkdir()
     path = credential_dir / f"{DEMO_ADMIN_USERNAME}{demo_seed.CREDENTIAL_SUFFIX}"
@@ -334,7 +426,10 @@ def test_failed_version_2_removes_the_files_it_wrote_in_this_run(tmp_path, monke
     monkeypatch.setattr(demo_seed, "_marker_version", lambda conn: 1)
 
     def failing_version_2(conn, credential_dir, written):
-        demo_seed._new_credential(os.path.join(credential_dir, "demo-reporter" + demo_seed.CREDENTIAL_SUFFIX), written)
+        demo_seed._new_credential(
+            os.path.join(credential_dir, "demo-reporter" + demo_seed.CREDENTIAL_SUFFIX),
+            written,
+        )
         raise RuntimeError("simulated failure in version 2")
 
     monkeypatch.setattr(demo_seed, "_apply_version_2", failing_version_2)
@@ -356,11 +451,21 @@ def test_repository_holds_no_default_demo_credential():
     pattern = re.compile(
         r"(?i)(demo[_-]?(password|passwd|credential)\s*[:=]\s*[\"'][^\"']+[\"']|changeme|demo-password|demo_password)"
     )
-    roots = [REPO_ROOT / "backend" / "src", REPO_ROOT / "backend" / "migrations", REPO_ROOT / "frontend" / "src",
-             REPO_ROOT / "db", REPO_ROOT / "gateway", REPO_ROOT / "scripts"]
+    roots = [
+        REPO_ROOT / "backend" / "src",
+        REPO_ROOT / "backend" / "migrations",
+        REPO_ROOT / "frontend" / "src",
+        REPO_ROOT / "db",
+        REPO_ROOT / "gateway",
+        REPO_ROOT / "scripts",
+    ]
     files = [REPO_ROOT / "compose.yaml"]
     for root in roots:
-        files.extend(path for path in root.rglob("*") if path.is_file() and "node_modules" not in path.parts)
+        files.extend(
+            path
+            for path in root.rglob("*")
+            if path.is_file() and "node_modules" not in path.parts
+        )
     offenders = []
     for path in files:
         try:
@@ -383,14 +488,20 @@ def _support_files(work: Path) -> dict[str, str]:
     evidence.mkdir()
     jwt_key = work / "jwt-key"
     jwt_key.write_text(secrets.token_urlsafe(48) + "\n", encoding="utf-8")
-    return {"SAFE_EVIDENCE_DIR": str(evidence), "SAFE_EVIDENCE_KEK_FILE": str(kek), "SAFE_JWT_KEY_FILE": str(jwt_key)}
+    return {
+        "SAFE_EVIDENCE_DIR": str(evidence),
+        "SAFE_EVIDENCE_KEK_FILE": str(kek),
+        "SAFE_JWT_KEY_FILE": str(jwt_key),
+    }
 
 
 @pytest.fixture(scope="module")
 def demo_dataset(tmp_path_factory) -> Iterator[dict]:
     """Seeds the throwaway database once for this module (both seed versions). Its process environment is the demo one."""
     if not DATABASE_ENABLED:
-        pytest.skip("set SAFE_TEST_DATABASE=1 and the SAFE_DB_* settings to run the database tests")
+        pytest.skip(
+            "set SAFE_TEST_DATABASE=1 and the SAFE_DB_* settings to run the database tests"
+        )
     work = tmp_path_factory.mktemp("demo")
     credential_dir = work / "credentials"
     env = demo_env(**{CREDENTIAL_DIR: str(credential_dir)}) | _support_files(work)
@@ -400,16 +511,24 @@ def demo_dataset(tmp_path_factory) -> Iterator[dict]:
         outcome = demo_seed.seed(os.environ)
         # These tests read the credential files the seed writes in this run. A database that already holds the demo
         # dataset (for example one reused from an earlier run) gets no new files, so fail here with the reason.
-        assert outcome.created, "the test database already holds the demo dataset; run the database tests on a fresh database"
+        assert outcome.created, (
+            "the test database already holds the demo dataset; run the database tests on a fresh database"
+        )
         yield {"outcome": outcome, "dir": credential_dir, "env": env}
 
 
 def _table_counts() -> dict[str, int]:
     with connect() as conn:
-        tables = [row[0] for row in conn.execute(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename").fetchall()]
+        tables = [
+            row[0]
+            for row in conn.execute(
+                "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
+            ).fetchall()
+        ]
         return {
-            table: conn.execute(sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table))).fetchone()[0]
+            table: conn.execute(
+                sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table))
+            ).fetchone()[0]
             for table in tables
         }
 
@@ -424,7 +543,11 @@ def _directory_snapshot(directory: Path) -> dict[str, str]:
 
 
 def _credential(dataset: dict, username: str) -> str:
-    return (dataset["dir"] / f"{username}{demo_seed.CREDENTIAL_SUFFIX}").read_text(encoding="utf-8").strip()
+    return (
+        (dataset["dir"] / f"{username}{demo_seed.CREDENTIAL_SUFFIX}")
+        .read_text(encoding="utf-8")
+        .strip()
+    )
 
 
 def _stored_hash(username: str) -> str | None:
@@ -443,29 +566,44 @@ def _stored_hash(username: str) -> str | None:
 
 def _marker_version() -> int:
     with connect() as conn:
-        return conn.execute("SELECT seed_version FROM demo_dataset WHERE NOT is_deleted").fetchone()[0]
+        return conn.execute(
+            "SELECT seed_version FROM demo_dataset WHERE NOT is_deleted"
+        ).fetchone()[0]
 
 
 @requires_database
 def test_seed_creates_one_user_per_demo_role_with_its_own_credential(demo_dataset):
     with connect() as conn:
-        users = dict(conn.execute("SELECT username, role FROM users WHERE username LIKE 'demo-%' AND NOT is_deleted").fetchall())
-        credentialed = {row[0] for row in conn.execute(
-            """
+        users = dict(
+            conn.execute(
+                "SELECT username, role FROM users WHERE username LIKE 'demo-%' AND NOT is_deleted"
+            ).fetchall()
+        )
+        credentialed = {
+            row[0]
+            for row in conn.execute(
+                """
             SELECT u.username FROM demo_user_credentials c JOIN users u ON u.id = c.user_id
             WHERE NOT c.is_deleted
             """
-        ).fetchall()}
+            ).fetchall()
+        }
         cases = conn.execute(
-            "SELECT count(*) FROM cases WHERE id IN (%s, %s, %s) AND NOT is_deleted", SEEDED_CASES
+            "SELECT count(*) FROM cases WHERE id IN (%s, %s, %s) AND NOT is_deleted",
+            SEEDED_CASES,
         ).fetchone()[0]
         layers = conn.execute(
-            "SELECT count(*) FROM review_layers WHERE round_id = %s AND NOT is_deleted", (demo_seed.ROUND_ONE,)
+            "SELECT count(*) FROM review_layers WHERE round_id = %s AND NOT is_deleted",
+            (demo_seed.ROUND_ONE,),
         ).fetchone()[0]
         approvals = conn.execute(
-            "SELECT count(*) FROM disclosure_approvals WHERE version_id = %s", (demo_seed.DISCLOSURE_VERSION_ONE,)
+            "SELECT count(*) FROM disclosure_approvals WHERE version_id = %s",
+            (demo_seed.DISCLOSURE_VERSION_ONE,),
         ).fetchone()[0]
-    assert users == {**{r.username: r.role for r in DEMO_ROLES}, "demo-reporting-owner": "reporting_owner"}
+    assert users == {
+        **{r.username: r.role for r in DEMO_ROLES},
+        "demo-reporting-owner": "reporting_owner",
+    }
     assert credentialed == set(ROLE_USERNAMES)
     assert cases == 3
     assert layers == 11
@@ -488,7 +626,9 @@ def test_seed_writes_one_0600_credential_file_per_demo_role(demo_dataset):
 
 
 @requires_database
-def test_second_run_of_either_version_creates_no_rows_and_no_files(demo_dataset, capsys, caplog):
+def test_second_run_of_either_version_creates_no_rows_and_no_files(
+    demo_dataset, capsys, caplog
+):
     before_counts = _table_counts()
     before_files = _directory_snapshot(demo_dataset["dir"])
     with patch.dict(os.environ, demo_dataset["env"], clear=False):
@@ -518,7 +658,9 @@ def test_upgrade_on_a_version_1_database_adds_the_credentials_once(tmp_path_fact
         port=int(host["SAFE_DB_PORT"]),
         dbname="postgres",
         user=host["SAFE_DB_USER"],
-        password=Path(host["SAFE_DB_PASSWORD_FILE"]).read_text(encoding="utf-8").strip(),
+        password=Path(host["SAFE_DB_PASSWORD_FILE"])
+        .read_text(encoding="utf-8")
+        .strip(),
         autocommit=True,
     ) as admin:
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(db_name)))
@@ -536,7 +678,12 @@ def test_upgrade_on_a_version_1_database_adds_the_credentials_once(tmp_path_fact
             migrate()
         # The first seed version as it was before this change: the administrator's credential is in the marker only.
         with connect() as conn:
-            demo_seed._insert_dataset(conn, hash_password(legacy_credential), storage_from_env(), key_provider_from_env())
+            demo_seed._insert_dataset(
+                conn,
+                hash_password(legacy_credential),
+                storage_from_env(),
+                key_provider_from_env(),
+            )
         legacy_file.write_text(legacy_credential + "\n", encoding="utf-8")
         os.chmod(legacy_file, 0o600)
         migrate()  # the full migrations directory: 0046 copies the administrator's hash into the credential table
@@ -546,7 +693,10 @@ def test_upgrade_on_a_version_1_database_adds_the_credentials_once(tmp_path_fact
         assert verify_password(admin_hash, legacy_credential)
 
         credential_dir = work / "credentials"
-        upgrade_env = dict(os.environ) | {CREDENTIAL_DIR: str(credential_dir), CREDENTIAL_FILE: str(legacy_file)}
+        upgrade_env = dict(os.environ) | {
+            CREDENTIAL_DIR: str(credential_dir),
+            CREDENTIAL_FILE: str(legacy_file),
+        }
         outcome = demo_seed.upgrade(upgrade_env)
 
         assert outcome.created is True
@@ -556,12 +706,16 @@ def test_upgrade_on_a_version_1_database_adds_the_credentials_once(tmp_path_fact
         assert set(files) == set(ROLE_USERNAMES) - {DEMO_ADMIN_USERNAME}
         for username, path in files.items():
             assert stat.S_IMODE(path.stat().st_mode) == 0o600
-            assert verify_password(_stored_hash(username), path.read_text(encoding="utf-8").strip())
+            assert verify_password(
+                _stored_hash(username), path.read_text(encoding="utf-8").strip()
+            )
         # The administrator keeps its credential and its file.
         assert demo_credential_hash(DEMO_ADMIN_ID) == admin_hash
         assert verify_password(demo_credential_hash(DEMO_ADMIN_ID), legacy_credential)
         assert legacy_file.read_text(encoding="utf-8") == legacy_credential + "\n"
-        assert not (credential_dir / f"{DEMO_ADMIN_USERNAME}{demo_seed.CREDENTIAL_SUFFIX}").exists()
+        assert not (
+            credential_dir / f"{DEMO_ADMIN_USERNAME}{demo_seed.CREDENTIAL_SUFFIX}"
+        ).exists()
         with connect() as conn:
             assignments = conn.execute(
                 "SELECT count(*) FROM case_assignments WHERE case_id = %s AND user_id = %s AND NOT is_deleted",
@@ -577,16 +731,22 @@ def test_upgrade_on_a_version_1_database_adds_the_credentials_once(tmp_path_fact
         assert _directory_snapshot(credential_dir) == snapshot
 
 
-def _demo_sign_in(dataset: dict, username: str, credential: str, *, peer=LOOPBACK) -> object:
+def _demo_sign_in(
+    dataset: dict, username: str, credential: str, *, peer=LOOPBACK
+) -> object:
     client = TestClient(api.app, client=peer)
     with patch.dict(os.environ, dataset["env"], clear=False):
-        return client.post(SIGN_IN, json={"username": username, "credential": credential})
+        return client.post(
+            SIGN_IN, json={"username": username, "credential": credential}
+        )
 
 
 @requires_database
 def test_each_demo_role_signs_in_with_its_own_credential(demo_dataset):
     for username in ROLE_USERNAMES:
-        response = _demo_sign_in(demo_dataset, username, _credential(demo_dataset, username))
+        response = _demo_sign_in(
+            demo_dataset, username, _credential(demo_dataset, username)
+        )
         assert response.status_code == 200, username
         body = response.json()
         assert body["password_change_required"] is False
@@ -596,7 +756,9 @@ def test_each_demo_role_signs_in_with_its_own_credential(demo_dataset):
 
 @requires_database
 def test_another_roles_credential_is_refused(demo_dataset):
-    response = _demo_sign_in(demo_dataset, "demo-investigator", _credential(demo_dataset, "demo-triager"))
+    response = _demo_sign_in(
+        demo_dataset, "demo-investigator", _credential(demo_dataset, "demo-triager")
+    )
     assert response.status_code == 401
     assert "safe_access" not in response.cookies
 
@@ -610,22 +772,44 @@ def test_wrong_credential_and_non_demo_username_get_the_same_refusal(demo_datase
         ("demo-reporting-owner", triager),
         ("demo-investigator", triager),
     ]
-    responses = [_demo_sign_in(demo_dataset, username, credential) for username, credential in attempts]
+    responses = [
+        _demo_sign_in(demo_dataset, username, credential)
+        for username, credential in attempts
+    ]
     assert {response.status_code for response in responses} == {401}
-    assert len({json.dumps(without_request_id(response), sort_keys=True) for response in responses}) == 1
+    assert (
+        len(
+            {
+                json.dumps(without_request_id(response), sort_keys=True)
+                for response in responses
+            }
+        )
+        == 1
+    )
     assert all("safe_access" not in response.cookies for response in responses)
 
 
 @requires_database
-def test_demo_sign_in_is_refused_for_a_remote_caller_even_with_the_right_credential(demo_dataset):
-    response = _demo_sign_in(demo_dataset, "demo-reporter", _credential(demo_dataset, "demo-reporter"), peer=REMOTE)
+def test_demo_sign_in_is_refused_for_a_remote_caller_even_with_the_right_credential(
+    demo_dataset,
+):
+    response = _demo_sign_in(
+        demo_dataset,
+        "demo-reporter",
+        _credential(demo_dataset, "demo-reporter"),
+        peer=REMOTE,
+    )
     assert response.status_code == 403
 
 
 @requires_database
-def test_demo_sign_in_accepts_loopback_forwarded_by_the_trusted_gateway_only(demo_dataset):
+def test_demo_sign_in_accepts_loopback_forwarded_by_the_trusted_gateway_only(
+    demo_dataset,
+):
     credential = _credential(demo_dataset, "demo-reporter")
-    with patch.dict(os.environ, demo_dataset["env"] | {"SAFE_TRUSTED_PROXIES": GATEWAY}, clear=False):
+    with patch.dict(
+        os.environ, demo_dataset["env"] | {"SAFE_TRUSTED_PROXIES": GATEWAY}, clear=False
+    ):
         accepted = TestClient(api.app, client=(GATEWAY, 50000)).post(
             SIGN_IN,
             headers={"X-Forwarded-For": "127.0.0.1"},
@@ -647,7 +831,11 @@ def test_production_mode_never_accepts_a_demo_credential(demo_dataset):
     client = TestClient(api.app, client=LOOPBACK)
     with process_env(production_env()):
         response = client.post(
-            SIGN_IN, json={"username": "demo-admin", "credential": _credential(demo_dataset, "demo-admin")}
+            SIGN_IN,
+            json={
+                "username": "demo-admin",
+                "credential": _credential(demo_dataset, "demo-admin"),
+            },
         )
     assert response.status_code == 403
     assert "safe_access" not in response.cookies
@@ -657,7 +845,9 @@ def _signed_in(dataset: dict, username: str) -> TestClient:
     response = _demo_sign_in(dataset, username, _credential(dataset, username))
     assert response.status_code == 200, username
     client = TestClient(api.app, client=LOOPBACK)
-    client.headers.update({"Authorization": f"Bearer {response.json()['access_token']}"})
+    client.headers.update(
+        {"Authorization": f"Bearer {response.json()['access_token']}"}
+    )
     return client
 
 
@@ -697,7 +887,9 @@ def test_seeded_cases_are_visible_to_the_roles_their_real_role_allows(demo_datas
             if expected is None:
                 assert listing.status_code == 403, username
                 for case_id in SEEDED_CASES:
-                    assert client.get(f"/api/v1/cases/{case_id}").status_code == 403, username
+                    assert client.get(f"/api/v1/cases/{case_id}").status_code == 403, (
+                        username
+                    )
                 continue
             assert listing.status_code == 200, username
             # The database is shared with the other test modules, so only the seeded cases are compared.
@@ -705,7 +897,10 @@ def test_seeded_cases_are_visible_to_the_roles_their_real_role_allows(demo_datas
             assert listed == expected, username
             for case_id in SEEDED_CASES:
                 detail = client.get(f"/api/v1/cases/{case_id}")
-                assert detail.status_code == (200 if case_id in expected else 404), (username, case_id)
+                assert detail.status_code == (200 if case_id in expected else 404), (
+                    username,
+                    case_id,
+                )
 
 
 # --- the container CLI's demo sign-in against the real API (cli.py, scripts/demo.sh cli-show) ----------------------
@@ -738,11 +933,18 @@ def _cli_through_api(monkeypatch) -> list[tuple[str, str]]:
         log.append((request.get_method(), split.path))
         # A new client per request, so no cookie from an earlier sign-in is sent with a bearer request.
         response = TestClient(api.app, client=LOOPBACK).request(
-            request.get_method(), path, content=request.data, headers=dict(request.header_items())
+            request.get_method(),
+            path,
+            content=request.data,
+            headers=dict(request.header_items()),
         )
         if response.status_code >= 400:
             raise urllib.error.HTTPError(
-                request.full_url, response.status_code, "error", None, io.BytesIO(response.content)
+                request.full_url,
+                response.status_code,
+                "error",
+                None,
+                io.BytesIO(response.content),
             )
         return _CliResponse(response.content)
 
@@ -759,15 +961,26 @@ def _write_credential(tmp_path: Path, value: str) -> str:
 
 
 @requires_database
-def test_cli_demo_sign_in_reads_a_seeded_case_through_the_real_api(demo_dataset, monkeypatch, tmp_path, capsys):
+def test_cli_demo_sign_in_reads_a_seeded_case_through_the_real_api(
+    demo_dataset, monkeypatch, tmp_path, capsys
+):
     log = _cli_through_api(monkeypatch)
     credential = _credential(demo_dataset, "demo-investigator")
     path = _write_credential(tmp_path, credential)
 
     with patch.dict(os.environ, demo_dataset["env"], clear=False):
         code = cli.main(
-            ["--no-banner", "case", "show", CASE_ONE, "--json",
-             "--demo-username", "demo-investigator", "--demo-credential-file", path]
+            [
+                "--no-banner",
+                "case",
+                "show",
+                CASE_ONE,
+                "--json",
+                "--demo-username",
+                "demo-investigator",
+                "--demo-credential-file",
+                path,
+            ]
         )
 
     output = capsys.readouterr()
@@ -788,8 +1001,17 @@ def test_cli_demo_sign_in_with_another_roles_credential_gets_the_normal_refusal(
 
     with patch.dict(os.environ, demo_dataset["env"], clear=False):
         code = cli.main(
-            ["--no-banner", "case", "show", CASE_ONE, "--json",
-             "--demo-username", "demo-investigator", "--demo-credential-file", path]
+            [
+                "--no-banner",
+                "case",
+                "show",
+                CASE_ONE,
+                "--json",
+                "--demo-username",
+                "demo-investigator",
+                "--demo-credential-file",
+                path,
+            ]
         )
 
     output = capsys.readouterr()
@@ -799,18 +1021,28 @@ def test_cli_demo_sign_in_with_another_roles_credential_gets_the_normal_refusal(
 
 
 @requires_database
-def test_cli_demo_sign_in_refuses_a_non_demo_username_on_the_server(demo_dataset, monkeypatch, tmp_path, capsys):
+def test_cli_demo_sign_in_refuses_a_non_demo_username_on_the_server(
+    demo_dataset, monkeypatch, tmp_path, capsys
+):
     log = _cli_through_api(monkeypatch)
     path = _write_credential(tmp_path, _credential(demo_dataset, "demo-investigator"))
 
     with patch.dict(os.environ, demo_dataset["env"], clear=False):
         code = cli.main(
-            ["--no-banner", "case", "show", CASE_ONE, "--json",
-             "--demo-username", "demo-reporting-owner", "--demo-credential-file", path]
+            [
+                "--no-banner",
+                "case",
+                "show",
+                CASE_ONE,
+                "--json",
+                "--demo-username",
+                "demo-reporting-owner",
+                "--demo-credential-file",
+                path,
+            ]
         )
 
     output = capsys.readouterr()
     assert code == 1
     assert log == [("POST", SIGN_IN)]
     assert output.err == "error: invalid credentials\n"
-

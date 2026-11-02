@@ -16,8 +16,12 @@ AUDIENCE = {
     None: lambda named, organisation, external, approved: True,
     "GREEN": lambda named, organisation, external, approved: True,
     "RED": lambda named, organisation, external, approved: named,
-    "AMBER+STRICT": lambda named, organisation, external, approved: named or organisation,
-    "AMBER": lambda named, organisation, external, approved: named or organisation or external,
+    "AMBER+STRICT": lambda named, organisation, external, approved: (
+        named or organisation
+    ),
+    "AMBER": lambda named, organisation, external, approved: (
+        named or organisation or external
+    ),
     "CLEAR": lambda named, organisation, external, approved: approved,
 }
 
@@ -40,12 +44,23 @@ def user(role: str) -> User:
 def test_permits_follows_the_audience_of_each_label(label, flags):
     named, organisation, external, approved = flags
     expected = AUDIENCE[label](named, organisation, external, approved)
-    assert tlp.permits(label, named=named, organisation=organisation, external=external, approved=approved) is expected
+    assert (
+        tlp.permits(
+            label,
+            named=named,
+            organisation=organisation,
+            external=external,
+            approved=approved,
+        )
+        is expected
+    )
 
 
 def test_each_label_is_narrower_than_the_next_wider_audience():
     # RED: only named people. AMBER+STRICT adds the organisation. AMBER adds external parties.
-    only_organisation = dict(named=False, organisation=True, external=False, approved=False)
+    only_organisation = dict(
+        named=False, organisation=True, external=False, approved=False
+    )
     only_external = dict(named=False, organisation=False, external=True, approved=False)
     assert not tlp.permits("RED", **only_organisation)
     assert tlp.permits("AMBER+STRICT", **only_organisation)
@@ -75,7 +90,9 @@ def test_a_derivative_with_no_original_label_may_take_any_label():
 
 def test_unknown_label_is_an_error():
     with pytest.raises(ValueError):
-        tlp.permits("PUBLIC", named=True, organisation=True, external=True, approved=True)
+        tlp.permits(
+            "PUBLIC", named=True, organisation=True, external=True, approved=True
+        )
 
 
 @pytest.mark.parametrize("role", ["reporter", "reporting_owner"])
@@ -85,7 +102,10 @@ def test_reporter_channel_roles_are_external_and_not_organisation(role):
     assert recipient.organisation is False
 
 
-@pytest.mark.parametrize("role", ["triager", "investigator", "reviewer", "admin", "auditor", "disclosure_approver"])
+@pytest.mark.parametrize(
+    "role",
+    ["triager", "investigator", "reviewer", "admin", "auditor", "disclosure_approver"],
+)
 def test_staff_roles_are_organisation_and_not_external(role):
     recipient = tlp.recipient_for(user(role))
     assert recipient.organisation is True

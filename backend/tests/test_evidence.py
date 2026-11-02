@@ -31,8 +31,17 @@ from safe_kit import (
 )
 from safe_kit.cases import CaseScope
 from safe_kit.db import connect
-from safe_kit.evidence_keys import KeyProviderError, LocalFileKeyProvider, VaultTransitKeyProvider
-from safe_kit.evidence_storage import InvalidObjectKey, LocalVolumeStorage, ObjectNotFound, StorageError
+from safe_kit.evidence_keys import (
+    KeyProviderError,
+    LocalFileKeyProvider,
+    VaultTransitKeyProvider,
+)
+from safe_kit.evidence_storage import (
+    InvalidObjectKey,
+    LocalVolumeStorage,
+    ObjectNotFound,
+    StorageError,
+)
 from safe_kit.users import User
 from error_body import without_request_id
 
@@ -77,7 +86,9 @@ class MemoryStorage:
         return object_key in self.objects
 
 
-def stored_record(data: bytes, storage_key: str, provider, storage: MemoryStorage) -> evidence.StoredEvidence:
+def stored_record(
+    data: bytes, storage_key: str, provider, storage: MemoryStorage
+) -> evidence.StoredEvidence:
     """Seal the data as create_evidence does, store it, and return the record that the database would hold."""
     sealed = evidence_crypto.seal(data, storage_key, provider)
     storage.put(storage_key, sealed.ciphertext)
@@ -96,19 +107,25 @@ def stored_record(data: bytes, storage_key: str, provider, storage: MemoryStorag
     )
 
 
-def multipart(filename: str, content_type: str, data: bytes, boundary: str = "SAFEBOUNDARY") -> tuple[bytes, str]:
+def multipart(
+    filename: str, content_type: str, data: bytes, boundary: str = "SAFEBOUNDARY"
+) -> tuple[bytes, str]:
     body = (
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
-        f"Content-Type: {content_type}\r\n\r\n"
-    ).encode() + data + f"\r\n--{boundary}--\r\n".encode()
+        (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+            f"Content-Type: {content_type}\r\n\r\n"
+        ).encode()
+        + data
+        + f"\r\n--{boundary}--\r\n".encode()
+    )
     return body, f"multipart/form-data; boundary={boundary}"
 
 
 def chunked(body: bytes, size: int = 1000):
     """A request body sent as a generator: httpx sends it with chunked encoding and no Content-Length."""
     for start in range(0, len(body), size):
-        yield body[start:start + size]
+        yield body[start : start + size]
 
 
 INVESTIGATOR = User(
@@ -129,7 +146,11 @@ def client(monkeypatch, provider):
     app = FastAPI()
     app.include_router(evidence_api.evidence_router)
     app.dependency_overrides[auth.current_user] = lambda: INVESTIGATOR
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"evidence:read", "evidence:write"}))
+    monkeypatch.setattr(
+        auth,
+        "permissions_for_role",
+        lambda role: frozenset({"evidence:read", "evidence:write"}),
+    )
     monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope: True)
     monkeypatch.setattr(evidence_api, "_PROVIDER", provider)
     monkeypatch.setenv("SAFE_EVIDENCE_MAX_BYTES", "1000")
@@ -137,7 +158,17 @@ def client(monkeypatch, provider):
 
 
 def fake_create(calls: list, **kwargs):
-    def create(case_id, uploader_id, filename, media_type, data, storage, provider, scope, **kwargs):
+    def create(
+        case_id,
+        uploader_id,
+        filename,
+        media_type,
+        data,
+        storage,
+        provider,
+        scope,
+        **kwargs,
+    ):
         calls.append((case_id, uploader_id, filename, media_type, len(data)))
         return evidence.EvidenceItem(
             id=str(uuid.uuid4()),
@@ -165,7 +196,12 @@ def test_round_trip_encrypts_and_decrypts(provider):
     assert len(sealed.wrapped_data_key) == 12 + 32 + 16  # wrap nonce, data key, GCM tag
     assert sealed.key_id == provider.key_id
     opened = evidence_crypto.open_sealed(
-        sealed.ciphertext, sealed.nonce, sealed.wrapped_data_key, sealed.key_id, key, provider,
+        sealed.ciphertext,
+        sealed.nonce,
+        sealed.wrapped_data_key,
+        sealed.key_id,
+        key,
+        provider,
     )
     assert opened == PDF
 
@@ -181,7 +217,12 @@ def test_every_object_gets_a_fresh_data_key_and_nonce(provider):
     with pytest.raises(KeyProviderError):
         # The storage key is bound as associated data of the wrap: a wrapped key cannot be used under another key.
         evidence_crypto.open_sealed(
-            other.ciphertext, other.nonce, other.wrapped_data_key, other.key_id, key_a, provider,
+            other.ciphertext,
+            other.nonce,
+            other.wrapped_data_key,
+            other.key_id,
+            key_a,
+            provider,
         )
 
 
@@ -191,17 +232,29 @@ def test_wrong_kek_fails(tmp_path, provider):
     sealed = evidence_crypto.seal(PDF, key, provider)
     with pytest.raises(KeyProviderError, match="cannot be unwrapped"):
         evidence_crypto.open_sealed(
-            sealed.ciphertext, sealed.nonce, sealed.wrapped_data_key, sealed.key_id, key, other,
+            sealed.ciphertext,
+            sealed.nonce,
+            sealed.wrapped_data_key,
+            sealed.key_id,
+            key,
+            other,
         )
 
 
 def test_key_id_mismatch_is_refused(tmp_path, provider):
-    renamed = LocalFileKeyProvider(write_kek(tmp_path / "kek2.bin"), key_id="local-file-2")
+    renamed = LocalFileKeyProvider(
+        write_kek(tmp_path / "kek2.bin"), key_id="local-file-2"
+    )
     key = str(uuid.uuid4())
     sealed = evidence_crypto.seal(PDF, key, provider)
     with pytest.raises(KeyProviderError, match="not the configured key"):
         evidence_crypto.open_sealed(
-            sealed.ciphertext, sealed.nonce, sealed.wrapped_data_key, sealed.key_id, key, renamed,
+            sealed.ciphertext,
+            sealed.nonce,
+            sealed.wrapped_data_key,
+            sealed.key_id,
+            key,
+            renamed,
         )
 
 
@@ -233,7 +286,10 @@ def test_tampered_ciphertext_with_a_matching_checksum_fails_authentication(provi
     damaged[10] ^= 0x01
     storage.objects[record.storage_key] = bytes(damaged)
     forged = evidence.StoredEvidence(
-        **{**record.__dict__, "sha256_ciphertext": evidence_crypto.sha256_hex(bytes(damaged))}
+        **{
+            **record.__dict__,
+            "sha256_ciphertext": evidence_crypto.sha256_hex(bytes(damaged)),
+        }
     )
     with pytest.raises(evidence.VerificationFailed) as failure:
         evidence.read_original(forged, storage, provider)
@@ -276,7 +332,12 @@ def test_kek_file_with_group_or_world_permissions_is_refused(tmp_path):
 
 def test_kek_file_owner_only_modes_are_accepted(tmp_path):
     for mode in (0o600, 0o400):
-        assert LocalFileKeyProvider(write_kek(tmp_path / f"kek-{mode:o}.bin", mode=mode)).key_id == "local-file-1"
+        assert (
+            LocalFileKeyProvider(
+                write_kek(tmp_path / f"kek-{mode:o}.bin", mode=mode)
+            ).key_id
+            == "local-file-1"
+        )
 
 
 def test_missing_empty_and_malformed_kek_files_are_refused(tmp_path):
@@ -288,7 +349,9 @@ def test_missing_empty_and_malformed_kek_files_are_refused(tmp_path):
     short = write_kek(tmp_path / "short.bin", raw=os.urandom(16))
     with pytest.raises(KeyProviderError, match="32"):
         LocalFileKeyProvider(short)
-    short_b64 = write_kek(tmp_path / "short-b64.txt", raw=base64.b64encode(os.urandom(16)))
+    short_b64 = write_kek(
+        tmp_path / "short-b64.txt", raw=base64.b64encode(os.urandom(16))
+    )
     with pytest.raises(KeyProviderError, match="32"):
         LocalFileKeyProvider(short_b64)
     not_base64 = write_kek(tmp_path / "text.bin", raw=b"not a key!!")
@@ -298,10 +361,14 @@ def test_missing_empty_and_malformed_kek_files_are_refused(tmp_path):
 
 def test_base64_kek_file_is_accepted(tmp_path):
     raw = os.urandom(32)
-    base64_provider = LocalFileKeyProvider(write_kek(tmp_path / "b64.txt", raw=base64.b64encode(raw) + b"\n"))
+    base64_provider = LocalFileKeyProvider(
+        write_kek(tmp_path / "b64.txt", raw=base64.b64encode(raw) + b"\n")
+    )
     raw_provider = LocalFileKeyProvider(write_kek(tmp_path / "raw.bin", raw=raw))
     wrapped = raw_provider.wrap(os.urandom(32), b"ctx")
-    assert base64_provider.unwrap(wrapped, b"ctx") == raw_provider.unwrap(wrapped, b"ctx")
+    assert base64_provider.unwrap(wrapped, b"ctx") == raw_provider.unwrap(
+        wrapped, b"ctx"
+    )
 
 
 def test_provider_repr_does_not_show_key_material(provider):
@@ -430,9 +497,14 @@ def test_long_filenames_are_capped_and_keep_a_short_extension():
 
 
 def test_media_type_allowlist_checks_declared_type_and_content():
-    assert evidence.check_media_type("application/pdf; charset=binary", PDF) == "application/pdf"
+    assert (
+        evidence.check_media_type("application/pdf; charset=binary", PDF)
+        == "application/pdf"
+    )
     assert evidence.check_media_type("text/plain", b"plain text") == "text/plain"
-    assert evidence.check_media_type("application/json", b'{"a": 1}') == "application/json"
+    assert (
+        evidence.check_media_type("application/json", b'{"a": 1}') == "application/json"
+    )
     for declared, data in [
         ("application/x-msdownload", PDF),
         ("application/zip", b"PK\x03\x04"),
@@ -461,7 +533,13 @@ def test_content_disposition_is_attachment_with_safe_fallback():
 
 
 def test_response_model_never_exposes_keys_or_storage_details():
-    forbidden = {"storage_key", "wrapped_data_key", "nonce", "key_id", "sha256_ciphertext"}
+    forbidden = {
+        "storage_key",
+        "wrapped_data_key",
+        "nonce",
+        "key_id",
+        "sha256_ciphertext",
+    }
     assert not forbidden & set(evidence_api.EvidenceResponse.model_fields)
 
 
@@ -500,25 +578,38 @@ def test_declared_content_length_over_the_limit_is_refused_early(client, monkeyp
     monkeypatch.setattr(evidence, "create_evidence", fake_create(calls))
     body, content_type = multipart("huge.txt", "text/plain", b"a" * 500_000)
     response = client.post(
-        f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={**idem(), "Content-Type": content_type},
+        f"/api/v1/cases/{uuid.uuid4()}/evidence",
+        content=body,
+        headers={**idem(), "Content-Type": content_type},
     )
     assert response.status_code == 413
     assert calls == []
 
 
-def test_file_within_the_limit_is_accepted_and_returns_metadata_only(client, monkeypatch):
+def test_file_within_the_limit_is_accepted_and_returns_metadata_only(
+    client, monkeypatch
+):
     calls: list = []
     monkeypatch.setattr(evidence, "create_evidence", fake_create(calls))
     data = PDF[:900]
     body, content_type = multipart("scan.pdf", "application/pdf", data)
     case_id = str(uuid.uuid4())
-    response = client.post(f"/api/v1/cases/{case_id}/evidence", content=chunked(body), headers={**idem(), "Content-Type": content_type})
+    response = client.post(
+        f"/api/v1/cases/{case_id}/evidence",
+        content=chunked(body),
+        headers={**idem(), "Content-Type": content_type},
+    )
     assert response.status_code == 201
     payload = response.json()
     assert payload["case_id"] == case_id and payload["status"] == "available"
-    assert payload["size_bytes"] == len(data) and payload["media_type"] == "application/pdf"
+    assert (
+        payload["size_bytes"] == len(data)
+        and payload["media_type"] == "application/pdf"
+    )
     assert not {"storage_key", "wrapped_data_key", "nonce", "key_id"} & set(payload)
-    assert calls == [(case_id, INVESTIGATOR.id, "scan.pdf", "application/pdf", len(data))]
+    assert calls == [
+        (case_id, INVESTIGATOR.id, "scan.pdf", "application/pdf", len(data))
+    ]
 
 
 def test_disallowed_media_type_is_415_and_nothing_is_stored(client, monkeypatch):
@@ -527,38 +618,68 @@ def test_disallowed_media_type_is_415_and_nothing_is_stored(client, monkeypatch)
 
     monkeypatch.setattr(evidence, "create_evidence", must_not_run)
     body, content_type = multipart("tool.zip", "application/zip", b"PK\x03\x04 data")
-    response = client.post(f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={**idem(), "Content-Type": content_type})
+    response = client.post(
+        f"/api/v1/cases/{uuid.uuid4()}/evidence",
+        content=body,
+        headers={**idem(), "Content-Type": content_type},
+    )
     assert response.status_code == 415
 
 
 def test_missing_file_field_and_empty_file_are_rejected(client, monkeypatch):
     monkeypatch.setattr(evidence, "create_evidence", fake_create([]))
     body, content_type = multipart("empty.txt", "text/plain", b"")
-    assert client.post(f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body,
-                       headers={**idem(), "Content-Type": content_type}).status_code == 422
-    plain = b"--X\r\nContent-Disposition: form-data; name=\"note\"\r\n\r\nhi\r\n--X--\r\n"
-    assert client.post(f"/api/v1/cases/{uuid.uuid4()}/evidence", content=plain,
-                       headers={**idem(), "Content-Type": "multipart/form-data; boundary=X"}).status_code == 422
+    assert (
+        client.post(
+            f"/api/v1/cases/{uuid.uuid4()}/evidence",
+            content=body,
+            headers={**idem(), "Content-Type": content_type},
+        ).status_code
+        == 422
+    )
+    plain = b'--X\r\nContent-Disposition: form-data; name="note"\r\n\r\nhi\r\n--X--\r\n'
+    assert (
+        client.post(
+            f"/api/v1/cases/{uuid.uuid4()}/evidence",
+            content=plain,
+            headers={**idem(), "Content-Type": "multipart/form-data; boundary=X"},
+        ).status_code
+        == 422
+    )
 
 
 def test_upload_is_refused_when_no_key_is_configured(client, monkeypatch):
     monkeypatch.setattr(evidence_api, "_PROVIDER", None)
     body, content_type = multipart("scan.pdf", "application/pdf", PDF[:100])
-    response = client.post(f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={**idem(), "Content-Type": content_type})
+    response = client.post(
+        f"/api/v1/cases/{uuid.uuid4()}/evidence",
+        content=body,
+        headers={**idem(), "Content-Type": content_type},
+    )
     assert response.status_code == 503
 
 
 def test_upload_to_a_case_the_caller_cannot_see_is_404(client, monkeypatch):
     monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope: False)
     body, content_type = multipart("scan.pdf", "application/pdf", PDF[:100])
-    response = client.post(f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={**idem(), "Content-Type": content_type})
+    response = client.post(
+        f"/api/v1/cases/{uuid.uuid4()}/evidence",
+        content=body,
+        headers={**idem(), "Content-Type": content_type},
+    )
     assert response.status_code == 404
 
 
 def test_upload_needs_evidence_write(client, monkeypatch):
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"cases:read_own"}))
+    monkeypatch.setattr(
+        auth, "permissions_for_role", lambda role: frozenset({"cases:read_own"})
+    )
     body, content_type = multipart("scan.pdf", "application/pdf", PDF[:100])
-    response = client.post(f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={**idem(), "Content-Type": content_type})
+    response = client.post(
+        f"/api/v1/cases/{uuid.uuid4()}/evidence",
+        content=body,
+        headers={**idem(), "Content-Type": content_type},
+    )
     assert response.status_code == 403
 
 
@@ -577,7 +698,11 @@ def refuse(*args, **kwargs):
 
 @pytest.mark.parametrize("url_template", READ_ENDPOINTS)
 def test_reading_evidence_needs_evidence_read(client, monkeypatch, url_template):
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"evidence:write", "cases:read_assigned"}))
+    monkeypatch.setattr(
+        auth,
+        "permissions_for_role",
+        lambda role: frozenset({"evidence:write", "cases:read_assigned"}),
+    )
     monkeypatch.setattr(evidence_api, "is_visible", refuse)
     monkeypatch.setattr(evidence, "find_stored", refuse)
     monkeypatch.setattr(evidence, "list_evidence", refuse)
@@ -587,16 +712,26 @@ def test_reading_evidence_needs_evidence_read(client, monkeypatch, url_template)
 
 
 @pytest.mark.parametrize("url_template", READ_ENDPOINTS)
-def test_reading_evidence_is_404_when_the_case_is_not_visible(client, monkeypatch, url_template):
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"evidence:read"}))
+def test_reading_evidence_is_404_when_the_case_is_not_visible(
+    client, monkeypatch, url_template
+):
+    monkeypatch.setattr(
+        auth, "permissions_for_role", lambda role: frozenset({"evidence:read"})
+    )
     monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope: False)
     monkeypatch.setattr(evidence, "find_stored", lambda evidence_id, scope: None)
     assert client.get(url_template.format(uuid.uuid4())).status_code == 404
 
 
 def test_listing_with_evidence_read_returns_the_page(client, monkeypatch):
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"evidence:read"}))
-    monkeypatch.setattr(evidence, "list_evidence", lambda case_id, limit, offset, recipient=None: ([], 0))
+    monkeypatch.setattr(
+        auth, "permissions_for_role", lambda role: frozenset({"evidence:read"})
+    )
+    monkeypatch.setattr(
+        evidence,
+        "list_evidence",
+        lambda case_id, limit, offset, recipient=None: ([], 0),
+    )
     response = client.get(f"/api/v1/cases/{uuid.uuid4()}/evidence")
     assert response.status_code == 200
     assert response.json() == {"items": [], "total": 0, "limit": 50, "offset": 0}
@@ -643,15 +778,27 @@ def test_custody_events_are_append_only():
 
     with pytest.raises(psycopg.errors.RaiseException):
         with connect() as conn:
-            conn.execute("UPDATE custody_events SET action = 'downloaded' WHERE id = %s", (event_id,))
+            conn.execute(
+                "UPDATE custody_events SET action = 'downloaded' WHERE id = %s",
+                (event_id,),
+            )
     with pytest.raises(psycopg.errors.RaiseException):
         with connect() as conn:
-            conn.execute("UPDATE custody_events SET details = '{\"x\": 1}'::jsonb WHERE id = %s", (event_id,))
+            conn.execute(
+                "UPDATE custody_events SET details = '{\"x\": 1}'::jsonb WHERE id = %s",
+                (event_id,),
+            )
     with connect() as conn:
-        conn.execute("UPDATE custody_events SET is_deleted = true, deleted_at = now() WHERE id = %s", (event_id,))
+        conn.execute(
+            "UPDATE custody_events SET is_deleted = true, deleted_at = now() WHERE id = %s",
+            (event_id,),
+        )
     with pytest.raises(psycopg.errors.RaiseException):
         with connect() as conn:
-            conn.execute("UPDATE custody_events SET is_deleted = false, deleted_at = NULL WHERE id = %s", (event_id,))
+            conn.execute(
+                "UPDATE custody_events SET is_deleted = false, deleted_at = NULL WHERE id = %s",
+                (event_id,),
+            )
 
 
 # --- case visibility applied to evidence: database-backed --------------------------------------------------------
@@ -677,7 +824,8 @@ def request_as(user_id: str, method: str, url: str, **kwargs):
 def evidence_count(case_id: str) -> int:
     with connect() as conn:
         return conn.execute(
-            "SELECT count(*) FROM evidence_items WHERE case_id = %s AND NOT is_deleted", (case_id,)
+            "SELECT count(*) FROM evidence_items WHERE case_id = %s AND NOT is_deleted",
+            (case_id,),
         ).fetchone()[0]
 
 
@@ -709,11 +857,23 @@ def evidence_world(monkeypatch, provider):
     storage = MemoryStorage()
     monkeypatch.setattr(evidence_api, "_PROVIDER", provider)
     monkeypatch.setattr(evidence_api, "storage_from_env", lambda: storage)
-    case = cases.create_case("Evidence access case", datetime(2026, 10, 30, 9, tzinfo=UTC), people["reporter"])
-    outcome, _ = cases.assign_member(case.id, people["investigator"], CaseScope(people["triager"], read_all=True))
+    case = cases.create_case(
+        "Evidence access case",
+        datetime(2026, 10, 30, 9, tzinfo=UTC),
+        people["reporter"],
+    )
+    outcome, _ = cases.assign_member(
+        case.id, people["investigator"], CaseScope(people["triager"], read_all=True)
+    )
     assert outcome is cases.Outcome.OK
     item = evidence.create_evidence(
-        case.id, people["investigator"], "scan.pdf", "application/pdf", PDF, storage, provider,
+        case.id,
+        people["investigator"],
+        "scan.pdf",
+        "application/pdf",
+        PDF,
+        storage,
+        provider,
         CaseScope(people["triager"], read_all=True),
     )
     yield {"people": people, "case_id": case.id, "evidence_id": item.id}
@@ -721,14 +881,28 @@ def evidence_world(monkeypatch, provider):
 
 
 @requires_database
-def test_unassigned_investigator_gets_the_same_404_as_a_missing_item_or_case(evidence_world):
+def test_unassigned_investigator_gets_the_same_404_as_a_missing_item_or_case(
+    evidence_world,
+):
     other = evidence_world["people"]["other_investigator"]
     case_id, evidence_id = evidence_world["case_id"], evidence_world["evidence_id"]
     missing_case, missing_item = str(uuid.uuid4()), str(uuid.uuid4())
     for method, hidden_url, absent_url in [
-        ("get", f"/api/v1/cases/{case_id}/evidence", f"/api/v1/cases/{missing_case}/evidence"),
-        ("get", f"/api/v1/evidence/{evidence_id}/download", f"/api/v1/evidence/{missing_item}/download"),
-        ("get", f"/api/v1/evidence/{evidence_id}/custody", f"/api/v1/evidence/{missing_item}/custody"),
+        (
+            "get",
+            f"/api/v1/cases/{case_id}/evidence",
+            f"/api/v1/cases/{missing_case}/evidence",
+        ),
+        (
+            "get",
+            f"/api/v1/evidence/{evidence_id}/download",
+            f"/api/v1/evidence/{missing_item}/download",
+        ),
+        (
+            "get",
+            f"/api/v1/evidence/{evidence_id}/custody",
+            f"/api/v1/evidence/{missing_item}/custody",
+        ),
     ]:
         hidden = request_as(other, method, hidden_url)
         absent = request_as(other, method, absent_url)
@@ -752,8 +926,20 @@ def test_unassigned_investigator_cannot_upload_to_a_case_it_cannot_see(evidence_
     case_id = evidence_world["case_id"]
     body, content_type = multipart("scan.pdf", "application/pdf", PDF[:100])
     headers = {"Content-Type": content_type}
-    hidden = request_as(other, "post", f"/api/v1/cases/{case_id}/evidence", content=body, headers=headers)
-    absent = request_as(other, "post", f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers=headers)
+    hidden = request_as(
+        other,
+        "post",
+        f"/api/v1/cases/{case_id}/evidence",
+        content=body,
+        headers=headers,
+    )
+    absent = request_as(
+        other,
+        "post",
+        f"/api/v1/cases/{uuid.uuid4()}/evidence",
+        content=body,
+        headers=headers,
+    )
     assert hidden.status_code == absent.status_code == 404
     assert without_request_id(hidden) == without_request_id(absent)
     assert evidence_count(case_id) == 1  # the refused upload wrote nothing
@@ -762,12 +948,16 @@ def test_unassigned_investigator_cannot_upload_to_a_case_it_cannot_see(evidence_
 @requires_database
 def test_unassigned_reviewer_cannot_list_evidence_of_the_case(evidence_world):
     reviewer = evidence_world["people"]["reviewer"]
-    response = request_as(reviewer, "get", f"/api/v1/cases/{evidence_world['case_id']}/evidence")
+    response = request_as(
+        reviewer, "get", f"/api/v1/cases/{evidence_world['case_id']}/evidence"
+    )
     assert response.status_code == 404
 
 
 @requires_database
-def test_missing_evidence_permission_is_403_before_visibility_is_checked(evidence_world):
+def test_missing_evidence_permission_is_403_before_visibility_is_checked(
+    evidence_world,
+):
     people = evidence_world["people"]
     case_id, evidence_id = evidence_world["case_id"], evidence_world["evidence_id"]
     # The reporter created the case, so the case is visible to it, and it still holds no evidence permission.
@@ -779,13 +969,19 @@ def test_missing_evidence_permission_is_403_before_visibility_is_checked(evidenc
         assert request_as(people["reporter"], method, url).status_code == 403
     body, content_type = multipart("scan.pdf", "application/pdf", PDF[:100])
     upload = request_as(
-        people["reporter"], "post", f"/api/v1/cases/{case_id}/evidence", content=body,
+        people["reporter"],
+        "post",
+        f"/api/v1/cases/{case_id}/evidence",
+        content=body,
         headers={"Content-Type": content_type},
     )
     assert upload.status_code == 403
     # The reviewer holds evidence:read but not evidence:write, and the case is hidden from it: 403 wins.
     upload = request_as(
-        people["reviewer"], "post", f"/api/v1/cases/{case_id}/evidence", content=body,
+        people["reviewer"],
+        "post",
+        f"/api/v1/cases/{case_id}/evidence",
+        content=body,
         headers={"Content-Type": content_type},
     )
     assert upload.status_code == 403
@@ -798,14 +994,21 @@ def test_assigned_investigator_reads_and_uploads_on_its_case(evidence_world):
     listing = request_as(investigator, "get", f"/api/v1/cases/{case_id}/evidence")
     assert listing.status_code == 200
     assert listing.json()["total"] == 1
-    download = request_as(investigator, "get", f"/api/v1/evidence/{evidence_id}/download")
+    download = request_as(
+        investigator, "get", f"/api/v1/evidence/{evidence_id}/download"
+    )
     assert download.status_code == 200
     assert download.content == PDF
     custody = request_as(investigator, "get", f"/api/v1/evidence/{evidence_id}/custody")
     assert custody.status_code == 200
     assert evidence.DOWNLOADED in [event["action"] for event in custody.json()]
     body, content_type = multipart("notes.pdf", "application/pdf", PDF[:100])
-    upload = request_as(investigator, "post", f"/api/v1/cases/{case_id}/evidence", content=body,
-                        headers={**idem(), "Content-Type": content_type})
+    upload = request_as(
+        investigator,
+        "post",
+        f"/api/v1/cases/{case_id}/evidence",
+        content=body,
+        headers={**idem(), "Content-Type": content_type},
+    )
     assert upload.status_code == 201
     assert evidence_count(case_id) == 2

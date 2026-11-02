@@ -65,7 +65,9 @@ def _raise_for(outcome: LinkOutcome) -> None:
         raise HTTPException(status_code=404, detail="link not found")
 
 
-@case_links_router.get("/api/v1/cases/{case_id}/links", response_model=list[CaseLinkResponse])
+@case_links_router.get(
+    "/api/v1/cases/{case_id}/links", response_model=list[CaseLinkResponse]
+)
 def list_case_links(
     case_id: uuid.UUID,
     actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS_FOR_RECORDS)),
@@ -76,7 +78,9 @@ def list_case_links(
     return [_link_response(link) for link in links]
 
 
-@case_links_router.post("/api/v1/cases/{case_id}/links", status_code=201, response_model=CaseLinkResponse)
+@case_links_router.post(
+    "/api/v1/cases/{case_id}/links", status_code=201, response_model=CaseLinkResponse
+)
 def add_case_link(
     case_id: uuid.UUID,
     body: CaseLinkRequest,
@@ -86,7 +90,12 @@ def add_case_link(
 ) -> CaseLinkResponse:
     key = checked_key(idempotency_key)
     scope_key = key_scope(
-        actor.id, "POST", LINKS_ROUTE, key, request.url.path, body.model_dump(mode="json")
+        actor.id,
+        "POST",
+        LINKS_ROUTE,
+        key,
+        request.url.path,
+        body.model_dump(mode="json"),
     )
     outcome, link = add_link(
         str(case_id),
@@ -101,7 +110,9 @@ def add_case_link(
     return _link_response(link)
 
 
-@case_links_router.delete("/api/v1/cases/{case_id}/links/{linked_case_id}", status_code=204)
+@case_links_router.delete(
+    "/api/v1/cases/{case_id}/links/{linked_case_id}", status_code=204
+)
 def remove_case_link(
     case_id: uuid.UUID,
     linked_case_id: uuid.UUID,

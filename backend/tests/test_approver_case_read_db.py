@@ -16,7 +16,10 @@ import uuid
 from safe_kit.db import connect
 from test_evidence import db_user, request_as
 from test_evidence_lifecycle import provider, requires_database  # provider: fixture
-from test_fixture_p6_disclosure import case_url, first_version  # world: fixture via first_version
+from test_fixture_p6_disclosure import (
+    case_url,
+    first_version,
+)  # world: fixture via first_version
 from test_fixture_t06a_redaction import make_derived, world  # world: fixture
 
 
@@ -37,8 +40,16 @@ def test_the_approver_reads_the_disclosure_versions(world):
     view, _ = first_version(world)
     approver = db_user("disclosure_approver")
     assert request_as(approver, "get", case_url(world)).status_code == 200
-    assert request_as(approver, "get", case_url(world, f"/{view['id']}")).status_code == 200
-    assert request_as(approver, "get", case_url(world, f"/{view['id']}/preview")).status_code == 200
+    assert (
+        request_as(approver, "get", case_url(world, f"/{view['id']}")).status_code
+        == 200
+    )
+    assert (
+        request_as(
+            approver, "get", case_url(world, f"/{view['id']}/preview")
+        ).status_code
+        == 200
+    )
 
 
 @requires_database
@@ -54,28 +65,43 @@ def test_the_approver_may_not_change_a_deadline_and_a_triager_still_may(world):
     ):
         assert response.status_code == 403
         assert response.json()["detail"] == "forbidden"
-    assert request_as(triager, "patch", url, json={"status": "done"}, headers=idem()).status_code == 200
+    assert (
+        request_as(
+            triager, "patch", url, json={"status": "done"}, headers=idem()
+        ).status_code
+        == 200
+    )
 
 
 @requires_database
 def test_the_approver_may_not_file_an_appeal(world):
     approver = db_user("disclosure_approver")
     response = request_as(
-        approver, "post", f"/api/v1/reviews/{uuid.uuid4()}/appeals", json={"grounds": "Wrong outcome"}, headers=idem()
+        approver,
+        "post",
+        f"/api/v1/reviews/{uuid.uuid4()}/appeals",
+        json={"grounds": "Wrong outcome"},
+        headers=idem(),
     )
     assert response.status_code == 403
     assert response.json()["detail"] == "forbidden"
 
 
 @requires_database
-def test_the_approver_gets_the_same_refusal_as_a_triager_for_the_reporter_contact(world):
+def test_the_approver_gets_the_same_refusal_as_a_triager_for_the_reporter_contact(
+    world,
+):
     approver = db_user("disclosure_approver")
     triager = world["people"]["triager"]
     url = f"/api/v1/reports/{world['case_id']}/contact"
     approver_response = request_as(approver, "get", url)
     triager_response = request_as(triager, "get", url)
     assert approver_response.status_code == triager_response.status_code == 403
-    assert approver_response.json()["detail"] == triager_response.json()["detail"] == "forbidden"
+    assert (
+        approver_response.json()["detail"]
+        == triager_response.json()["detail"]
+        == "forbidden"
+    )
 
 
 @requires_database
@@ -101,4 +127,8 @@ def test_the_migration_grants_the_approver_only_the_case_read_row(world):
             ORDER BY rp.permission
             """
         ).fetchall()
-    assert [row[0] for row in rows] == ["cases:read_all", "disclosures:approve", "disclosures:read"]
+    assert [row[0] for row in rows] == [
+        "cases:read_all",
+        "disclosures:approve",
+        "disclosures:read",
+    ]

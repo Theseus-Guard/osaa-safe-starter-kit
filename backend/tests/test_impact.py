@@ -14,7 +14,13 @@ from fastapi.testclient import TestClient
 from safe_kit import api, auth, impact, impact_api
 from safe_kit.cases import Case
 from safe_kit.idempotency import StoredResponse
-from safe_kit.impact import ImpactOutcome, ImpactResult, ImpactScores, impact_changes, risk_score
+from safe_kit.impact import (
+    ImpactOutcome,
+    ImpactResult,
+    ImpactScores,
+    impact_changes,
+    risk_score,
+)
 from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS
 from safe_kit.users import User
 
@@ -125,7 +131,9 @@ def test_risk_score_is_the_mean_rounded_to_one_decimal(values, expected):
     assert risk_score(values) == expected
 
 
-@pytest.mark.parametrize("values", [(None, 3, 4), (2, None, 4), (2, 3, None), (None, None, None)])
+@pytest.mark.parametrize(
+    "values", [(None, 3, 4), (2, None, 4), (2, 3, None), (None, None, None)]
+)
 def test_risk_score_is_none_until_all_three_values_are_set(values):
     assert risk_score(values) is None
 
@@ -151,7 +159,9 @@ def test_impact_changes_lists_only_the_values_that_differ():
 
 
 @pytest.mark.parametrize("value", [0, 6, -1, 2.5, 3.0, "3", True])
-def test_a_value_outside_one_to_five_or_not_a_whole_number_is_refused(actor, client, no_domain, value):
+def test_a_value_outside_one_to_five_or_not_a_whole_number_is_refused(
+    actor, client, no_domain, value
+):
     response = client.post(SCORES_PATH, json=body(c=value), headers=idem())
     assert response.status_code == 400
 
@@ -165,7 +175,12 @@ def test_each_of_the_three_values_is_checked(actor, client, no_domain, field):
 def test_expected_version_is_required_and_not_negative(actor, client, no_domain):
     without = {"c": 4, "b": 3, "a": 4}
     assert client.post(SCORES_PATH, json=without, headers=idem()).status_code == 400
-    assert client.post(SCORES_PATH, json=body(expected_version=-1), headers=idem()).status_code == 400
+    assert (
+        client.post(
+            SCORES_PATH, json=body(expected_version=-1), headers=idem()
+        ).status_code
+        == 400
+    )
 
 
 def test_an_unknown_field_is_refused(actor, client, no_domain):
@@ -178,19 +193,29 @@ def test_a_value_left_out_or_null_is_not_set(actor, client, monkeypatch):
 
     def fake(case_id, expected_version, values, scope, **kwargs):
         seen["values"] = values
-        return ImpactResult(ImpactOutcome.OK, value=scores(version=2, integrity=None, availability=None))
+        return ImpactResult(
+            ImpactOutcome.OK, value=scores(version=2, integrity=None, availability=None)
+        )
 
     monkeypatch.setattr(impact_api, "update_impact_scores", fake)
-    response = client.post(SCORES_PATH, json={"expected_version": 1, "c": 4, "b": None}, headers=idem())
+    response = client.post(
+        SCORES_PATH, json={"expected_version": 1, "c": 4, "b": None}, headers=idem()
+    )
     assert response.status_code == 200
-    assert seen["values"] == {"confidentiality": 4, "integrity": None, "availability": None}
+    assert seen["values"] == {
+        "confidentiality": 4,
+        "integrity": None,
+        "availability": None,
+    }
     assert response.json()["risk_score"] is None
 
 
 # --- idempotency -------------------------------------------------------------------------------------------------------
 
 
-def test_a_put_without_an_idempotency_key_is_refused_before_the_domain_runs(actor, client, no_domain):
+def test_a_put_without_an_idempotency_key_is_refused_before_the_domain_runs(
+    actor, client, no_domain
+):
     response = client.post(SCORES_PATH, json=body())
     assert response.status_code == 400
     assert response.json()["detail"] == {"status": "idempotency_key_required"}
@@ -203,16 +228,22 @@ def test_an_invalid_idempotency_key_is_refused(actor, client, no_domain, key):
     assert response.json()["detail"] == {"status": "idempotency_key_invalid"}
 
 
-def test_the_key_and_the_request_reach_the_domain_as_one_scope(actor, client, monkeypatch):
+def test_the_key_and_the_request_reach_the_domain_as_one_scope(
+    actor, client, monkeypatch
+):
     seen = {}
 
-    def fake(case_id, expected_version, values, scope, *, idempotency=None, render=None):
+    def fake(
+        case_id, expected_version, values, scope, *, idempotency=None, render=None
+    ):
         seen["idempotency"] = idempotency
         seen["render"] = render
         return ImpactResult(ImpactOutcome.OK, value=scores())
 
     monkeypatch.setattr(impact_api, "update_impact_scores", fake)
-    response = client.post(SCORES_PATH, json=body(), headers={"Idempotency-Key": "key-1"})
+    response = client.post(
+        SCORES_PATH, json=body(), headers={"Idempotency-Key": "key-1"}
+    )
     assert response.status_code == 200
     scope = seen["idempotency"]
     assert scope.principal_id == USER_ID
@@ -224,12 +255,16 @@ def test_the_key_and_the_request_reach_the_domain_as_one_scope(actor, client, mo
     assert seen["render"](scores())["risk_score"] == 3.7
 
 
-def test_a_replay_returns_the_first_answer_with_its_status_and_body(actor, client, monkeypatch):
+def test_a_replay_returns_the_first_answer_with_its_status_and_body(
+    actor, client, monkeypatch
+):
     first = impact_api.impact_response(CASE_ID, scores()).model_dump(mode="json")
     monkeypatch.setattr(
         impact_api,
         "update_impact_scores",
-        lambda *args, **kwargs: ImpactResult(ImpactOutcome.REPLAY, stored=StoredResponse(200, first)),
+        lambda *args, **kwargs: ImpactResult(
+            ImpactOutcome.REPLAY, stored=StoredResponse(200, first)
+        ),
     )
     response = client.post(SCORES_PATH, json=body(), headers=idem("again"))
     assert response.status_code == 200
@@ -250,14 +285,18 @@ def test_a_reused_key_with_another_request_is_a_409(actor, client, monkeypatch):
 # --- access ------------------------------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("role", ["reviewer", "investigator", "reporter", "auditor", "reporting_owner"])
+@pytest.mark.parametrize(
+    "role", ["reviewer", "investigator", "reporter", "auditor", "reporting_owner"]
+)
 def test_only_a_triager_can_set_the_values(actor, client, no_domain, role):
     actor["role"] = role
     response = client.post(SCORES_PATH, json=body(), headers=idem())
     assert response.status_code == 403
 
 
-def test_a_triager_sets_the_values_and_gets_the_stored_version(actor, client, monkeypatch):
+def test_a_triager_sets_the_values_and_gets_the_stored_version(
+    actor, client, monkeypatch
+):
     monkeypatch.setattr(
         impact_api,
         "update_impact_scores",
@@ -278,9 +317,13 @@ def test_a_triager_sets_the_values_and_gets_the_stored_version(actor, client, mo
 
 
 @pytest.mark.parametrize("role", ["triager", "reviewer", "investigator", "reporter"])
-def test_every_caller_who_can_read_the_case_can_read_the_values(actor, client, monkeypatch, role):
+def test_every_caller_who_can_read_the_case_can_read_the_values(
+    actor, client, monkeypatch, role
+):
     actor["role"] = role
-    monkeypatch.setattr(impact_api, "read_impact_scores", lambda case_id, scope: scores())
+    monkeypatch.setattr(
+        impact_api, "read_impact_scores", lambda case_id, scope: scores()
+    )
     response = client.get(SCORES_PATH)
     assert response.status_code == 200
     assert response.json()["risk_score"] == 3.7
@@ -310,7 +353,11 @@ def test_a_case_the_caller_cannot_see_is_not_found_on_write(actor, client, monke
 
 
 def test_a_closed_case_refuses_the_write_with_409(actor, client, monkeypatch):
-    monkeypatch.setattr(impact_api, "update_impact_scores", lambda *args, **kwargs: ImpactResult(ImpactOutcome.CLOSED))
+    monkeypatch.setattr(
+        impact_api,
+        "update_impact_scores",
+        lambda *args, **kwargs: ImpactResult(ImpactOutcome.CLOSED),
+    )
     response = client.post(SCORES_PATH, json=body(), headers=idem())
     assert response.status_code == 409
     assert response.json()["detail"] == "case is closed"
@@ -320,19 +367,30 @@ def test_a_stale_version_is_a_409_with_the_current_version(actor, client, monkey
     monkeypatch.setattr(
         impact_api,
         "update_impact_scores",
-        lambda *args, **kwargs: ImpactResult(ImpactOutcome.VERSION_CONFLICT, value=scores(version=3)),
+        lambda *args, **kwargs: ImpactResult(
+            ImpactOutcome.VERSION_CONFLICT, value=scores(version=3)
+        ),
     )
     response = client.post(SCORES_PATH, json=body(expected_version=1), headers=idem())
     assert response.status_code == 409
-    assert response.json()["detail"] == {"status": "impact_version_conflict", "current_version": 3}
+    assert response.json()["detail"] == {
+        "status": "impact_version_conflict",
+        "current_version": 3,
+    }
 
 
 # --- the risk fields of the case responses ------------------------------------------------------------------------------
 
 
-def test_the_case_list_carries_the_risk_score_and_the_three_values(actor, client, monkeypatch):
-    monkeypatch.setattr(api, "list_visible_cases", lambda scope, limit, after=None, **kwargs: [case()])
-    monkeypatch.setattr(api, "current_scores_for_cases", lambda case_ids: {CASE_ID: scores()})
+def test_the_case_list_carries_the_risk_score_and_the_three_values(
+    actor, client, monkeypatch
+):
+    monkeypatch.setattr(
+        api, "list_visible_cases", lambda scope, limit, after=None, **kwargs: [case()]
+    )
+    monkeypatch.setattr(
+        api, "current_scores_for_cases", lambda case_ids: {CASE_ID: scores()}
+    )
     item = client.get("/api/v1/cases").json()["items"][0]
     assert item["risk_score"] == 3.7
     assert (item["impact_c"], item["impact_b"], item["impact_a"]) == (4, 3, 4)
@@ -341,24 +399,47 @@ def test_the_case_list_carries_the_risk_score_and_the_three_values(actor, client
     assert item["status"] == "open"
 
 
-def test_a_case_without_values_has_null_risk_fields_in_the_list(actor, client, monkeypatch):
-    monkeypatch.setattr(api, "list_visible_cases", lambda scope, limit, after=None, **kwargs: [case()])
+def test_a_case_without_values_has_null_risk_fields_in_the_list(
+    actor, client, monkeypatch
+):
+    monkeypatch.setattr(
+        api, "list_visible_cases", lambda scope, limit, after=None, **kwargs: [case()]
+    )
     monkeypatch.setattr(api, "current_scores_for_cases", lambda case_ids: {})
     item = client.get("/api/v1/cases").json()["items"][0]
     assert item["risk_score"] is None
-    assert item["impact_c"] is None and item["impact_b"] is None and item["impact_a"] is None
+    assert (
+        item["impact_c"] is None
+        and item["impact_b"] is None
+        and item["impact_a"] is None
+    )
 
 
-def test_the_case_detail_carries_the_risk_score_and_the_three_values(actor, client, monkeypatch):
+def test_the_case_detail_carries_the_risk_score_and_the_three_values(
+    actor, client, monkeypatch
+):
     monkeypatch.setattr(api, "find_visible_case", lambda case_id, scope: case())
-    monkeypatch.setattr(api, "current_scores_for_cases", lambda case_ids: {CASE_ID: scores(availability=5)})
+    monkeypatch.setattr(
+        api,
+        "current_scores_for_cases",
+        lambda case_ids: {CASE_ID: scores(availability=5)},
+    )
     response = client.get(f"/api/v1/cases/{CASE_ID}").json()
     assert response["risk_score"] == 4.0
-    assert (response["impact_c"], response["impact_b"], response["impact_a"]) == (4, 3, 5)
+    assert (response["impact_c"], response["impact_b"], response["impact_a"]) == (
+        4,
+        3,
+        5,
+    )
     assert response["deadlines"] == []
 
 
 def test_risk_fields_of_a_case_without_a_version_are_null():
     assert impact.ImpactScores(case_id=CASE_ID, version=0).risk_score is None
-    assert impact_api.risk_fields(None) == {"risk_score": None, "impact_c": None, "impact_b": None, "impact_a": None}
+    assert impact_api.risk_fields(None) == {
+        "risk_score": None,
+        "impact_c": None,
+        "impact_b": None,
+        "impact_a": None,
+    }
     assert impact_api.risk_fields(scores())["impact_b"] == 3

@@ -52,17 +52,23 @@ def is_recent_password(candidate: str, recent_hashes: Iterable[str]) -> bool:
 
 def access_token_ttl() -> timedelta:
     # Required, no default: the startup guard refuses a process without it (config_guard.load_settings).
-    return timedelta(minutes=required_int(os.environ, "SAFE_ACCESS_TTL_MINUTES", minimum=None))
+    return timedelta(
+        minutes=required_int(os.environ, "SAFE_ACCESS_TTL_MINUTES", minimum=None)
+    )
 
 
 def refresh_token_ttl() -> timedelta:
     # Each rotation restarts this window, so it is an idle limit: a session ends after this long without a refresh.
-    return timedelta(minutes=required_int(os.environ, "SAFE_REFRESH_TTL_MINUTES", minimum=None))
+    return timedelta(
+        minutes=required_int(os.environ, "SAFE_REFRESH_TTL_MINUTES", minimum=None)
+    )
 
 
 def session_max_age() -> timedelta:
     # Counted from the login that started the session family. Renewals do not extend it.
-    return timedelta(hours=required_int(os.environ, "SAFE_SESSION_MAX_HOURS", minimum=None))
+    return timedelta(
+        hours=required_int(os.environ, "SAFE_SESSION_MAX_HOURS", minimum=None)
+    )
 
 
 def _signing_key() -> str:

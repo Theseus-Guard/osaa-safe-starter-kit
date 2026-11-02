@@ -22,7 +22,14 @@ from safe_kit import audit, disclosure
 from safe_kit.db import connect
 from safe_kit.disclosure import ReleaseOutcome
 from test_evidence_lifecycle import provider, requires_database  # provider: fixture
-from test_fixture_p6_disclosure import approve, body, create, dworld, first_version, read  # dworld: fixture
+from test_fixture_p6_disclosure import (
+    approve,
+    body,
+    create,
+    dworld,
+    first_version,
+    read,
+)  # dworld: fixture
 from test_fixture_t06a_redaction import world  # world: fixture
 from test_fixture_t12_notices import payload, read_list, record, row_count
 
@@ -38,7 +45,11 @@ def no_attempt_written(monkeypatch):
             "00000000-0000-0000-0000-000000000000", version, purpose, actor_id
         ),
     )
-    monkeypatch.setattr(disclosure, "close_release_attempt", lambda conn, attempt, reason_code=None: None)
+    monkeypatch.setattr(
+        disclosure,
+        "close_release_attempt",
+        lambda conn, attempt, reason_code=None: None,
+    )
 
 
 def attempts(version_id: str) -> list[tuple[str, str, str | None]]:
@@ -90,19 +101,41 @@ def test_no_approval_means_no_release_and_each_refusal_is_recorded_as_refused(dw
 @requires_database
 def test_an_approval_without_a_release_attempt_is_refused_by_the_check(dworld):
     view, _ = first_version(dworld)
-    approved = approve(dworld, "approver", view["id"], view["recipient"], view["purpose"], view["digest"])
+    approved = approve(
+        dworld,
+        "approver",
+        view["id"],
+        view["recipient"],
+        view["purpose"],
+        view["digest"],
+    )
     assert approved.status_code == 201, approved.text
 
     # The approval matches the version, but no release attempt is open: the check refuses, and it writes nothing.
-    assert disclosure.check_release(view["id"]).outcome is ReleaseOutcome.RELEASE_TRACE_MISSING
+    assert (
+        disclosure.check_release(view["id"]).outcome
+        is ReleaseOutcome.RELEASE_TRACE_MISSING
+    )
     assert attempts(view["id"]) == []
     assert read_list(dworld, "approver", view["id"]).json()["items"] == []
 
 
 @requires_database
-def test_the_notice_record_and_the_export_refuse_without_a_trace(dworld, no_attempt_written):
+def test_the_notice_record_and_the_export_refuse_without_a_trace(
+    dworld, no_attempt_written
+):
     view, _ = first_version(dworld)
-    assert approve(dworld, "approver", view["id"], view["recipient"], view["purpose"], view["digest"]).status_code == 201
+    assert (
+        approve(
+            dworld,
+            "approver",
+            view["id"],
+            view["recipient"],
+            view["purpose"],
+            view["digest"],
+        ).status_code
+        == 201
+    )
 
     notice = record(dworld, "approver", view["id"], payload())
     assert notice.status_code == 409, notice.text
@@ -117,13 +150,28 @@ def test_the_notice_record_and_the_export_refuse_without_a_trace(dworld, no_atte
 
 
 @requires_database
-def test_a_release_attempt_recorded_by_the_release_path_lets_the_release_through(dworld):
+def test_a_release_attempt_recorded_by_the_release_path_lets_the_release_through(
+    dworld,
+):
     view, _ = first_version(dworld)
-    assert approve(dworld, "approver", view["id"], view["recipient"], view["purpose"], view["digest"]).status_code == 201
+    assert (
+        approve(
+            dworld,
+            "approver",
+            view["id"],
+            view["recipient"],
+            view["purpose"],
+            view["digest"],
+        ).status_code
+        == 201
+    )
 
     notice = record(dworld, "approver", view["id"], payload())
     assert notice.status_code == 201, notice.text
-    assert [item["state"] for item in read_list(dworld, "approver", view["id"]).json()["items"]] == ["sent"]
+    assert [
+        item["state"]
+        for item in read_list(dworld, "approver", view["id"]).json()["items"]
+    ] == ["sent"]
     assert attempts(view["id"]) == sorted(
         [("attempted", "external_notice", None), ("done", "external_notice", None)],
         key=lambda row: (row[0], row[1], row[2] or ""),
@@ -136,13 +184,26 @@ def test_a_release_attempt_recorded_by_the_release_path_lets_the_release_through
     assert len(attempts(view["id"])) == 4
 
     # A done attempt does not stay open: a direct check now needs a new attempt.
-    assert disclosure.check_release(view["id"]).outcome is ReleaseOutcome.RELEASE_TRACE_MISSING
+    assert (
+        disclosure.check_release(view["id"]).outcome
+        is ReleaseOutcome.RELEASE_TRACE_MISSING
+    )
 
 
 @requires_database
 def test_a_refused_attempt_is_recorded_as_refused_and_never_counts_as_a_release(dworld):
     view, _ = first_version(dworld)
-    assert approve(dworld, "approver", view["id"], view["recipient"], view["purpose"], view["digest"]).status_code == 201
+    assert (
+        approve(
+            dworld,
+            "approver",
+            view["id"],
+            view["recipient"],
+            view["purpose"],
+            view["digest"],
+        ).status_code
+        == 201
+    )
 
     yesterday = (datetime.now(UTC) - timedelta(days=1)).isoformat()
     refused = record(dworld, "approver", view["id"], payload(sent_at=yesterday))
@@ -150,12 +211,18 @@ def test_a_refused_attempt_is_recorded_as_refused_and_never_counts_as_a_release(
     assert refused.json()["detail"] == {"status": "time_out_of_range"}
 
     assert attempts(view["id"]) == sorted(
-        [("attempted", "external_notice", None), ("refused", "external_notice", "time_out_of_range")],
+        [
+            ("attempted", "external_notice", None),
+            ("refused", "external_notice", "time_out_of_range"),
+        ],
         key=lambda row: (row[0], row[1], row[2] or ""),
     )
     assert refusal_audit_count(view["id"]) == 1
     assert row_count(view["id"]) == 0
-    assert disclosure.check_release(view["id"]).outcome is ReleaseOutcome.RELEASE_TRACE_MISSING
+    assert (
+        disclosure.check_release(view["id"]).outcome
+        is ReleaseOutcome.RELEASE_TRACE_MISSING
+    )
 
     # A later, valid release opens its own attempt and goes through.
     assert record(dworld, "approver", view["id"], payload()).status_code == 201
@@ -163,14 +230,31 @@ def test_a_refused_attempt_is_recorded_as_refused_and_never_counts_as_a_release(
 
 
 @requires_database
-def test_a_change_after_approval_still_revokes_the_release_and_the_export_stays_history(dworld):
+def test_a_change_after_approval_still_revokes_the_release_and_the_export_stays_history(
+    dworld,
+):
     first, derived = first_version(dworld)
-    assert approve(dworld, "approver", first["id"], first["recipient"], first["purpose"], first["digest"]).status_code == 201
+    assert (
+        approve(
+            dworld,
+            "approver",
+            first["id"],
+            first["recipient"],
+            first["purpose"],
+            first["digest"],
+        ).status_code
+        == 201
+    )
 
     changed = create(
         dworld,
         "triager",
-        body([derived], package_id=first["package_id"], expected_version=1, purpose="Changed after the approval"),
+        body(
+            [derived],
+            package_id=first["package_id"],
+            expected_version=1,
+            purpose="Changed after the approval",
+        ),
     )
     assert changed.status_code == 201, changed.text
 

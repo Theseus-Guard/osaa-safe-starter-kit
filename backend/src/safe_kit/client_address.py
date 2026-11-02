@@ -30,11 +30,15 @@ def _parse(text: str) -> IPv4Address | IPv6Address | None:
     return parsed
 
 
-def _is_trusted(address: IPv4Address | IPv6Address, trusted: Sequence[TrustedNetwork]) -> bool:
+def _is_trusted(
+    address: IPv4Address | IPv6Address, trusted: Sequence[TrustedNetwork]
+) -> bool:
     return any(address in network for network in trusted)
 
 
-def resolve_client_address(peer: str | None, forwarded_for: str | None, trusted: Sequence[TrustedNetwork]) -> str:
+def resolve_client_address(
+    peer: str | None, forwarded_for: str | None, trusted: Sequence[TrustedNetwork]
+) -> str:
     """The address to use for a security decision. See the module docstring for the rule."""
     if not peer:
         return UNKNOWN_ADDRESS

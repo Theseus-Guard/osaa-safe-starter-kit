@@ -60,11 +60,17 @@ def stub_env(tmp_path, monkeypatch):
     demo_dir = tmp_path / "demo"
     credential_dir = demo_dir / "credentials"
     credential_dir.mkdir(parents=True)
-    (credential_dir / "demo-investigator.credential").write_text(CREDENTIAL + "\n", encoding="utf-8")
-    (credential_dir / "demo-triager.credential").write_text("triager-" + CREDENTIAL + "\n", encoding="utf-8")
+    (credential_dir / "demo-investigator.credential").write_text(
+        CREDENTIAL + "\n", encoding="utf-8"
+    )
+    (credential_dir / "demo-triager.credential").write_text(
+        "triager-" + CREDENTIAL + "\n", encoding="utf-8"
+    )
     # The development CA that cli-show trusts for the host CLI. Only its path is passed around.
     ca = tmp_path / "ca.crt"
-    ca.write_text("not a real certificate: the fake uv never reads it\n", encoding="utf-8")
+    ca.write_text(
+        "not a real certificate: the fake uv never reads it\n", encoding="utf-8"
+    )
     log = tmp_path / "docker.log"
     uv_log = tmp_path / "uv.log"
     env = {
@@ -80,18 +86,28 @@ def stub_env(tmp_path, monkeypatch):
 
 def _run(script: Path, args, env, check=False):
     return subprocess.run(
-        ["sh", str(script), *args], env=env, capture_output=True, text=True, timeout=60, check=check
+        ["sh", str(script), *args],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=check,
     )
 
 
 def test_both_scripts_pass_the_posix_syntax_check():
     for script in (DEMO, EGRESS):
-        result = subprocess.run(["sh", "-n", str(script)], capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            ["sh", "-n", str(script)], capture_output=True, text=True, check=False
+        )
         assert result.returncode == 0, (script.name, result.stderr)
 
 
 def test_unknown_or_missing_command_exits_2():
-    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "SAFE_DEMO_DIR": "/tmp/unused"}
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "SAFE_DEMO_DIR": "/tmp/unused",
+    }
     assert _run(DEMO, ["bogus"], env).returncode == 2
     assert _run(DEMO, [], env).returncode == 2
     assert _run(DEMO, ["status", "extra"], env).returncode == 2
@@ -172,10 +188,16 @@ def test_status_is_ready_only_with_this_projects_running_gateway(stub_env):
 
 
 def _uv_lines(stub_env) -> list[str]:
-    return stub_env["uv_log"].read_text(encoding="utf-8").splitlines() if stub_env["uv_log"].exists() else []
+    return (
+        stub_env["uv_log"].read_text(encoding="utf-8").splitlines()
+        if stub_env["uv_log"].exists()
+        else []
+    )
 
 
-def test_cli_show_runs_the_cli_on_the_host_through_the_gateway_as_the_demo_investigator(stub_env):
+def test_cli_show_runs_the_cli_on_the_host_through_the_gateway_as_the_demo_investigator(
+    stub_env,
+):
     result = _run(DEMO, ["cli-show", CASE_ID], stub_env["env"])
     output = result.stdout + result.stderr
 
@@ -183,7 +205,9 @@ def test_cli_show_runs_the_cli_on_the_host_through_the_gateway_as_the_demo_inves
     assert CREDENTIAL not in output
     command, *variables = _uv_lines(stub_env)
     assert command.startswith("run --quiet --project ")
-    credential_file = stub_env["demo_dir"] / "credentials" / "demo-investigator.credential"
+    credential_file = (
+        stub_env["demo_dir"] / "credentials" / "demo-investigator.credential"
+    )
     assert command.endswith(
         f"python -m safe_kit.cli --no-banner case show {CASE_ID} --json "
         f"--demo-username demo-investigator --demo-credential-file {credential_file}"
@@ -209,7 +233,9 @@ def test_cli_show_uses_the_demo_user_named_in_the_environment(stub_env):
     assert "triager-" + CREDENTIAL not in result.stdout + result.stderr
 
 
-def test_cli_show_refuses_a_name_outside_the_demo_roles_before_running_the_cli(stub_env):
+def test_cli_show_refuses_a_name_outside_the_demo_roles_before_running_the_cli(
+    stub_env,
+):
     env = dict(stub_env["env"], SAFE_DEMO_USERNAME="demo-reporting-owner")
     result = _run(DEMO, ["cli-show", CASE_ID], env)
     assert result.returncode == 2
@@ -218,7 +244,9 @@ def test_cli_show_refuses_a_name_outside_the_demo_roles_before_running_the_cli(s
 
 
 def test_cli_show_refuses_when_the_development_ca_is_missing(stub_env):
-    env = dict(stub_env["env"], SAFE_DEV_CA_FILE=str(stub_env["demo_dir"] / "absent-ca.crt"))
+    env = dict(
+        stub_env["env"], SAFE_DEV_CA_FILE=str(stub_env["demo_dir"] / "absent-ca.crt")
+    )
     result = _run(DEMO, ["cli-show", CASE_ID], env)
     assert result.returncode == 1
     assert "development CA is missing" in result.stderr

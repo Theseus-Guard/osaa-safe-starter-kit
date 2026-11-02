@@ -17,17 +17,34 @@ These need PostgreSQL: they run with SAFE_TEST_DATABASE=1 and the SAFE_DB_* sett
 from safe_kit import disclosure
 from safe_kit.disclosure import ReleaseOutcome
 from test_evidence_lifecycle import provider, requires_database  # provider: fixture
-from test_fixture_p6_disclosure import approve, body, create, dworld, first_version, open_attempt, read  # dworld: fixture
+from test_fixture_p6_disclosure import (
+    approve,
+    body,
+    create,
+    dworld,
+    first_version,
+    open_attempt,
+    read,
+)  # dworld: fixture
 from test_fixture_t06a_redaction import world  # world: fixture
 from test_fixture_t12_notices import payload, read_list, record, row_count
 
 
 @requires_database
-def test_an_approved_package_is_noticed_and_a_change_revokes_the_approval_and_refuses_the_old_notice(dworld):
+def test_an_approved_package_is_noticed_and_a_change_revokes_the_approval_and_refuses_the_old_notice(
+    dworld,
+):
     first, derived = first_version(dworld)
     assert first["recipient"] and first["purpose"] and first["digest"]
 
-    approved = approve(dworld, "approver", first["id"], first["recipient"], first["purpose"], first["digest"])
+    approved = approve(
+        dworld,
+        "approver",
+        first["id"],
+        first["recipient"],
+        first["purpose"],
+        first["digest"],
+    )
     assert approved.status_code == 201, approved.text
     open_attempt(dworld, first["id"])
     assert disclosure.check_release(first["id"]).outcome is ReleaseOutcome.RELEASABLE
@@ -35,21 +52,33 @@ def test_an_approved_package_is_noticed_and_a_change_revokes_the_approval_and_re
     notice = record(dworld, "approver", first["id"], payload(recipient_ref="cert-07"))
     assert notice.status_code == 201, notice.text
     notice_id = notice.json()["id"]
-    assert [(item["id"], item["state"]) for item in read_list(dworld, "approver", first["id"]).json()["items"]] == [
-        (notice_id, "sent")
-    ]
+    assert [
+        (item["id"], item["state"])
+        for item in read_list(dworld, "approver", first["id"]).json()["items"]
+    ] == [(notice_id, "sent")]
 
     changed = create(
         dworld,
         "triager",
-        body([derived], package_id=first["package_id"], expected_version=1, purpose="Changed after the approval"),
+        body(
+            [derived],
+            package_id=first["package_id"],
+            expected_version=1,
+            purpose="Changed after the approval",
+        ),
     )
     assert changed.status_code == 201, changed.text
     second = changed.json()
 
     # The change revokes the approval of the earlier version, and the release check refuses it from now on.
-    assert disclosure.check_release(first["id"]).outcome is ReleaseOutcome.REVOKED_BY_CHANGE
-    assert read(dworld, "triager", f"/{first['id']}").json()["approval_state"] == "revoked_by_change"
+    assert (
+        disclosure.check_release(first["id"]).outcome
+        is ReleaseOutcome.REVOKED_BY_CHANGE
+    )
+    assert (
+        read(dworld, "triager", f"/{first['id']}").json()["approval_state"]
+        == "revoked_by_change"
+    )
 
     # The notice that was already recorded keeps its version and its state: it is history, not a re-send.
     kept = read_list(dworld, "approver", first["id"]).json()["items"]
@@ -66,8 +95,20 @@ def test_an_approved_package_is_noticed_and_a_change_revokes_the_approval_and_re
     assert row_count(second["id"]) == 0
 
     # The new version passes only with its own approval, bound to its own digest.
-    own = approve(dworld, "approver", second["id"], second["recipient"], second["purpose"], second["digest"])
+    own = approve(
+        dworld,
+        "approver",
+        second["id"],
+        second["recipient"],
+        second["purpose"],
+        second["digest"],
+    )
     assert own.status_code == 201, own.text
     open_attempt(dworld, second["id"])
     assert disclosure.check_release(second["id"]).outcome is ReleaseOutcome.RELEASABLE
-    assert record(dworld, "approver", second["id"], payload(recipient_ref="cert-08")).status_code == 201
+    assert (
+        record(
+            dworld, "approver", second["id"], payload(recipient_ref="cert-08")
+        ).status_code
+        == 201
+    )

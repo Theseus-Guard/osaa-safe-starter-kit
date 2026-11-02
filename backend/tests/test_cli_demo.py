@@ -43,7 +43,9 @@ class FakeResponse:
 class FakeApi:
     """Answers the CLI's requests. Each request is recorded as (method, path, body)."""
 
-    def __init__(self, sign_in_status: int = 200, sign_in_detail: str = "Invalid credentials"):
+    def __init__(
+        self, sign_in_status: int = 200, sign_in_detail: str = "Invalid credentials"
+    ):
         self.sign_in_status = sign_in_status
         self.sign_in_detail = sign_in_detail
         self.requests: list[tuple[str, str, dict | None]] = []
@@ -57,7 +59,9 @@ class FakeApi:
                 raise self._error(self.sign_in_status, {"detail": self.sign_in_detail})
             return FakeResponse(json.dumps(self._tokens()).encode("utf-8"))
         if split.path == f"/api/v1/cases/{CASE_ID}":
-            return FakeResponse(json.dumps({"id": CASE_ID, "title": "Sample case"}).encode("utf-8"))
+            return FakeResponse(
+                json.dumps({"id": CASE_ID, "title": "Sample case"}).encode("utf-8")
+            )
         if split.path == "/api/v1/auth/logout":
             return FakeResponse(b"{}")
         if split.path == "/api/v1/auth/token":
@@ -65,7 +69,13 @@ class FakeApi:
         raise AssertionError(f"unexpected request {request.get_method()} {split.path}")
 
     def _error(self, status: int, body: dict) -> urllib.error.HTTPError:
-        return urllib.error.HTTPError("http://api.test", status, "error", None, io.BytesIO(json.dumps(body).encode()))
+        return urllib.error.HTTPError(
+            "http://api.test",
+            status,
+            "error",
+            None,
+            io.BytesIO(json.dumps(body).encode()),
+        )
 
     @staticmethod
     def _tokens() -> dict:
@@ -102,13 +112,21 @@ def _show(*extra: str) -> list[str]:
     return ["--no-banner", "case", "show", CASE_ID, "--json", *extra]
 
 
-def test_demo_sign_in_uses_the_first_line_only_and_never_the_password_login(api, tmp_path, capsys):
-    path = _credential_file(tmp_path, f"  {SENTINEL}  \nthe second line is never read\n")
+def test_demo_sign_in_uses_the_first_line_only_and_never_the_password_login(
+    api, tmp_path, capsys
+):
+    path = _credential_file(
+        tmp_path, f"  {SENTINEL}  \nthe second line is never read\n"
+    )
     argv = _show("--demo-username", "demo-investigator", "--demo-credential-file", path)
 
     assert cli.main(argv) == 0
 
-    assert api.requests[0] == ("POST", SIGN_IN, {"username": "demo-investigator", "credential": SENTINEL})
+    assert api.requests[0] == (
+        "POST",
+        SIGN_IN,
+        {"username": "demo-investigator", "credential": SENTINEL},
+    )
     assert "/api/v1/auth/token" not in api.paths()
     assert api.paths() == [SIGN_IN, f"/api/v1/cases/{CASE_ID}", "/api/v1/auth/logout"]
     output = capsys.readouterr()
@@ -117,30 +135,56 @@ def test_demo_sign_in_uses_the_first_line_only_and_never_the_password_login(api,
     assert "second line" not in output.out + output.err
 
 
-def test_environment_variables_select_the_demo_sign_in(api, tmp_path, monkeypatch, capsys):
+def test_environment_variables_select_the_demo_sign_in(
+    api, tmp_path, monkeypatch, capsys
+):
     monkeypatch.setenv(cli.DEMO_USERNAME_ENV, "demo-reviewer")
-    monkeypatch.setenv(cli.DEMO_CREDENTIAL_FILE_ENV, _credential_file(tmp_path, SENTINEL + "\n"))
+    monkeypatch.setenv(
+        cli.DEMO_CREDENTIAL_FILE_ENV, _credential_file(tmp_path, SENTINEL + "\n")
+    )
 
     assert cli.main(_show()) == 0
 
-    assert api.requests[0] == ("POST", SIGN_IN, {"username": "demo-reviewer", "credential": SENTINEL})
+    assert api.requests[0] == (
+        "POST",
+        SIGN_IN,
+        {"username": "demo-reviewer", "credential": SENTINEL},
+    )
     assert SENTINEL not in capsys.readouterr().out
 
 
-def test_the_password_login_is_used_when_username_is_given_even_with_demo_variables(api, tmp_path, monkeypatch):
+def test_the_password_login_is_used_when_username_is_given_even_with_demo_variables(
+    api, tmp_path, monkeypatch
+):
     monkeypatch.setenv(cli.DEMO_USERNAME_ENV, "demo-reviewer")
-    monkeypatch.setenv(cli.DEMO_CREDENTIAL_FILE_ENV, _credential_file(tmp_path, SENTINEL + "\n"))
+    monkeypatch.setenv(
+        cli.DEMO_CREDENTIAL_FILE_ENV, _credential_file(tmp_path, SENTINEL + "\n")
+    )
 
     assert cli.main(_show("--username", "someone")) == 0
 
-    assert api.requests[0] == ("POST", "/api/v1/auth/token", {"username": "someone", "password": PASSWORD})
+    assert api.requests[0] == (
+        "POST",
+        "/api/v1/auth/token",
+        {"username": "someone", "password": PASSWORD},
+    )
     assert SENTINEL not in " ".join(api.paths())
 
 
 def test_a_missing_credential_file_is_refused_before_any_request(api, tmp_path, capsys):
     missing = str(tmp_path / "no-such-file.credential")
 
-    assert cli.main(_show("--demo-username", "demo-investigator", "--demo-credential-file", missing)) == 2
+    assert (
+        cli.main(
+            _show(
+                "--demo-username",
+                "demo-investigator",
+                "--demo-credential-file",
+                missing,
+            )
+        )
+        == 2
+    )
 
     assert api.requests == []
     err = capsys.readouterr().err
@@ -149,7 +193,17 @@ def test_a_missing_credential_file_is_refused_before_any_request(api, tmp_path, 
 
 def test_a_credential_path_that_is_not_readable_is_refused(api, tmp_path, capsys):
     # A directory cannot be read as a file (the same refusal as a file without read permission).
-    assert cli.main(_show("--demo-username", "demo-investigator", "--demo-credential-file", str(tmp_path))) == 2
+    assert (
+        cli.main(
+            _show(
+                "--demo-username",
+                "demo-investigator",
+                "--demo-credential-file",
+                str(tmp_path),
+            )
+        )
+        == 2
+    )
 
     assert api.requests == []
     assert "cannot be read" in capsys.readouterr().err
@@ -167,7 +221,14 @@ def test_a_file_without_a_usable_first_line_is_refused(api, tmp_path, capsys, co
     else:
         path = _credential_file(tmp_path, content)
 
-    assert cli.main(_show("--demo-username", "demo-investigator", "--demo-credential-file", path)) == 2
+    assert (
+        cli.main(
+            _show(
+                "--demo-username", "demo-investigator", "--demo-credential-file", path
+            )
+        )
+        == 2
+    )
 
     assert api.requests == []
     output = capsys.readouterr()
@@ -195,19 +256,32 @@ def test_a_demo_option_needs_its_partner(api, tmp_path, capsys, options):
 def test_a_password_login_and_a_demo_sign_in_cannot_be_combined(api, tmp_path, capsys):
     path = _credential_file(tmp_path, SENTINEL + "\n")
 
-    code = cli.main(_show("--username", "someone", "--demo-username", "demo-investigator", "--demo-credential-file", path))
+    code = cli.main(
+        _show(
+            "--username",
+            "someone",
+            "--demo-username",
+            "demo-investigator",
+            "--demo-credential-file",
+            path,
+        )
+    )
 
     assert code == 2
     assert api.requests == []
     assert "not both" in capsys.readouterr().err
 
 
-def test_a_wrong_credential_gets_the_normal_refusal_and_no_secret_text(api, tmp_path, capsys):
+def test_a_wrong_credential_gets_the_normal_refusal_and_no_secret_text(
+    api, tmp_path, capsys
+):
     api.sign_in_status = 401
     api.sign_in_detail = "Invalid credentials"
     path = _credential_file(tmp_path, SENTINEL + "\n")
 
-    code = cli.main(_show("--demo-username", "demo-investigator", "--demo-credential-file", path))
+    code = cli.main(
+        _show("--demo-username", "demo-investigator", "--demo-credential-file", path)
+    )
 
     assert code == 1
     assert api.paths() == [SIGN_IN]
@@ -217,24 +291,34 @@ def test_a_wrong_credential_gets_the_normal_refusal_and_no_secret_text(api, tmp_
     assert SENTINEL not in output.out + output.err
 
 
-def test_a_non_demo_username_is_refused_by_the_server_and_the_cli_reports_it(api, tmp_path, capsys):
+def test_a_non_demo_username_is_refused_by_the_server_and_the_cli_reports_it(
+    api, tmp_path, capsys
+):
     # The API answers a name outside the demo roles with the same 401 as a wrong credential.
     api.sign_in_status = 401
     path = _credential_file(tmp_path, SENTINEL + "\n")
 
-    code = cli.main(_show("--demo-username", "someone-else", "--demo-credential-file", path))
+    code = cli.main(
+        _show("--demo-username", "someone-else", "--demo-credential-file", path)
+    )
 
     assert code == 1
-    assert api.requests == [("POST", SIGN_IN, {"username": "someone-else", "credential": SENTINEL})]
+    assert api.requests == [
+        ("POST", SIGN_IN, {"username": "someone-else", "credential": SENTINEL})
+    ]
     assert capsys.readouterr().err == "error: invalid credentials\n"
 
 
-def test_a_refused_demo_sign_in_names_the_reason_without_the_response_body(api, tmp_path, capsys):
+def test_a_refused_demo_sign_in_names_the_reason_without_the_response_body(
+    api, tmp_path, capsys
+):
     api.sign_in_status = 403
     api.sign_in_detail = "demo sign-in is not available"
     path = _credential_file(tmp_path, SENTINEL + "\n")
 
-    code = cli.main(_show("--demo-username", "demo-investigator", "--demo-credential-file", path))
+    code = cli.main(
+        _show("--demo-username", "demo-investigator", "--demo-credential-file", path)
+    )
 
     assert code == 1
     err = capsys.readouterr().err
@@ -242,7 +326,9 @@ def test_a_refused_demo_sign_in_names_the_reason_without_the_response_body(api, 
     assert SENTINEL not in err
 
 
-def test_the_credential_is_absent_from_the_command_line_the_cli_was_given(api, tmp_path):
+def test_the_credential_is_absent_from_the_command_line_the_cli_was_given(
+    api, tmp_path
+):
     path = _credential_file(tmp_path, SENTINEL + "\n")
     argv = _show("--demo-username", "demo-investigator", "--demo-credential-file", path)
 

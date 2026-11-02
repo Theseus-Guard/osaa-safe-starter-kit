@@ -62,7 +62,9 @@ class ModelRecordRequest(BaseModel):
     model_name: str = Field(min_length=1, max_length=200, pattern=IDENTIFIER_PATTERN)
     model_version: str = Field(min_length=1, max_length=200, pattern=IDENTIFIER_PATTERN)
     runtime: str = Field(min_length=1, max_length=200, pattern=IDENTIFIER_PATTERN)
-    provider_alias: str = Field(min_length=1, max_length=200, pattern=IDENTIFIER_PATTERN)
+    provider_alias: str = Field(
+        min_length=1, max_length=200, pattern=IDENTIFIER_PATTERN
+    )
     reasoning: ReasoningRequest
     # Optional links. A record concerns the case as a whole, or one evidence item, or one review round.
     evidence_item_id: uuid.UUID | None = None
@@ -71,10 +73,16 @@ class ModelRecordRequest(BaseModel):
     @model_validator(mode="after")
     def check_links_and_reasoning(self) -> "ModelRecordRequest":
         if self.evidence_item_id is not None and self.review_round_id is not None:
-            raise ValueError("a record links to one evidence item or one review round, not both")
+            raise ValueError(
+                "a record links to one evidence item or one review round, not both"
+            )
         reasoning = self.reasoning
-        if reasoning.mode != "enabled" and (reasoning.effort is not None or reasoning.budget_tokens is not None):
-            raise ValueError("effort and budget_tokens are set only when reasoning is enabled")
+        if reasoning.mode != "enabled" and (
+            reasoning.effort is not None or reasoning.budget_tokens is not None
+        ):
+            raise ValueError(
+                "effort and budget_tokens are set only when reasoning is enabled"
+            )
         return self
 
 
@@ -135,7 +143,11 @@ def _configuration(body: ModelRecordRequest) -> Configuration:
         model_version=body.model_version,
         runtime=body.runtime,
         provider_alias=body.provider_alias,
-        reasoning=Reasoning(mode=reasoning.mode, effort=reasoning.effort, budget_tokens=reasoning.budget_tokens),
+        reasoning=Reasoning(
+            mode=reasoning.mode,
+            effort=reasoning.effort,
+            budget_tokens=reasoning.budget_tokens,
+        ),
     )
 
 
@@ -176,7 +188,9 @@ def _raise_for(outcome: ModelRecordOutcome) -> None:
     if outcome is ModelRecordOutcome.CLOSED:
         raise CASE_CLOSED
     if outcome is ModelRecordOutcome.REFERENCE_NOT_FOUND:
-        raise HTTPException(status_code=404, detail="evidence item or review round not found")
+        raise HTTPException(
+            status_code=404, detail="evidence item or review round not found"
+        )
     if outcome is ModelRecordOutcome.ALREADY_REVOKED:
         raise HTTPException(status_code=409, detail="model record is already revoked")
 
@@ -207,7 +221,9 @@ def read_case_model_record(
     return _response(record, scope)
 
 
-@model_records_router.post(MODEL_RECORDS_ROUTE, status_code=201, response_model=ModelRecordResponse)
+@model_records_router.post(
+    MODEL_RECORDS_ROUTE, status_code=201, response_model=ModelRecordResponse
+)
 def add_case_model_record(
     case_id: uuid.UUID,
     body: ModelRecordRequest,
@@ -218,7 +234,12 @@ def add_case_model_record(
     scope = _scope(actor)
     path = f"/api/v1/cases/{case_id}/model-records"
     scope_key: KeyScope = key_scope(
-        actor.id, "POST", MODEL_RECORDS_ROUTE, checked_key(idempotency_key), path, body.model_dump(mode="json")
+        actor.id,
+        "POST",
+        MODEL_RECORDS_ROUTE,
+        checked_key(idempotency_key),
+        path,
+        body.model_dump(mode="json"),
     )
     outcome, record = add_model_record(
         str(case_id),
@@ -246,7 +267,12 @@ def revoke_case_model_record(
     scope = _scope(actor)
     path = f"/api/v1/cases/{case_id}/model-records/{record_id}/revoke"
     scope_key: KeyScope = key_scope(
-        actor.id, "POST", REVOKE_ROUTE, checked_key(idempotency_key), path, body.model_dump(mode="json")
+        actor.id,
+        "POST",
+        REVOKE_ROUTE,
+        checked_key(idempotency_key),
+        path,
+        body.model_dump(mode="json"),
     )
     outcome, record = revoke_model_record(
         str(case_id),

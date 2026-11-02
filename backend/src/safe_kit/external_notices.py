@@ -48,7 +48,14 @@ from safe_kit.idempotency import KeyReused, KeyScope, Replayed, check, remember
 
 CHANNELS = ("email", "postal", "webhook", "secure_manual", "other")
 UNKNOWN_REASON_CODES = ("provider_accepted_no_receipt", "timeout", "no_answer")
-STATES = ("sent", "receipt_received", "receipt_unknown", "follow_up_required", "follow_up_done", "cancelled")
+STATES = (
+    "sent",
+    "receipt_received",
+    "receipt_unknown",
+    "follow_up_required",
+    "follow_up_done",
+    "cancelled",
+)
 RECIPIENT_REF_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$"
 REASON_LIMIT = 500
 CHANNEL_OTHER_LIMIT = 200
@@ -197,7 +204,10 @@ def _time_allowed(moment: datetime, not_before: datetime) -> bool:
 
 def _lock_case(conn, case_id: str, scope: CaseScope) -> str | None:
     """Lock the case row, then check the caller's visibility. Returns the case status, or None when not visible."""
-    row = conn.execute("SELECT status FROM cases WHERE id = %s AND NOT is_deleted FOR UPDATE", (case_id,)).fetchone()
+    row = conn.execute(
+        "SELECT status FROM cases WHERE id = %s AND NOT is_deleted FOR UPDATE",
+        (case_id,),
+    ).fetchone()
     if row is None or not cases.is_visible_on(conn, case_id, scope):
         return None
     return row[0]
@@ -332,7 +342,9 @@ _RELEASE_OUTCOME = {
 }
 
 
-def _refuse_release(conn, attempt: disclosure.ReleaseAttempt, outcome: Outcome, reason_code: str) -> Result:
+def _refuse_release(
+    conn, attempt: disclosure.ReleaseAttempt, outcome: Outcome, reason_code: str
+) -> Result:
     """Close the attempt as refused, in the same transaction, and return the refusal. Nothing else is written."""
     disclosure.close_release_attempt(conn, attempt, reason_code=reason_code)
     return Result(outcome)
@@ -365,15 +377,31 @@ def record_notice(
             attempt = disclosure.open_release_attempt(
                 conn, version, disclosure.RELEASE_PURPOSE_NOTICE, scope.user_id
             )
-            release = disclosure.release_check_on(conn, version, disclosure.RELEASE_PURPOSE_NOTICE)
+            release = disclosure.release_check_on(
+                conn, version, disclosure.RELEASE_PURPOSE_NOTICE
+            )
             if release.outcome is not disclosure.ReleaseOutcome.RELEASABLE:
-                return _refuse_release(conn, attempt, _RELEASE_OUTCOME[release.outcome], release.outcome.value)
+                return _refuse_release(
+                    conn,
+                    attempt,
+                    _RELEASE_OUTCOME[release.outcome],
+                    release.outcome.value,
+                )
             assert version.approval is not None
             if not _time_allowed(new.sent_at, version.approval.approved_at):
-                return _refuse_release(conn, attempt, Outcome.TIME_OUT_OF_RANGE, "time_out_of_range")
-            earlier = _latest(conn, case_id, version_id=version_id, recipient_ref=new.recipient_ref)
+                return _refuse_release(
+                    conn, attempt, Outcome.TIME_OUT_OF_RANGE, "time_out_of_range"
+                )
+            earlier = _latest(
+                conn, case_id, version_id=version_id, recipient_ref=new.recipient_ref
+            )
             if earlier and new.repeat_reason is None:
-                return _refuse_release(conn, attempt, Outcome.REPEAT_REASON_REQUIRED, "repeat_reason_required")
+                return _refuse_release(
+                    conn,
+                    attempt,
+                    Outcome.REPEAT_REASON_REQUIRED,
+                    "repeat_reason_required",
+                )
             notice_id = str(uuid.uuid4())
             recorded_at = conn.execute(
                 """
@@ -484,9 +512,13 @@ def _change(
             current = found[0]
             if current.state not in allowed_from:
                 return Result(Outcome.STATE_CONFLICT, value=current.state)
-            if change.received_at is not None and not _time_allowed(change.received_at, current.sent_at):
+            if change.received_at is not None and not _time_allowed(
+                change.received_at, current.sent_at
+            ):
                 return Result(Outcome.TIME_OUT_OF_RANGE)
-            updated = _insert_revision(conn, current, current.revision + 1, change, scope)
+            updated = _insert_revision(
+                conn, current, current.revision + 1, change, scope
+            )
             audit.record(
                 conn,
                 audit.DISCLOSURE_NOTICE_STATE,

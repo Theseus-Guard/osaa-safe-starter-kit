@@ -19,12 +19,27 @@ from pathlib import Path
 import psycopg
 import pytest
 
-from safe_kit import api, audit, cases, evidence, evidence_api, migrate, redaction, reviews, system_timezone, tlp
+from safe_kit import (
+    api,
+    audit,
+    cases,
+    evidence,
+    evidence_api,
+    migrate,
+    redaction,
+    reviews,
+    system_timezone,
+    tlp,
+)
 from safe_kit.cases import CaseScope
 from safe_kit.db import connect
 from safe_kit.reviews import RoundOutcome
 from test_evidence import MemoryStorage, db_user, evidence_count, request_as
-from test_evidence_lifecycle import PDF, provider, requires_database  # provider: fixture
+from test_evidence_lifecycle import (
+    PDF,
+    provider,
+    requires_database,
+)  # provider: fixture
 from error_body import without_request_id
 
 MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
@@ -50,20 +65,40 @@ def world(monkeypatch, provider):  # noqa: F811
     monkeypatch.setattr(evidence_api, "_PROVIDER", provider)
     monkeypatch.setattr(evidence_api, "storage_from_env", lambda: storage)
     scope = CaseScope(people["triager"], read_all=True)
-    case = cases.create_case("Redaction case", datetime(2026, 10, 30, 9, tzinfo=UTC), people["reporter"])
+    case = cases.create_case(
+        "Redaction case", datetime(2026, 10, 30, 9, tzinfo=UTC), people["reporter"]
+    )
     for name in ("investigator", "reviewer"):
         outcome, _ = cases.assign_member(case.id, people[name], scope)
         assert outcome is cases.Outcome.OK
     original = evidence.create_evidence(
-        case.id, people["investigator"], "notes.txt", "text/plain", TEXT, storage, provider, scope,
+        case.id,
+        people["investigator"],
+        "notes.txt",
+        "text/plain",
+        TEXT,
+        storage,
+        provider,
+        scope,
     )
     # A second item of the same case that no claim cites: a pass citing only it makes no claim about the original.
     other = evidence.create_evidence(
-        case.id, people["investigator"], "other.txt", "text/plain", b"Other notes\n", storage, provider, scope,
+        case.id,
+        people["investigator"],
+        "other.txt",
+        "text/plain",
+        b"Other notes\n",
+        storage,
+        provider,
+        scope,
     )
     yield {
-        "people": people, "case_id": case.id, "original_id": original.id, "other_id": other.id,
-        "storage": storage, "provider": provider,
+        "people": people,
+        "case_id": case.id,
+        "original_id": original.id,
+        "other_id": other.id,
+        "storage": storage,
+        "provider": provider,
     }
     api.app.dependency_overrides.clear()
 
@@ -79,7 +114,9 @@ def redact(world, who, evidence_id, label="AMBER", key=None, removed=REMOVED):
 
 
 def download(world, who, evidence_id):
-    return request_as(world["people"][who], "get", f"/api/v1/evidence/{evidence_id}/download")
+    return request_as(
+        world["people"][who], "get", f"/api/v1/evidence/{evidence_id}/download"
+    )
 
 
 def original_row(evidence_id):
@@ -97,7 +134,8 @@ def original_row(evidence_id):
 def audit_count(action, target_id):
     with connect() as conn:
         return conn.execute(
-            "SELECT count(*) FROM audit_events WHERE action = %s AND target_id = %s", (action, target_id)
+            "SELECT count(*) FROM audit_events WHERE action = %s AND target_id = %s",
+            (action, target_id),
         ).fetchone()[0]
 
 
@@ -118,7 +156,9 @@ def fresh_round(world):
 
 
 @requires_database
-def test_redaction_makes_a_derived_item_with_a_new_id_and_the_original_is_unchanged(world):
+def test_redaction_makes_a_derived_item_with_a_new_id_and_the_original_is_unchanged(
+    world,
+):
     before = original_row(world["original_id"])
     created = make_derived(world, "AMBER")
 
@@ -135,12 +175,21 @@ def test_custody_names_the_original_the_derived_item_and_the_actor(world):
     created = make_derived(world, "AMBER")
     original_id, derived_id = world["original_id"], created["derived"]["id"]
 
-    redacted = [event for event in evidence.custody_events(original_id) if event.action == evidence.REDACTED]
+    redacted = [
+        event
+        for event in evidence.custody_events(original_id)
+        if event.action == evidence.REDACTED
+    ]
     assert len(redacted) == 1
     assert redacted[0].actor_id == world["people"]["investigator"]
-    assert redacted[0].details == {"derived_evidence_id": derived_id, "redaction_id": created["redaction_id"]}
+    assert redacted[0].details == {
+        "derived_evidence_id": derived_id,
+        "redaction_id": created["redaction_id"],
+    }
 
-    derived_events = [(event.action, event.actor_id) for event in evidence.custody_events(derived_id)]
+    derived_events = [
+        (event.action, event.actor_id) for event in evidence.custody_events(derived_id)
+    ]
     assert derived_events == [("uploaded", world["people"]["investigator"])]
     assert audit_count(audit.EVIDENCE_REDACTED, derived_id) == 1
 
@@ -150,10 +199,12 @@ def test_the_derived_row_carries_the_label_and_the_original_row_has_none(world):
     created = make_derived(world, "AMBER+STRICT")
     with connect() as conn:
         derived_label = conn.execute(
-            "SELECT tlp_label FROM evidence_items WHERE id = %s", (created["derived"]["id"],)
+            "SELECT tlp_label FROM evidence_items WHERE id = %s",
+            (created["derived"]["id"],),
         ).fetchone()[0]
         original_label = conn.execute(
-            "SELECT tlp_label FROM evidence_items WHERE id = %s", (world["original_id"],)
+            "SELECT tlp_label FROM evidence_items WHERE id = %s",
+            (world["original_id"],),
         ).fetchone()[0]
     assert derived_label == "AMBER+STRICT"
     assert original_label is None
@@ -166,7 +217,11 @@ def test_content_of_an_evidence_item_cannot_be_updated_in_the_database(world):
         "UPDATE evidence_items SET tlp_label = 'RED' WHERE id = %s",
         "UPDATE evidence_items SET sha256_plaintext = %s WHERE id = %s",
     ):
-        params = ("0" * 64, world["original_id"]) if "sha256" in statement else (world["original_id"],)
+        params = (
+            ("0" * 64, world["original_id"])
+            if "sha256" in statement
+            else (world["original_id"],)
+        )
         with pytest.raises(psycopg.errors.RaiseException):
             with connect() as conn:
                 conn.execute(statement, params)
@@ -179,13 +234,20 @@ def test_content_of_an_evidence_item_cannot_be_updated_in_the_database(world):
 def test_manifest_lists_the_removed_scope_and_reason_but_not_the_removed_text(world):
     created = make_derived(world, "AMBER")
     assert created["manifest"]["removed"] == [
-        {"from_line": 3, "to_line": 3, "lines": 1, "reason": "contains an account number"}
+        {
+            "from_line": 3,
+            "to_line": 3,
+            "lines": 1,
+            "reason": "contains an account number",
+        }
     ]
     assert created["manifest"]["tlp_label"] == "AMBER"
     assert "account 4411" not in str(created)
 
     manifest = request_as(
-        world["people"]["investigator"], "get", f"/api/v1/evidence/{created['derived']['id']}/redaction"
+        world["people"]["investigator"],
+        "get",
+        f"/api/v1/evidence/{created['derived']['id']}/redaction",
     )
     assert manifest.status_code == 200
     assert manifest.json()["redaction_id"] == created["redaction_id"]
@@ -193,11 +255,17 @@ def test_manifest_lists_the_removed_scope_and_reason_but_not_the_removed_text(wo
 
 
 @requires_database
-def test_a_claim_citing_the_original_is_insufficient_evidence_on_the_derived_item(world):
+def test_a_claim_citing_the_original_is_insufficient_evidence_on_the_derived_item(
+    world,
+):
     review, scope = fresh_round(world)
-    outcome, _ = reviews.set_layer(review.id, "model", "pass", None, [world["original_id"]], 1, scope)
+    outcome, _ = reviews.set_layer(
+        review.id, "model", "pass", None, [world["original_id"]], 1, scope
+    )
     assert outcome is RoundOutcome.OK
-    outcome, _ = reviews.set_layer(review.id, "instructions", "pass", None, [world["other_id"]], 2, scope)
+    outcome, _ = reviews.set_layer(
+        review.id, "instructions", "pass", None, [world["other_id"]], 2, scope
+    )
     assert outcome is RoundOutcome.OK
 
     created = make_derived(world, "AMBER")
@@ -206,7 +274,10 @@ def test_a_claim_citing_the_original_is_insufficient_evidence_on_the_derived_ite
     assert set(assessed) == {"model"}
     assert assessed["model"]["outcome"] == "insufficient_evidence"
     assert assessed["model"]["reason"] == redaction.CLAIM_REASON
-    layers = {entry.layer: entry.outcome for entry in reviews.get_round(review.id, scope).layers}
+    layers = {
+        entry.layer: entry.outcome
+        for entry in reviews.get_round(review.id, scope).layers
+    }
     assert layers["model"] == "pass"
     assert layers["instructions"] == "pass"
 
@@ -214,7 +285,9 @@ def test_a_claim_citing_the_original_is_insufficient_evidence_on_the_derived_ite
 @requires_database
 def test_a_claim_that_does_not_cite_the_original_is_not_assessed(world):
     review, scope = fresh_round(world)
-    outcome, _ = reviews.set_layer(review.id, "tools", "pass", None, [world["other_id"]], 1, scope)
+    outcome, _ = reviews.set_layer(
+        review.id, "tools", "pass", None, [world["other_id"]], 1, scope
+    )
     assert outcome is RoundOutcome.OK
     assert make_derived(world, "AMBER")["claim_assessments"] == []
 
@@ -225,23 +298,38 @@ def test_a_claim_that_does_not_cite_the_original_is_not_assessed(world):
 @requires_database
 def test_an_invalid_range_is_refused_and_writes_nothing(world):
     before_items = evidence_count(world["case_id"])
-    response = redact(world, "investigator", world["original_id"], "AMBER", removed=[
-        {"from_line": 40, "to_line": 40, "reason": "beyond the end"}
-    ])
+    response = redact(
+        world,
+        "investigator",
+        world["original_id"],
+        "AMBER",
+        removed=[{"from_line": 40, "to_line": 40, "reason": "beyond the end"}],
+    )
     assert response.status_code == 422
     assert evidence_count(world["case_id"]) == before_items
-    assert [e.action for e in evidence.custody_events(world["original_id"])] == ["uploaded"]
+    assert [e.action for e in evidence.custody_events(world["original_id"])] == [
+        "uploaded"
+    ]
 
 
 @requires_database
 def test_only_text_evidence_is_redacted(world):
     pdf = evidence.create_evidence(
-        world["case_id"], world["people"]["investigator"], "scan.pdf", "application/pdf", PDF,
-        world["storage"], world["provider"], CaseScope(world["people"]["triager"], read_all=True),
+        world["case_id"],
+        world["people"]["investigator"],
+        "scan.pdf",
+        "application/pdf",
+        PDF,
+        world["storage"],
+        world["provider"],
+        CaseScope(world["people"]["triager"], read_all=True),
     )
     response = redact(world, "investigator", pdf.id)
     assert response.status_code == 422
-    assert response.json()["detail"] == "redaction is supported for text/plain evidence only"
+    assert (
+        response.json()["detail"]
+        == "redaction is supported for text/plain evidence only"
+    )
 
 
 @requires_database
@@ -249,7 +337,10 @@ def test_a_derivative_may_not_be_labelled_less_restrictively_than_its_original(w
     derived = make_derived(world, "AMBER")
     response = redact(world, "investigator", derived["derived"]["id"], "GREEN")
     assert response.status_code == 422
-    assert response.json()["detail"] == "the TLP label must be at least as restrictive as the original's label"
+    assert (
+        response.json()["detail"]
+        == "the TLP label must be at least as restrictive as the original's label"
+    )
 
 
 # --- T07: each access check denies on its own ----------------------------------------------------------------------
@@ -291,7 +382,11 @@ def test_amber_strict_admits_the_organisation_but_not_outside_parties(world):
 def test_a_clear_item_is_refused_until_a_release_approval_exists(world):
     derived = make_derived(world, "CLEAR")["derived"]["id"]
     assert download(world, "investigator", derived).status_code == 404
-    listed_before = request_as(world["people"]["investigator"], "get", f"/api/v1/cases/{world['case_id']}/evidence")
+    listed_before = request_as(
+        world["people"]["investigator"],
+        "get",
+        f"/api/v1/cases/{world['case_id']}/evidence",
+    )
     assert derived not in [item["id"] for item in listed_before.json()["items"]]
 
     with pytest.raises(tlp.ReleaseNotApproved):
@@ -303,7 +398,9 @@ def test_a_clear_item_is_refused_until_a_release_approval_exists(world):
 
 @requires_database
 def test_the_sql_audience_matches_the_pure_rule_for_every_label_and_caller(world):
-    derived = {label: make_derived(world, label)["derived"]["id"] for label in tlp.LABELS}
+    derived = {
+        label: make_derived(world, label)["derived"]["id"] for label in tlp.LABELS
+    }
     callers = {
         # name: (user, is named on the case, is internal staff, is reporter channel)
         "investigator": ("investigator", True, True, False),
@@ -315,14 +412,21 @@ def test_the_sql_audience_matches_the_pure_rule_for_every_label_and_caller(world
     for label, derived_id in derived.items():
         stored = evidence.find_stored(derived_id, scope)
         for name, (who, named, organisation, external) in callers.items():
-            recipient = tlp.Recipient(world["people"][who], organisation=organisation, external=external)
+            recipient = tlp.Recipient(
+                world["people"][who], organisation=organisation, external=external
+            )
             expected = tlp.permits(
-                label, named=named, organisation=organisation, external=external,
+                label,
+                named=named,
+                organisation=organisation,
+                external=external,
                 approved=tlp.is_release_approved(derived_id),
             )
             assert tlp.item_permitted(stored, recipient) is expected, (label, name)
 
-    recipient = tlp.Recipient(world["people"]["triager"], organisation=True, external=False)
+    recipient = tlp.Recipient(
+        world["people"]["triager"], organisation=True, external=False
+    )
     listed, total = evidence.list_evidence(world["case_id"], 50, 0, recipient)
     visible = {item.id for item in listed}
     assert derived["RED"] not in visible
@@ -344,7 +448,11 @@ def test_a_replayed_key_returns_the_first_answer_and_writes_nothing_again(world)
     assert first.status_code == second.status_code == 201
     assert without_request_id(second) == without_request_id(first)
     assert evidence_count(world["case_id"]) == items_before + 1
-    redacted = [e for e in evidence.custody_events(world["original_id"]) if e.action == evidence.REDACTED]
+    redacted = [
+        e
+        for e in evidence.custody_events(world["original_id"])
+        if e.action == evidence.REDACTED
+    ]
     assert len(redacted) == 1
 
 

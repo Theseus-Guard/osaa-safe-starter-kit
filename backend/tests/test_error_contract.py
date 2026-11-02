@@ -15,7 +15,9 @@ from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS
 from safe_kit.users import User
 
 SOME_UUID = "11111111-1111-4111-8111-111111111111"
-REQUEST_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
+REQUEST_ID = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+)
 LIMIT = 256 * 1024
 SECRET = "probe-secret-value-4c1e"
 
@@ -28,12 +30,21 @@ def client() -> TestClient:
 def _sign_in_as(monkeypatch, role: str) -> None:
     """A signed-in user with the default permissions of the role, so that body validation is reached."""
     actor = User(
-        id="22222222-2222-4222-8222-222222222222", username=f"user-{role}", role=role, is_active=True,
-        password_hash="unused", sessions_valid_after=datetime(1970, 1, 1, tzinfo=UTC),
-        must_change_password=False, created_at=datetime(2026, 11, 1, tzinfo=UTC),
+        id="22222222-2222-4222-8222-222222222222",
+        username=f"user-{role}",
+        role=role,
+        is_active=True,
+        password_hash="unused",
+        sessions_valid_after=datetime(1970, 1, 1, tzinfo=UTC),
+        must_change_password=False,
+        created_at=datetime(2026, 11, 1, tzinfo=UTC),
     )
     api.app.dependency_overrides[auth.current_user] = lambda: actor
-    monkeypatch.setattr(auth, "permissions_for_role", lambda name: DEFAULT_ROLE_PERMISSIONS.get(name, frozenset()))
+    monkeypatch.setattr(
+        auth,
+        "permissions_for_role",
+        lambda name: DEFAULT_ROLE_PERMISSIONS.get(name, frozenset()),
+    )
 
 
 @pytest.fixture
@@ -44,7 +55,9 @@ def signed_in(monkeypatch):
     api.app.dependency_overrides.clear()
 
 
-def assert_error_body(response, status: int, code: str, *, retryable: bool = False) -> dict:
+def assert_error_body(
+    response, status: int, code: str, *, retryable: bool = False
+) -> dict:
     assert response.status_code == status, response.text
     body = response.json()
     assert "detail" in body, "the existing detail field must stay"
@@ -58,15 +71,36 @@ def assert_error_body(response, status: int, code: str, *, retryable: bool = Fal
 
 # --- one body shape across routes -------------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize(
     ("method", "path", "status", "code", "detail"),
     [
-        ("GET", f"/api/v1/cases/{SOME_UUID}", 401, "unauthenticated", "invalid credentials"),
-        ("GET", f"/api/v1/evidence/{SOME_UUID}", 401, "unauthenticated", "invalid credentials"),
-        ("PATCH", f"/api/v1/reviews/{SOME_UUID}/layers/model", 401, "unauthenticated", "invalid credentials"),
+        (
+            "GET",
+            f"/api/v1/cases/{SOME_UUID}",
+            401,
+            "unauthenticated",
+            "invalid credentials",
+        ),
+        (
+            "GET",
+            f"/api/v1/evidence/{SOME_UUID}",
+            401,
+            "unauthenticated",
+            "invalid credentials",
+        ),
+        (
+            "PATCH",
+            f"/api/v1/reviews/{SOME_UUID}/layers/model",
+            401,
+            "unauthenticated",
+            "invalid credentials",
+        ),
     ],
 )
-def test_auth_cases_evidence_and_reviews_keep_detail_and_add_error(client, method, path, status, code, detail):
+def test_auth_cases_evidence_and_reviews_keep_detail_and_add_error(
+    client, method, path, status, code, detail
+):
     response = client.request(method, path)
 
     body = assert_error_body(response, status, code)
@@ -74,7 +108,10 @@ def test_auth_cases_evidence_and_reviews_keep_detail_and_add_error(client, metho
 
 
 def test_validation_error_on_auth_keeps_the_error_list_and_names_the_fields(client):
-    response = client.post("/api/v1/auth/token", json={"username": "alice", "password": SECRET + "x" * 1100})
+    response = client.post(
+        "/api/v1/auth/token",
+        json={"username": "alice", "password": SECRET + "x" * 1100},
+    )
 
     body = assert_error_body(response, 400, "validation_failed")
     assert isinstance(body["detail"], list)
@@ -112,11 +149,15 @@ def test_unknown_field_is_400_unknown_field_not_422(client, signed_in):
     )
 
     body = assert_error_body(response, 400, "unknown_field")
-    assert {"path": "reviewer_id", "problem": "unknown_field"} in body["error"]["fields"]
+    assert {"path": "reviewer_id", "problem": "unknown_field"} in body["error"][
+        "fields"
+    ]
     assert SECRET not in response.text
 
 
-def test_a_domain_refusal_stays_422_with_its_detail_and_gains_the_domain_code(client, signed_in):
+def test_a_domain_refusal_stays_422_with_its_detail_and_gains_the_domain_code(
+    client, signed_in
+):
     # A pass needs evidence of the case. The domain refuses it before any database access (reviews.set_layer).
     response = client.patch(
         f"/api/v1/reviews/{SOME_UUID}/layers/model",
@@ -136,8 +177,11 @@ def test_error_without_fields_has_no_fields_key(client):
 
 # --- request IDs ------------------------------------------------------------------------------------------------
 
+
 def test_a_request_id_the_client_sends_is_echoed_in_the_header_and_the_body(client):
-    response = client.post("/api/v1/auth/token", json={}, headers={"X-Request-ID": "client-trace.42"})
+    response = client.post(
+        "/api/v1/auth/token", json={}, headers={"X-Request-ID": "client-trace.42"}
+    )
 
     body = assert_error_body(response, 400, "validation_failed")
     assert response.headers["X-Request-ID"] == "client-trace.42"
@@ -175,6 +219,7 @@ def test_success_responses_keep_their_shape_and_gain_only_the_header(client):
 
 # --- body size limit --------------------------------------------------------------------------------------------
 
+
 def test_a_declared_body_over_the_limit_is_413_with_the_error_shape(client):
     response = client.post(
         "/api/v1/auth/token",
@@ -191,7 +236,11 @@ def test_a_body_without_a_declared_length_is_counted_and_refused_at_the_limit(cl
         for _ in range(LIMIT // 1024 + 1):
             yield b"y" * 1024
 
-    response = client.post("/api/v1/auth/token", content=chunks(), headers={"Content-Type": "application/json"})
+    response = client.post(
+        "/api/v1/auth/token",
+        content=chunks(),
+        headers={"Content-Type": "application/json"},
+    )
 
     assert_error_body(response, 413, "payload_too_large")
 
@@ -219,6 +268,7 @@ def test_the_import_route_keeps_its_own_limit_and_is_exempt_from_the_json_limit(
 
 # --- readiness --------------------------------------------------------------------------------------------------
 
+
 class _Connection:
     def __enter__(self):
         return self
@@ -230,7 +280,9 @@ class _Connection:
         return None
 
 
-def test_readiness_is_200_with_the_same_body_when_the_database_answers(client, monkeypatch):
+def test_readiness_is_200_with_the_same_body_when_the_database_answers(
+    client, monkeypatch
+):
     monkeypatch.setattr(api, "connect", lambda: _Connection())
     monkeypatch.setattr(api, "admin_exists", lambda: True)
 
@@ -240,14 +292,21 @@ def test_readiness_is_200_with_the_same_body_when_the_database_answers(client, m
     assert response.json() == {"status": "ok"}
 
 
-def test_readiness_is_503_in_the_error_shape_when_the_database_is_unreachable(monkeypatch):
+def test_readiness_is_503_in_the_error_shape_when_the_database_is_unreachable(
+    monkeypatch,
+):
     def unreachable():
         raise psycopg.OperationalError("connection refused")
 
     monkeypatch.setattr(api, "connect", unreachable)
     client = TestClient(api.app)
 
-    body = assert_error_body(client.get("/api/v1/health/ready"), 503, "temporarily_unavailable", retryable=True)
+    body = assert_error_body(
+        client.get("/api/v1/health/ready"),
+        503,
+        "temporarily_unavailable",
+        retryable=True,
+    )
     assert body["detail"] == {"status": "unavailable"}
     assert body["error"]["message"]
 
@@ -262,6 +321,7 @@ def test_readiness_names_the_missing_first_administrator_without_retrying(monkey
 
 
 # --- unexpected failures ----------------------------------------------------------------------------------------
+
 
 def test_an_unexpected_failure_is_500_with_no_detail_of_the_cause(monkeypatch):
     def broken():

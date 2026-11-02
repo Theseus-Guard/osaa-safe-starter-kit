@@ -37,9 +37,13 @@ def system_timezone_configured():
 
     migrate()  # idempotent: applies pending migrations on a fresh test database
     with connect() as conn:
-        exists = conn.execute("SELECT EXISTS (SELECT 1 FROM system_timezone WHERE NOT is_deleted)").fetchone()[0]
+        exists = conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM system_timezone WHERE NOT is_deleted)"
+        ).fetchone()[0]
         if not exists:
-            conn.execute("INSERT INTO system_timezone (timezone) VALUES ('Europe/Istanbul')")
+            conn.execute(
+                "INSERT INTO system_timezone (timezone) VALUES ('Europe/Istanbul')"
+            )
     yield
 
 
@@ -81,16 +85,27 @@ def past(hours: int = 2) -> str:
 
 
 def new_case(reporter: ActingClient, title: str = "Case") -> dict:
-    response = reporter.post("/api/v1/cases", json={"title": title, "awareness_time": past()}, headers=idem())
+    response = reporter.post(
+        "/api/v1/cases", json={"title": title, "awareness_time": past()}, headers=idem()
+    )
     assert response.status_code == 201, response.text
     return response.json()
 
 
-def set_deadline(case_id: str, kind: str, *, due_at: datetime | None = None, status: str | None = None) -> None:
+def set_deadline(
+    case_id: str,
+    kind: str,
+    *,
+    due_at: datetime | None = None,
+    status: str | None = None,
+) -> None:
     """Sets a due date and or a status directly. A not_applicable task gets the reason the constraint requires."""
     with connect() as conn:
         if due_at is not None:
-            conn.execute("UPDATE deadline_tasks SET due_at = %s WHERE case_id = %s AND kind = %s", (due_at, case_id, kind))
+            conn.execute(
+                "UPDATE deadline_tasks SET due_at = %s WHERE case_id = %s AND kind = %s",
+                (due_at, case_id, kind),
+            )
         if status is not None:
             reason = "test: not applicable" if status == "not_applicable" else None
             conn.execute(
@@ -140,7 +155,9 @@ def item_for(page: dict, case_id: str) -> dict:
 def fresh_case_with_known_deadlines(reporter: ActingClient) -> str:
     """A case whose five SAFE tasks have known due dates: affected customers done, broader advisory not applicable."""
     case_id = new_case(reporter)["id"]
-    set_deadline(case_id, "affected_customers", due_at=BASE + timedelta(days=1), status="done")
+    set_deadline(
+        case_id, "affected_customers", due_at=BASE + timedelta(days=1), status="done"
+    )
     set_deadline(case_id, "preliminary_safe_report", due_at=BASE + timedelta(days=2))
     set_deadline(case_id, "broader_advisory", due_at=BASE + timedelta(hours=1))
     set_deadline(case_id, "preliminary_public_report", due_at=BASE + timedelta(days=3))
@@ -164,7 +181,11 @@ def test_next_deadline_is_the_earliest_open_task():
 def test_next_deadline_is_null_when_no_task_is_open():
     reporter = ActingClient(new_user("reporter"))
     case_id = fresh_case_with_known_deadlines(reporter)
-    for kind in ("preliminary_safe_report", "preliminary_public_report", "remediation_status"):
+    for kind in (
+        "preliminary_safe_report",
+        "preliminary_public_report",
+        "remediation_status",
+    ):
         set_deadline(case_id, kind, status="done")
 
     item = item_for(reporter.get("/api/v1/cases").json(), case_id)
@@ -199,12 +220,17 @@ def test_next_deadline_counts_an_open_weekly_update():
 def test_next_deadline_is_computed_for_each_row_of_a_page():
     reporter = ActingClient(new_user("reporter"))
     first = fresh_case_with_known_deadlines(reporter)
-    second = new_case(reporter, "Second")["id"]  # its own default deadlines, all later than the known ones
+    second = new_case(reporter, "Second")[
+        "id"
+    ]  # its own default deadlines, all later than the known ones
     page = reporter.get("/api/v1/cases").json()
 
     assert parse(item_for(page, first)["next_deadline"]) == BASE + timedelta(days=2)
     assert item_for(page, second)["next_deadline"] is not None
-    assert item_for(page, second)["next_deadline"] != item_for(page, first)["next_deadline"]
+    assert (
+        item_for(page, second)["next_deadline"]
+        != item_for(page, first)["next_deadline"]
+    )
 
 
 # --- visibility ------------------------------------------------------------------------------------------------------
@@ -242,15 +268,24 @@ def test_status_filter_combines_with_search_and_paging():
     assert len(reporter.get("/api/v1/cases").json()["items"]) == 3
 
     # The search narrows inside the status: the reference of the open case matches, the reference of the closed one does not.
-    by_reference = reporter.get(f"/api/v1/cases?status=open&q={wanted['reference']}").json()
+    by_reference = reporter.get(
+        f"/api/v1/cases?status=open&q={wanted['reference']}"
+    ).json()
     assert [item["id"] for item in by_reference["items"]] == [wanted["id"]]
-    assert reporter.get(f"/api/v1/cases?status=closed&q={wanted['reference']}").json()["items"] == []
+    assert (
+        reporter.get(f"/api/v1/cases?status=closed&q={wanted['reference']}").json()[
+            "items"
+        ]
+        == []
+    )
 
     first_page = reporter.get("/api/v1/cases?status=open&limit=1").json()
     assert len(first_page["items"]) == 1
     assert first_page["items"][0]["status"] == "open"
     assert first_page["next_cursor"] is not None
-    second_page = reporter.get(f"/api/v1/cases?status=open&limit=1&cursor={first_page['next_cursor']}").json()
+    second_page = reporter.get(
+        f"/api/v1/cases?status=open&limit=1&cursor={first_page['next_cursor']}"
+    ).json()
     assert len(second_page["items"]) == 1
     assert second_page["items"][0]["id"] != first_page["items"][0]["id"]
     assert second_page["next_cursor"] is None
@@ -277,10 +312,16 @@ def test_updated_at_moves_to_the_latest_change():
     reporter = ActingClient(new_user("reporter"))
     triager = ActingClient(new_user("triager"))
     case_id = new_case(reporter)["id"]
-    created = parse(item_for(reporter.get("/api/v1/cases").json(), case_id)["updated_at"])
+    created = parse(
+        item_for(reporter.get("/api/v1/cases").json(), case_id)["updated_at"]
+    )
 
     task_id = task_id_of(triager, case_id, "affected_customers")
-    response = triager.patch(f"/api/v1/cases/{case_id}/deadlines/{task_id}", json={"status": "done"}, headers=idem())
+    response = triager.patch(
+        f"/api/v1/cases/{case_id}/deadlines/{task_id}",
+        json={"status": "done"},
+        headers=idem(),
+    )
     assert response.status_code == 200, response.text
 
     item = item_for(reporter.get("/api/v1/cases").json(), case_id)
@@ -308,7 +349,9 @@ def test_reading_a_case_does_not_change_updated_at():
 
 def test_evidence_changes_count_only_for_a_caller_with_evidence_read():
     owner = ActingClient(new_user("reporter"))
-    triager = ActingClient(new_user("triager"))  # holds cases:read_all and evidence:read
+    triager = ActingClient(
+        new_user("triager")
+    )  # holds cases:read_all and evidence:read
     case_id = new_case(owner)["id"]
     with connect() as conn:
         conn.execute(

@@ -34,8 +34,14 @@ PASS_CHECK = {
 }
 
 
-def version_body(number=1, status="active", title="Deny unscoped tool calls",
-                 body="Calls outside the approved scope are refused.", verification=None, restricted=False):
+def version_body(
+    number=1,
+    status="active",
+    title="Deny unscoped tool calls",
+    body="Calls outside the approved scope are refused.",
+    verification=None,
+    restricted=False,
+):
     view = {
         "version": number,
         "operation": "create" if number == 1 else "version",
@@ -104,13 +110,35 @@ def run_body(result="pass"):
     }
 
 
-CONTENT = ["--title", "Deny unscoped tool calls", "--body", "Calls outside the approved scope are refused."]
+CONTENT = [
+    "--title",
+    "Deny unscoped tool calls",
+    "--body",
+    "Calls outside the approved scope are refused.",
+]
 VERIFY_ARGS = [
-    "--recommendation", RECOMMENDATION_ID, "--expected-version", "1", "--result", "pass",
-    "--subject", "deny-by-default gateway rule", "--scope", "staging gateway",
-    "--assumptions", "token scope is the only input", "--evidence-path", "evidence/gateway/run-42",
-    "--failure-behavior", "unscoped calls are refused", "--error-class", "none observed",
-    "--uncertainty", "one environment only", "--method", "replayed traffic",
+    "--recommendation",
+    RECOMMENDATION_ID,
+    "--expected-version",
+    "1",
+    "--result",
+    "pass",
+    "--subject",
+    "deny-by-default gateway rule",
+    "--scope",
+    "staging gateway",
+    "--assumptions",
+    "token scope is the only input",
+    "--evidence-path",
+    "evidence/gateway/run-42",
+    "--failure-behavior",
+    "unscoped calls are refused",
+    "--error-class",
+    "none observed",
+    "--uncertainty",
+    "one environment only",
+    "--method",
+    "replayed traffic",
 ]
 
 
@@ -128,7 +156,9 @@ def api(monkeypatch):
 
 
 def calls(api: FakeAPI, method: str, path: str) -> list[dict]:
-    return [call for call in api.calls if call["method"] == method and call["path"] == path]
+    return [
+        call for call in api.calls if call["method"] == method and call["path"] == path
+    ]
 
 
 # --- catalog list and show --------------------------------------------------------------------------------------------
@@ -191,7 +221,9 @@ def test_show_never_prints_a_restricted_reference_in_the_default_output(api, cap
 def test_show_json_prints_the_api_body_as_received(api, capsys):
     body = entry_body(version_body(restricted=True), with_history=True)
     api.route("GET", ENTRY_PATH, body=body)
-    code, out, _ = run(capsys, "catalog", "show", ENTRY_ID, "--json", "--username", "alice")
+    code, out, _ = run(
+        capsys, "catalog", "show", ENTRY_ID, "--json", "--username", "alice"
+    )
     assert code == 0
     assert RESTRICTED in out
 
@@ -239,7 +271,14 @@ def test_add_refused_for_a_role_without_catalog_write_saves_nothing(api, capsys)
 def test_a_restricted_reference_is_sent_but_not_echoed(api, capsys):
     api.route("POST", ENTRIES, status=201, body=entry_body(version_body()))
     code, out, _ = run(
-        capsys, "catalog", "add", *CONTENT, "--restricted-reference", RESTRICTED, "--username", "alice"
+        capsys,
+        "catalog",
+        "add",
+        *CONTENT,
+        "--restricted-reference",
+        RESTRICTED,
+        "--username",
+        "alice",
     )
     assert code == 0
     assert calls(api, "POST", ENTRIES)[0]["json"]["restricted_reference"] == RESTRICTED
@@ -249,16 +288,43 @@ def test_a_restricted_reference_is_sent_but_not_echoed(api, capsys):
 def test_version_sends_the_expected_version_and_the_content(api, capsys):
     path = f"{ENTRY_PATH}/versions"
     api.route("POST", path, status=201, body=entry_body(version_body(2)))
-    code, out, err = run(capsys, "catalog", "version", ENTRY_ID, "--expected-version", "1", *CONTENT, "--username", "alice")
+    code, out, err = run(
+        capsys,
+        "catalog",
+        "version",
+        ENTRY_ID,
+        "--expected-version",
+        "1",
+        *CONTENT,
+        "--username",
+        "alice",
+    )
     assert code == 0, err
     assert "Version saved." in out
     assert calls(api, "POST", path)[0]["json"]["expected_version"] == 1
 
 
-def test_a_stale_version_is_refused_with_the_current_version_and_nothing_is_saved(api, capsys):
+def test_a_stale_version_is_refused_with_the_current_version_and_nothing_is_saved(
+    api, capsys
+):
     path = f"{ENTRY_PATH}/versions"
-    api.route("POST", path, status=409, body={"detail": {"status": "version_conflict", "current_version": 3}})
-    code, _, err = run(capsys, "catalog", "version", ENTRY_ID, "--expected-version", "1", *CONTENT, "--username", "alice")
+    api.route(
+        "POST",
+        path,
+        status=409,
+        body={"detail": {"status": "version_conflict", "current_version": 3}},
+    )
+    code, _, err = run(
+        capsys,
+        "catalog",
+        "version",
+        ENTRY_ID,
+        "--expected-version",
+        "1",
+        *CONTENT,
+        "--username",
+        "alice",
+    )
     assert code == 1
     assert "nothing was saved" in err
     assert "current version is 3" in err
@@ -268,7 +334,17 @@ def test_a_stale_version_is_refused_with_the_current_version_and_nothing_is_save
 def test_a_withdrawn_entry_refuses_a_new_version_with_its_own_message(api, capsys):
     path = f"{ENTRY_PATH}/versions"
     api.route("POST", path, status=409, body={"detail": {"status": "entry_closed"}})
-    code, _, err = run(capsys, "catalog", "version", ENTRY_ID, "--expected-version", "2", *CONTENT, "--username", "alice")
+    code, _, err = run(
+        capsys,
+        "catalog",
+        "version",
+        ENTRY_ID,
+        "--expected-version",
+        "2",
+        *CONTENT,
+        "--username",
+        "alice",
+    )
     assert code == 1
     assert "withdrawn or superseded" in err
     assert "no further changes" in err
@@ -278,8 +354,17 @@ def test_correct_needs_a_reason_and_sends_it(api, capsys):
     path = f"{ENTRY_PATH}/corrections"
     api.route("POST", path, status=201, body=entry_body(version_body(2)))
     code, out, err = run(
-        capsys, "catalog", "correct", ENTRY_ID, "--expected-version", "1", *CONTENT,
-        "--reason", "wrong scope named", "--username", "alice",
+        capsys,
+        "catalog",
+        "correct",
+        ENTRY_ID,
+        "--expected-version",
+        "1",
+        *CONTENT,
+        "--reason",
+        "wrong scope named",
+        "--username",
+        "alice",
     )
     assert code == 0, err
     assert "Correction saved." in out
@@ -287,16 +372,40 @@ def test_correct_needs_a_reason_and_sends_it(api, capsys):
 
 
 def test_correct_without_a_reason_is_a_usage_error_and_no_login(api, capsys):
-    code, _, err = run(capsys, "catalog", "correct", ENTRY_ID, "--expected-version", "1", *CONTENT, "--username", "alice")
+    code, _, err = run(
+        capsys,
+        "catalog",
+        "correct",
+        ENTRY_ID,
+        "--expected-version",
+        "1",
+        *CONTENT,
+        "--username",
+        "alice",
+    )
     assert code == 2
     assert api.calls == []
 
 
 def test_dispute_is_recorded_without_a_content_change_message(api, capsys):
     path = f"{ENTRY_PATH}/disputes"
-    api.route("POST", path, status=201, body=entry_body(version_body(2, status="disputed"), status="disputed"))
+    api.route(
+        "POST",
+        path,
+        status=201,
+        body=entry_body(version_body(2, status="disputed"), status="disputed"),
+    )
     code, out, _ = run(
-        capsys, "catalog", "dispute", ENTRY_ID, "--expected-version", "1", "--reason", "the scope is wider", "--username", "alice"
+        capsys,
+        "catalog",
+        "dispute",
+        ENTRY_ID,
+        "--expected-version",
+        "1",
+        "--reason",
+        "the scope is wider",
+        "--username",
+        "alice",
     )
     assert code == 0
     assert "Dispute recorded. The entry content is unchanged." in out
@@ -307,7 +416,16 @@ def test_withdraw_on_an_already_withdrawn_entry_is_refused(api, capsys):
     path = f"{ENTRY_PATH}/withdrawals"
     api.route("POST", path, status=409, body={"detail": {"status": "entry_closed"}})
     code, _, err = run(
-        capsys, "catalog", "withdraw", ENTRY_ID, "--expected-version", "2", "--reason", "retired", "--username", "alice"
+        capsys,
+        "catalog",
+        "withdraw",
+        ENTRY_ID,
+        "--expected-version",
+        "2",
+        "--reason",
+        "retired",
+        "--username",
+        "alice",
     )
     assert code == 1
     assert "withdrawn or superseded" in err
@@ -317,7 +435,16 @@ def test_withdraw_refused_for_a_role_without_catalog_write(api, capsys):
     path = f"{ENTRY_PATH}/withdrawals"
     api.route("POST", path, status=403, body=DENIED)
     code, _, err = run(
-        capsys, "catalog", "withdraw", ENTRY_ID, "--expected-version", "1", "--reason", "retired", "--username", "alice"
+        capsys,
+        "catalog",
+        "withdraw",
+        ENTRY_ID,
+        "--expected-version",
+        "1",
+        "--reason",
+        "retired",
+        "--username",
+        "alice",
     )
     assert code == 1
     assert "your role does not hold the permission" in err
@@ -325,22 +452,47 @@ def test_withdraw_refused_for_a_role_without_catalog_write(api, capsys):
 
 def test_supersede_sends_the_replacement_and_says_the_history_is_kept(api, capsys):
     path = f"{ENTRY_PATH}/supersessions"
-    api.route("POST", path, status=201, body=entry_body(version_body(2, status="superseded")))
+    api.route(
+        "POST", path, status=201, body=entry_body(version_body(2, status="superseded"))
+    )
     code, out, err = run(
-        capsys, "catalog", "supersede", ENTRY_ID, "--expected-version", "1",
-        "--replacement", REPLACEMENT_ID, "--username", "alice",
+        capsys,
+        "catalog",
+        "supersede",
+        ENTRY_ID,
+        "--expected-version",
+        "1",
+        "--replacement",
+        REPLACEMENT_ID,
+        "--username",
+        "alice",
     )
     assert code == 0, err
     assert "Entry superseded. Its history is kept." in out
     assert calls(api, "POST", path)[0]["json"]["replacement_entry_id"] == REPLACEMENT_ID
 
 
-def test_supersede_with_a_replacement_that_is_not_open_is_refused_with_the_api_text(api, capsys):
+def test_supersede_with_a_replacement_that_is_not_open_is_refused_with_the_api_text(
+    api, capsys
+):
     path = f"{ENTRY_PATH}/supersessions"
-    api.route("POST", path, status=422, body={"detail": "replacement must be another open catalog entry"})
+    api.route(
+        "POST",
+        path,
+        status=422,
+        body={"detail": "replacement must be another open catalog entry"},
+    )
     code, _, err = run(
-        capsys, "catalog", "supersede", ENTRY_ID, "--expected-version", "1",
-        "--replacement", REPLACEMENT_ID, "--username", "alice",
+        capsys,
+        "catalog",
+        "supersede",
+        ENTRY_ID,
+        "--expected-version",
+        "1",
+        "--replacement",
+        REPLACEMENT_ID,
+        "--username",
+        "alice",
     )
     assert code == 1
     assert "replacement must be another open catalog entry" in err
@@ -348,7 +500,16 @@ def test_supersede_with_a_replacement_that_is_not_open_is_refused_with_the_api_t
 
 def test_expected_version_below_one_is_a_usage_error(api, capsys):
     code, _, err = run(
-        capsys, "catalog", "dispute", ENTRY_ID, "--expected-version", "0", "--reason", "x", "--username", "alice"
+        capsys,
+        "catalog",
+        "dispute",
+        ENTRY_ID,
+        "--expected-version",
+        "0",
+        "--reason",
+        "x",
+        "--username",
+        "alice",
     )
     assert code == 2
     assert "--expected-version must be 1 or more" in err
@@ -356,7 +517,17 @@ def test_expected_version_below_one_is_a_usage_error(api, capsys):
 
 
 def test_a_title_of_only_spaces_is_refused_before_any_login(api, capsys):
-    code, _, err = run(capsys, "catalog", "add", "--title", "   ", "--body", "text", "--username", "alice")
+    code, _, err = run(
+        capsys,
+        "catalog",
+        "add",
+        "--title",
+        "   ",
+        "--body",
+        "text",
+        "--username",
+        "alice",
+    )
     assert code == 2
     assert "--title is required" in err
     assert api.calls == []
@@ -365,11 +536,20 @@ def test_a_title_of_only_spaces_is_refused_before_any_login(api, capsys):
 # --- catalog verify ---------------------------------------------------------------------------------------------------
 
 
-def test_verify_records_the_run_then_attaches_it_to_the_entry_and_reports_verified(api, capsys):
+def test_verify_records_the_run_then_attaches_it_to_the_entry_and_reports_verified(
+    api, capsys
+):
     api.route("GET", ENTRY_PATH, body=entry_body(version_body(1)))
     api.route("POST", RUNS_PATH, status=201, body=run_body("pass"))
-    api.route("POST", f"{ENTRY_PATH}/versions", status=201, body=entry_body(version_body(2, verification=PASS_CHECK)))
-    code, out, err = run(capsys, "catalog", "verify", ENTRY_ID, *VERIFY_ARGS, "--username", "alice")
+    api.route(
+        "POST",
+        f"{ENTRY_PATH}/versions",
+        status=201,
+        body=entry_body(version_body(2, verification=PASS_CHECK)),
+    )
+    code, out, err = run(
+        capsys, "catalog", "verify", ENTRY_ID, *VERIFY_ARGS, "--username", "alice"
+    )
     assert code == 0, err
     assert f"Verification run {RUN_ID} recorded: pass." in out
     assert "The entry is verified." in out
@@ -387,25 +567,44 @@ def test_a_failing_run_is_attached_but_the_entry_is_not_verified(api, capsys):
     failed = {**PASS_CHECK, "result": "fail"}
     api.route("GET", ENTRY_PATH, body=entry_body(version_body(1)))
     api.route("POST", RUNS_PATH, status=201, body=run_body("fail"))
-    api.route("POST", f"{ENTRY_PATH}/versions", status=201, body=entry_body(version_body(2, verification=failed)))
+    api.route(
+        "POST",
+        f"{ENTRY_PATH}/versions",
+        status=201,
+        body=entry_body(version_body(2, verification=failed)),
+    )
     args = [*VERIFY_ARGS]
     args[args.index("pass")] = "fail"
-    code, out, err = run(capsys, "catalog", "verify", ENTRY_ID, *args, "--username", "alice")
+    code, out, err = run(
+        capsys, "catalog", "verify", ENTRY_ID, *args, "--username", "alice"
+    )
     assert code == 0, err
     assert "The entry is not verified: only a passing run verifies it." in out
 
 
 def test_verify_refuses_a_withdrawn_entry_before_recording_any_run(api, capsys):
-    api.route("GET", ENTRY_PATH, body=entry_body(version_body(2, status="withdrawn"), status="withdrawn"))
-    code, _, err = run(capsys, "catalog", "verify", ENTRY_ID, *VERIFY_ARGS, "--username", "alice")
+    api.route(
+        "GET",
+        ENTRY_PATH,
+        body=entry_body(version_body(2, status="withdrawn"), status="withdrawn"),
+    )
+    code, _, err = run(
+        capsys, "catalog", "verify", ENTRY_ID, *VERIFY_ARGS, "--username", "alice"
+    )
     assert code == 1
     assert "this entry is withdrawn, so it cannot take a verification" in err
     assert calls(api, "POST", RUNS_PATH) == []
 
 
 def test_verify_refuses_a_superseded_entry_before_recording_any_run(api, capsys):
-    api.route("GET", ENTRY_PATH, body=entry_body(version_body(2, status="superseded"), status="superseded"))
-    code, _, err = run(capsys, "catalog", "verify", ENTRY_ID, *VERIFY_ARGS, "--username", "alice")
+    api.route(
+        "GET",
+        ENTRY_PATH,
+        body=entry_body(version_body(2, status="superseded"), status="superseded"),
+    )
+    code, _, err = run(
+        capsys, "catalog", "verify", ENTRY_ID, *VERIFY_ARGS, "--username", "alice"
+    )
     assert code == 1
     assert "this entry is superseded" in err
     assert calls(api, "POST", RUNS_PATH) == []
@@ -414,30 +613,65 @@ def test_verify_refuses_a_superseded_entry_before_recording_any_run(api, capsys)
 def test_verify_says_the_run_was_recorded_when_the_entry_change_is_refused(api, capsys):
     api.route("GET", ENTRY_PATH, body=entry_body(version_body(1)))
     api.route("POST", RUNS_PATH, status=201, body=run_body("pass"))
-    api.route("POST", f"{ENTRY_PATH}/versions", status=409, body={"detail": {"status": "version_conflict", "current_version": 2}})
-    code, _, err = run(capsys, "catalog", "verify", ENTRY_ID, *VERIFY_ARGS, "--username", "alice")
+    api.route(
+        "POST",
+        f"{ENTRY_PATH}/versions",
+        status=409,
+        body={"detail": {"status": "version_conflict", "current_version": 2}},
+    )
+    code, _, err = run(
+        capsys, "catalog", "verify", ENTRY_ID, *VERIFY_ARGS, "--username", "alice"
+    )
     assert code == 1
-    assert f"verification run {RUN_ID} was recorded, but the entry was not updated" in err
+    assert (
+        f"verification run {RUN_ID} was recorded, but the entry was not updated" in err
+    )
     assert "current version is 2" in err
 
 
-def test_verify_refused_for_a_role_without_catalog_write_records_nothing_more(api, capsys):
+def test_verify_refused_for_a_role_without_catalog_write_records_nothing_more(
+    api, capsys
+):
     api.route("GET", ENTRY_PATH, body=entry_body(version_body(1)))
     api.route("POST", RUNS_PATH, status=403, body=DENIED)
-    code, _, err = run(capsys, "catalog", "verify", ENTRY_ID, *VERIFY_ARGS, "--username", "alice")
+    code, _, err = run(
+        capsys, "catalog", "verify", ENTRY_ID, *VERIFY_ARGS, "--username", "alice"
+    )
     assert code == 1
     assert "your role does not hold the permission" in err
     assert calls(api, "POST", f"{ENTRY_PATH}/versions") == []
 
 
-def test_verify_uses_stable_keys_per_request_so_a_retry_gets_the_first_answers(api, capsys, monkeypatch):
+def test_verify_uses_stable_keys_per_request_so_a_retry_gets_the_first_answers(
+    api, capsys, monkeypatch
+):
     api.route("GET", ENTRY_PATH, body=entry_body(version_body(1)))
     api.route("POST", RUNS_PATH, status=201, body=run_body("pass"))
-    api.route("POST", f"{ENTRY_PATH}/versions", status=201, body=entry_body(version_body(2, verification=PASS_CHECK)))
-    run(capsys, "catalog", "verify", ENTRY_ID, *VERIFY_ARGS, "--idempotency-key", "retry-9", "--username", "alice")
+    api.route(
+        "POST",
+        f"{ENTRY_PATH}/versions",
+        status=201,
+        body=entry_body(version_body(2, verification=PASS_CHECK)),
+    )
+    run(
+        capsys,
+        "catalog",
+        "verify",
+        ENTRY_ID,
+        *VERIFY_ARGS,
+        "--idempotency-key",
+        "retry-9",
+        "--username",
+        "alice",
+    )
+
     def keys(path):
-        return [{name.lower(): value for name, value in call["headers"].items()}["idempotency-key"]
-                for call in calls(api, "POST", path)]
+        return [
+            {name.lower(): value for name, value in call["headers"].items()}[
+                "idempotency-key"
+            ]
+            for call in calls(api, "POST", path)
+        ]
 
     first_run_key = keys(RUNS_PATH)[0]
     first_version_key = keys(f"{ENTRY_PATH}/versions")[0]
@@ -445,7 +679,17 @@ def test_verify_uses_stable_keys_per_request_so_a_retry_gets_the_first_answers(a
     assert "retry-9" not in (first_run_key, first_version_key)
     # The second run reads its password from stdin again.
     monkeypatch.setattr(cli.sys, "stdin", io.StringIO(PASSWORD + "\n"))
-    run(capsys, "catalog", "verify", ENTRY_ID, *VERIFY_ARGS, "--idempotency-key", "retry-9", "--username", "alice")
+    run(
+        capsys,
+        "catalog",
+        "verify",
+        ENTRY_ID,
+        *VERIFY_ARGS,
+        "--idempotency-key",
+        "retry-9",
+        "--username",
+        "alice",
+    )
     assert keys(RUNS_PATH) == [first_run_key, first_run_key]
     assert keys(f"{ENTRY_PATH}/versions") == [first_version_key, first_version_key]
 
@@ -453,7 +697,9 @@ def test_verify_uses_stable_keys_per_request_so_a_retry_gets_the_first_answers(a
 def test_verify_rejects_a_result_outside_the_three_values_before_any_login(api, capsys):
     args = [*VERIFY_ARGS]
     args[args.index("pass")] = "maybe"
-    code, _, _ = run(capsys, "catalog", "verify", ENTRY_ID, *args, "--username", "alice")
+    code, _, _ = run(
+        capsys, "catalog", "verify", ENTRY_ID, *args, "--username", "alice"
+    )
     assert code == 2
     assert api.calls == []
 
@@ -462,8 +708,14 @@ def test_verify_rejects_a_result_outside_the_three_values_before_any_login(api, 
 
 
 def test_recommendation_list_prints_the_suggestions_and_the_next_cursor(api, capsys):
-    api.route("GET", RECOMMENDATIONS, body={"items": [recommendation_body()], "next_cursor": "next-1"})
-    code, out, _ = run(capsys, "catalog", "recommendation", "list", "--username", "alice")
+    api.route(
+        "GET",
+        RECOMMENDATIONS,
+        body={"items": [recommendation_body()], "next_cursor": "next-1"},
+    )
+    code, out, _ = run(
+        capsys, "catalog", "recommendation", "list", "--username", "alice"
+    )
     assert code == 0
     assert "platform owner" in out
     assert "--cursor next-1" in out
@@ -472,14 +724,24 @@ def test_recommendation_list_prints_the_suggestions_and_the_next_cursor(api, cap
 def test_recommendation_add_sends_the_fields_and_says_it_is_a_suggestion(api, capsys):
     api.route("POST", RECOMMENDATIONS, status=201, body=recommendation_body())
     code, out, err = run(
-        capsys, "catalog", "recommendation", "add",
-        "--failure-or-system", "tool gateway accepts unscoped calls",
-        "--required-defence-outcome", "every call is checked against the approved scope",
-        "--minimum-control", "deny by default at the gateway",
-        "--responsible", "platform owner",
-        "--evidence-to-keep", "gateway policy diff",
-        "--due-at", "2026-12-01T09:00:00Z",
-        "--username", "alice",
+        capsys,
+        "catalog",
+        "recommendation",
+        "add",
+        "--failure-or-system",
+        "tool gateway accepts unscoped calls",
+        "--required-defence-outcome",
+        "every call is checked against the approved scope",
+        "--minimum-control",
+        "deny by default at the gateway",
+        "--responsible",
+        "platform owner",
+        "--evidence-to-keep",
+        "gateway policy diff",
+        "--due-at",
+        "2026-12-01T09:00:00Z",
+        "--username",
+        "alice",
     )
     assert code == 0, err
     assert "a suggestion until a passing verification run is recorded" in out
@@ -490,10 +752,24 @@ def test_recommendation_add_sends_the_fields_and_says_it_is_a_suggestion(api, ca
 
 def test_recommendation_add_refused_without_a_time_zone(api, capsys):
     code, _, err = run(
-        capsys, "catalog", "recommendation", "add",
-        "--failure-or-system", "x", "--required-defence-outcome", "x", "--minimum-control", "x",
-        "--responsible", "x", "--evidence-to-keep", "x", "--due-at", "2026-12-01T09:00:00",
-        "--username", "alice",
+        capsys,
+        "catalog",
+        "recommendation",
+        "add",
+        "--failure-or-system",
+        "x",
+        "--required-defence-outcome",
+        "x",
+        "--minimum-control",
+        "x",
+        "--responsible",
+        "x",
+        "--evidence-to-keep",
+        "x",
+        "--due-at",
+        "2026-12-01T09:00:00",
+        "--username",
+        "alice",
     )
     assert code == 2
     assert "must include a timezone" in err
@@ -503,10 +779,24 @@ def test_recommendation_add_refused_without_a_time_zone(api, capsys):
 def test_recommendation_add_refused_for_a_read_only_role(api, capsys):
     api.route("POST", RECOMMENDATIONS, status=403, body=DENIED)
     code, _, err = run(
-        capsys, "catalog", "recommendation", "add",
-        "--failure-or-system", "x", "--required-defence-outcome", "x", "--minimum-control", "x",
-        "--responsible", "x", "--evidence-to-keep", "x", "--due-at", "2026-12-01T09:00:00Z",
-        "--username", "alice",
+        capsys,
+        "catalog",
+        "recommendation",
+        "add",
+        "--failure-or-system",
+        "x",
+        "--required-defence-outcome",
+        "x",
+        "--minimum-control",
+        "x",
+        "--responsible",
+        "x",
+        "--evidence-to-keep",
+        "x",
+        "--due-at",
+        "2026-12-01T09:00:00Z",
+        "--username",
+        "alice",
     )
     assert code == 1
     assert "your role does not hold the permission" in err

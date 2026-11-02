@@ -45,7 +45,11 @@ def test_the_approver_seed_adds_case_read_and_no_case_write():
 
 
 def test_only_triager_reporting_owner_and_approver_hold_read_all_by_default():
-    holders = {role for role, permissions in DEFAULT_ROLE_PERMISSIONS.items() if "cases:read_all" in permissions}
+    holders = {
+        role
+        for role, permissions in DEFAULT_ROLE_PERMISSIONS.items()
+        if "cases:read_all" in permissions
+    }
     assert holders == {"triager", "reporting_owner", DISCLOSURE_APPROVER_ROLE}
 
 
@@ -54,12 +58,20 @@ def test_migration_0044_adds_exactly_the_approver_case_read_row():
     rows = re.findall(r"\('([a-z_]+)', '([a-z_:]+)'\)", text)
     assert rows == [("disclosure_approver", "cases:read_all")]
     lowered = text.lower()
-    assert "delete" not in lowered and "truncate" not in lowered and "update " not in lowered
+    assert (
+        "delete" not in lowered
+        and "truncate" not in lowered
+        and "update " not in lowered
+    )
 
 
 @pytest.fixture
 def seeded_permissions(monkeypatch):
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()))
+    monkeypatch.setattr(
+        auth,
+        "permissions_for_role",
+        lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()),
+    )
 
 
 def _deadline_writer():
@@ -68,7 +80,9 @@ def _deadline_writer():
     )
 
 
-def test_the_approver_is_refused_the_deadline_routes_even_with_read_all(seeded_permissions):
+def test_the_approver_is_refused_the_deadline_routes_even_with_read_all(
+    seeded_permissions,
+):
     user = SimpleNamespace(id="approver", role=DISCLOSURE_APPROVER_ROLE)
     with pytest.raises(HTTPException) as caught:
         _deadline_writer()(user)

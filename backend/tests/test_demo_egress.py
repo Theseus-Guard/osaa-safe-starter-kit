@@ -43,7 +43,9 @@ def _published_of(service: dict) -> list[str]:
     published = []
     for entry in service.get("ports") or []:
         if isinstance(entry, dict):
-            published.append(f"{entry.get('host_ip', '')}:{entry.get('published', '')}:{entry.get('target', '')}")
+            published.append(
+                f"{entry.get('host_ip', '')}:{entry.get('published', '')}:{entry.get('target', '')}"
+            )
         else:
             parts = str(entry).split(":")
             if len(parts) == 2:
@@ -64,16 +66,22 @@ def check_isolation(compose: dict) -> list[str]:
         problems.append("edge must not be internal, or the gateway has no host path")
 
     services = compose.get("services") or {}
-    edge_members = {name for name, service in services.items() if "edge" in _networks_of(service)}
+    edge_members = {
+        name for name, service in services.items() if "edge" in _networks_of(service)
+    }
     if edge_members != {"gateway"}:
-        problems.append(f"only the gateway may be on edge, found {sorted(edge_members)}")
+        problems.append(
+            f"only the gateway may be on edge, found {sorted(edge_members)}"
+        )
 
     for name in BACKEND_ONLY:
         service = services.get(name)
         if service is None:
             problems.append(f"service {name} is missing")
         elif _networks_of(service) != {"backend"}:
-            problems.append(f"{name} must be on backend only, found {sorted(_networks_of(service))}")
+            problems.append(
+                f"{name} must be on backend only, found {sorted(_networks_of(service))}"
+            )
 
     gateway = services.get("gateway") or {}
     if _networks_of(gateway) != {"edge", "backend"}:
@@ -85,10 +93,14 @@ def check_isolation(compose: dict) -> list[str]:
         for entry in _published_of(service):
             host_ip = entry.split(":")[0]
             if host_ip != LOOPBACK:
-                problems.append(f"{name} publishes {entry!r}; every published port must bind {LOOPBACK}")
+                problems.append(
+                    f"{name} publishes {entry!r}; every published port must bind {LOOPBACK}"
+                )
     gateway_ports = _published_of(gateway)
     if gateway_ports != [f"{LOOPBACK}:8443:8443"]:
-        problems.append(f"the gateway must publish exactly {GATEWAY_PORT!r}, found {gateway_ports}")
+        problems.append(
+            f"the gateway must publish exactly {GATEWAY_PORT!r}, found {gateway_ports}"
+        )
     return problems
 
 
@@ -102,7 +114,9 @@ def test_check_isolation_accepts_the_repository_compose_file_and_rejects_a_leak(
     leaky["services"]["worker"]["ports"] = ["8080:8080"]
     leaky["networks"]["backend"]["internal"] = False
     problems = check_isolation(leaky)
-    assert any("api must be on backend only" in problem for problem in problems), problems
+    assert any("api must be on backend only" in problem for problem in problems), (
+        problems
+    )
     assert any("worker publishes" in problem for problem in problems), problems
     assert any("backend must be internal" in problem for problem in problems), problems
 
@@ -127,11 +141,20 @@ def _compose_unavailable_reason() -> str | None:
     if shutil.which("docker") is None:
         return "docker is not installed, so the docker compose config check cannot run"
     try:
-        probe = subprocess.run(["docker", "compose", "version"], capture_output=True, text=True, timeout=60, check=False)
+        probe = subprocess.run(
+            ["docker", "compose", "version"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
     except (OSError, subprocess.TimeoutExpired) as error:
         return f"docker compose could not be started: {error}"
     if probe.returncode != 0:
-        return "the docker compose plugin is not available: " + (probe.stderr.strip().splitlines() or ["no output"])[0]
+        return (
+            "the docker compose plugin is not available: "
+            + (probe.stderr.strip().splitlines() or ["no output"])[0]
+        )
     return None
 
 
@@ -142,14 +165,31 @@ def test_docker_compose_config_keeps_the_demo_network_isolated(with_overlay):
         pytest.skip(reason)
 
     # --profile cli renders the one-off CLI service too, so every service is checked.
-    command = ["docker", "compose", "-p", "safe-egress-check", "--profile", "cli", "-f", str(COMPOSE)]
+    command = [
+        "docker",
+        "compose",
+        "-p",
+        "safe-egress-check",
+        "--profile",
+        "cli",
+        "-f",
+        str(COMPOSE),
+    ]
     env = dict(os.environ)
     if with_overlay:
         command += ["-f", str(DEMO_OVERLAY)]
         # The overlay requires the host credential directory; the config is only rendered, nothing is created.
         env["SAFE_DEMO_CREDENTIAL_DIR"] = tempfile.gettempdir()
     command += ["config", "--format", "json"]
-    result = subprocess.run(command, cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=120, check=False)
+    result = subprocess.run(
+        command,
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
 
     assert result.returncode == 0, result.stderr
     rendered = json.loads(result.stdout)

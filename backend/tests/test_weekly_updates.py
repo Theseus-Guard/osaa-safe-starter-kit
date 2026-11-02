@@ -46,7 +46,9 @@ def test_first_update_is_due_when_the_case_has_none():
 
 
 def test_next_update_is_due_seven_elapsed_days_after_the_previous_one():
-    assert is_due(GENERATED, GENERATED + timedelta(days=7) - timedelta(seconds=1)) is False
+    assert (
+        is_due(GENERATED, GENERATED + timedelta(days=7) - timedelta(seconds=1)) is False
+    )
     assert is_due(GENERATED, GENERATED + timedelta(days=7)) is True
     assert is_due(GENERATED, GENERATED + timedelta(days=30)) is True
 
@@ -58,12 +60,18 @@ def test_document_follows_the_schema_and_its_due_time_is_seven_days_later():
     assert doc["next_update_due_at"] == "2026-11-09T09:30:15Z"
     assert doc["significant_risks"] == [{"area": "severity", "severity": "high"}]
     assert doc["deadline_tasks"] == [
-        {"kind": "affected_customers", "due_at": "2026-11-05T09:30:15Z", "status": "open"}
+        {
+            "kind": "affected_customers",
+            "due_at": "2026-11-05T09:30:15Z",
+            "status": "open",
+        }
     ]
 
 
 def test_document_timestamps_are_utc_with_a_z_suffix_for_any_local_zone():
-    istanbul = datetime(2026, 11, 2, 12, 30, 15, tzinfo=ZoneInfo("Europe/Istanbul"))  # UTC+3, no DST
+    istanbul = datetime(
+        2026, 11, 2, 12, 30, 15, tzinfo=ZoneInfo("Europe/Istanbul")
+    )  # UTC+3, no DST
     doc = document(generated_at=istanbul)
     assert doc["generated_at"] == "2026-11-02T09:30:15Z"
     assert doc["next_update_due_at"] == "2026-11-09T09:30:15Z"
@@ -96,7 +104,18 @@ def test_schema_holds_no_free_text_fields():
     names: set[str] = set(SCHEMA["properties"])
     for definition in SCHEMA["$defs"].values():
         names |= set(definition.get("properties", {}))
-    assert names.isdisjoint({"scope", "reason", "note", "notes", "text", "rationale", "description", "basis"})
+    assert names.isdisjoint(
+        {
+            "scope",
+            "reason",
+            "note",
+            "notes",
+            "text",
+            "rationale",
+            "description",
+            "basis",
+        }
+    )
 
 
 def _valid() -> dict:
@@ -113,14 +132,33 @@ def _with(key: str, value) -> dict:
     "doc",
     [
         pytest.param(_with("significant_risks", []), id="no-significant-risk"),
-        pytest.param(_with("significant_risks", [{"area": "scale", "severity": "medium"}]), id="medium-is-not-significant"),
-        pytest.param(_with("significant_risks", [{"area": "legal", "severity": "high"}]), id="unknown-area"),
-        pytest.param(_with("sequence", 0), id="sequence-below-one"),
-        pytest.param(_with("generated_at", "2026-11-09T08:00:00+00:00"), id="timestamp-without-z"),
-        pytest.param(_with("scope", "free text"), id="free-text-field"),
-        pytest.param(_with("weekly_update_schema_version", "0.2.0"), id="other-version"),
         pytest.param(
-            _with("deadline_tasks", [{"kind": "weekly_update", "due_at": "2026-11-09T08:00:00Z", "status": "open"}]),
+            _with("significant_risks", [{"area": "scale", "severity": "medium"}]),
+            id="medium-is-not-significant",
+        ),
+        pytest.param(
+            _with("significant_risks", [{"area": "legal", "severity": "high"}]),
+            id="unknown-area",
+        ),
+        pytest.param(_with("sequence", 0), id="sequence-below-one"),
+        pytest.param(
+            _with("generated_at", "2026-11-09T08:00:00+00:00"), id="timestamp-without-z"
+        ),
+        pytest.param(_with("scope", "free text"), id="free-text-field"),
+        pytest.param(
+            _with("weekly_update_schema_version", "0.2.0"), id="other-version"
+        ),
+        pytest.param(
+            _with(
+                "deadline_tasks",
+                [
+                    {
+                        "kind": "weekly_update",
+                        "due_at": "2026-11-09T08:00:00Z",
+                        "status": "open",
+                    }
+                ],
+            ),
             id="weekly-kind-is-not-a-safe-task",
         ),
     ],
@@ -131,5 +169,11 @@ def test_schema_rejects_documents_that_break_the_format(doc):
 
 
 def test_weekly_updates_module_exposes_the_schema_version_used_in_documents():
-    assert document()["weekly_update_schema_version"] == weekly_updates.WEEKLY_UPDATE_SCHEMA_VERSION
-    assert SCHEMA["properties"]["weekly_update_schema_version"]["const"] == weekly_updates.WEEKLY_UPDATE_SCHEMA_VERSION
+    assert (
+        document()["weekly_update_schema_version"]
+        == weekly_updates.WEEKLY_UPDATE_SCHEMA_VERSION
+    )
+    assert (
+        SCHEMA["properties"]["weekly_update_schema_version"]["const"]
+        == weekly_updates.WEEKLY_UPDATE_SCHEMA_VERSION
+    )

@@ -150,7 +150,9 @@ def _window(days: int, now: datetime) -> Window:
     try:
         timezone = overview.system_timezone()
     except overview.SystemTimezoneNotSet:
-        raise HTTPException(status_code=409, detail="system timezone is not set") from None
+        raise HTTPException(
+            status_code=409, detail="system timezone is not set"
+        ) from None
     return overview.make_window(timezone, days, now)
 
 
@@ -170,7 +172,9 @@ def get_overview_summary(
     _checked_days(days)
     now = datetime.now(UTC)
     window = _window(days, now)
-    sections: dict[str, Any] = overview.summary(actor.id, actor.role, permissions_of(actor), window, now)
+    sections: dict[str, Any] = overview.summary(
+        actor.id, actor.role, permissions_of(actor), window, now
+    )
     return SummaryResponse(days=days, timezone=window.timezone, **sections)
 
 
@@ -191,11 +195,17 @@ def get_metric_timeseries(
         points = overview.my_timeseries(metric, actor.id, permissions_of(actor), window)
     else:
         points = overview.timeseries(metric, window)
-    return TimeseriesResponse(metric=metric, days=days, timezone=window.timezone, points=points)
+    return TimeseriesResponse(
+        metric=metric, days=days, timezone=window.timezone, points=points
+    )
 
 
-@overview_router.get("/api/v1/cases/deadlines/summary", response_model=DeadlineSummaryResponse)
-def get_deadline_summary(actor: User = Depends(current_user)) -> DeadlineSummaryResponse:
+@overview_router.get(
+    "/api/v1/cases/deadlines/summary", response_model=DeadlineSummaryResponse
+)
+def get_deadline_summary(
+    actor: User = Depends(current_user),
+) -> DeadlineSummaryResponse:
     if not overview.sees_own_cases(permissions_of(actor)):
         raise FORBIDDEN
     items = overview.deadline_summary(actor.id, datetime.now(UTC))

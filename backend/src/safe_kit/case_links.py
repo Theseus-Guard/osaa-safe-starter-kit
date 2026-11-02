@@ -48,7 +48,9 @@ class CaseLink:
     created_at: datetime
 
 
-def check_pair(case_id: str, linked_case_id: str, statuses: Mapping[str, str]) -> LinkOutcome | None:
+def check_pair(
+    case_id: str, linked_case_id: str, statuses: Mapping[str, str]
+) -> LinkOutcome | None:
     """The rules shared by add and remove. statuses holds only the cases the caller may see, with their status.
 
     Returns None when the pair may be changed. The order of the checks decides which refusal a caller sees: a
@@ -65,7 +67,9 @@ def check_pair(case_id: str, linked_case_id: str, statuses: Mapping[str, str]) -
     return None
 
 
-def _lock_visible_pair(conn, case_id: str, linked_case_id: str, scope: CaseScope) -> dict[str, tuple[str, str]]:
+def _lock_visible_pair(
+    conn, case_id: str, linked_case_id: str, scope: CaseScope
+) -> dict[str, tuple[str, str]]:
     """Lock the visible cases of the pair, in ID order, and return {id: (status, title)} for those the scope may see."""
     visibility, params = scope.visibility_sql()
     rows = conn.execute(
@@ -133,7 +137,9 @@ def add_link(
     return LinkOutcome.OK, link
 
 
-def remove_link(case_id: str, linked_case_id: str, actor: str, scope: CaseScope) -> LinkOutcome:
+def remove_link(
+    case_id: str, linked_case_id: str, actor: str, scope: CaseScope
+) -> LinkOutcome:
     """Soft delete the link between the two cases. The row is kept, so the history stays complete."""
     with connect() as conn:
         locked = _lock_visible_pair(conn, case_id, linked_case_id, scope)
@@ -175,7 +181,12 @@ def list_links(case_id: str, scope: CaseScope) -> list[CaseLink] | None:
             """,
             (case_id, case_id),
         ).fetchall()
-        others = list(dict.fromkeys(linked if source == case_id else source for source, linked, _created in rows))
+        others = list(
+            dict.fromkeys(
+                linked if source == case_id else source
+                for source, linked, _created in rows
+            )
+        )
         titles: dict[str, str] = {}
         if others:
             visibility, params = scope.visibility_sql()

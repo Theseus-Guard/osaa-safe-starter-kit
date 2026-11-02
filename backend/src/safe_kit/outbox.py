@@ -67,7 +67,9 @@ def _describe(error: BaseException) -> str:
     return text[:ERROR_MAX_LENGTH]
 
 
-def enqueue(conn: psycopg.Connection, job_type: str, payload: Mapping[str, Any] | None = None) -> str:
+def enqueue(
+    conn: psycopg.Connection, job_type: str, payload: Mapping[str, Any] | None = None
+) -> str:
     """Add a job using the caller's connection, so it commits together with the change that needs it."""
     row = conn.execute(
         "INSERT INTO outbox_jobs (job_type, payload, status) VALUES (%s, %s, 'pending') RETURNING id::text",
@@ -76,7 +78,9 @@ def enqueue(conn: psycopg.Connection, job_type: str, payload: Mapping[str, Any] 
     return row[0]
 
 
-def claim_next(lease: timedelta = LEASE, max_attempts: int = MAX_ATTEMPTS) -> Job | None:
+def claim_next(
+    lease: timedelta = LEASE, max_attempts: int = MAX_ATTEMPTS
+) -> Job | None:
     """Lease the oldest due job. Expired leases are claimable again.
 
     A job whose last allowed attempt lost its lease is moved to failed here, since no worker would claim it again.
@@ -140,7 +144,13 @@ def _record_failure(job: Job, error: str, outcome: FailureOutcome) -> bool:
                 last_error = %s
             WHERE id = %s AND status = 'leased' AND attempts = %s AND NOT is_deleted
             """,
-            (outcome.status, outcome.delay.total_seconds(), error, job.id, job.attempts),
+            (
+                outcome.status,
+                outcome.delay.total_seconds(),
+                error,
+                job.id,
+                job.attempts,
+            ),
         )
     return result.rowcount == 1
 
@@ -159,16 +169,31 @@ def run_once(handlers: Mapping[str, Handler] = HANDLERS) -> bool:
         return False
     handler = handlers.get(job.job_type)
     if handler is None:
-        logger.warning("outbox job %s has unknown type %s; marked failed", job.id, job.job_type)
-        _record_failure(job, f"unknown job type: {job.job_type}", FailureOutcome(FAILED, timedelta(0)))
+        logger.warning(
+            "outbox job %s has unknown type %s; marked failed", job.id, job.job_type
+        )
+        _record_failure(
+            job,
+            f"unknown job type: {job.job_type}",
+            FailureOutcome(FAILED, timedelta(0)),
+        )
         return True
     try:
         handler(job.payload)
     except Exception as error:
         # Logged without the payload, which may contain personal data.
-        logger.warning("outbox job %s (%s) attempt %d failed: %s", job.id, job.job_type, job.attempts, _describe(error))
+        logger.warning(
+            "outbox job %s (%s) attempt %d failed: %s",
+            job.id,
+            job.job_type,
+            job.attempts,
+            _describe(error),
+        )
         _record_failure(job, _describe(error), failure_outcome(job.attempts))
         return True
     if not _complete(job):
-        logger.warning("outbox job %s lost its lease before completion; another worker may run it again", job.id)
+        logger.warning(
+            "outbox job %s lost its lease before completion; another worker may run it again",
+            job.id,
+        )
     return True

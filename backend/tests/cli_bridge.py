@@ -74,7 +74,11 @@ def install(
         response = client.request(method, path, json=body, headers=headers)
         if response.status_code >= 400:
             raise urllib.error.HTTPError(
-                request.full_url, response.status_code, "error", {}, io.BytesIO(response.content)
+                request.full_url,
+                response.status_code,
+                "error",
+                {},
+                io.BytesIO(response.content),
             )
         return _Response(response.status_code, response.content)
 

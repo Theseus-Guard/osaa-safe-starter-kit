@@ -65,8 +65,13 @@ def build_document(
         "sequence": sequence,
         "generated_at": _iso(generated_at),
         "next_update_due_at": _iso(next_weekly_update(generated_at)),
-        "significant_risks": [{"area": area, "severity": severity} for area, severity in risks],
-        "deadline_tasks": [{"kind": kind, "due_at": _iso(due_at), "status": status} for kind, due_at, status in tasks],
+        "significant_risks": [
+            {"area": area, "severity": severity} for area, severity in risks
+        ],
+        "deadline_tasks": [
+            {"kind": kind, "due_at": _iso(due_at), "status": status}
+            for kind, due_at, status in tasks
+        ],
     }
 
 
@@ -93,7 +98,12 @@ def generate_due_updates(now: datetime | None = None) -> int:
     if moment.tzinfo is None:
         raise ValueError("now must be timezone-aware")
     with connect() as conn:
-        case_ids = [row[0] for row in conn.execute(_CANDIDATES_SQL, (list(SIGNIFICANT_SEVERITIES),)).fetchall()]
+        case_ids = [
+            row[0]
+            for row in conn.execute(
+                _CANDIDATES_SQL, (list(SIGNIFICANT_SEVERITIES),)
+            ).fetchall()
+        ]
     created = 0
     for case_id in case_ids:
         with connect() as conn:
@@ -105,9 +115,13 @@ def generate_due_updates(now: datetime | None = None) -> int:
 def _create_if_due(conn, case_id: str, now: datetime) -> bool:
     # The lock is released at the end of the transaction. Everything below runs under it, so a second run that waits
     # for the lock sees the update that the first run committed.
-    conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (f"weekly_update:{case_id}",))
+    conn.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (f"weekly_update:{case_id}",),
+    )
     case_row = conn.execute(
-        "SELECT reference, status FROM cases WHERE id = %s AND NOT is_deleted", (case_id,)
+        "SELECT reference, status FROM cases WHERE id = %s AND NOT is_deleted",
+        (case_id,),
     ).fetchone()
     if case_row is None or case_row[1] != "open":
         return False
@@ -169,7 +183,9 @@ def list_weekly_updates(case_id: str, scope: CaseScope) -> list[dict[str, Any]] 
     return [row[0] for row in rows]
 
 
-def get_weekly_update(case_id: str, update_id: str, scope: CaseScope) -> tuple[bool, dict[str, Any] | None]:
+def get_weekly_update(
+    case_id: str, update_id: str, scope: CaseScope
+) -> tuple[bool, dict[str, Any] | None]:
     """(case_visible, document). The document is None when the update does not belong to this case."""
     with connect() as conn:
         if not cases.is_visible_on(conn, case_id, scope):

@@ -25,7 +25,13 @@ CASE_BODY = {
     "status": "open",
     "calendar_version": "2026.1",
     "created_at": "2026-10-31T10:00:00Z",
-    "deadlines": [{"kind": "initial_notice", "due_at": "2026-11-01T09:00:00Z", "status": "pending"}],
+    "deadlines": [
+        {
+            "kind": "initial_notice",
+            "due_at": "2026-11-01T09:00:00Z",
+            "status": "pending",
+        }
+    ],
     "risk_score": None,
     "impact_c": None,
     "impact_b": None,
@@ -87,7 +93,14 @@ class FakeAPI:
         self.route("POST", "/api/v1/auth/token", body=token_body())
         self.route("POST", "/api/v1/auth/logout", status=204)
 
-    def route(self, method: str, path: str, status: int = 200, body=None, error: Exception | None = None):
+    def route(
+        self,
+        method: str,
+        path: str,
+        status: int = 200,
+        body=None,
+        error: Exception | None = None,
+    ):
         if body is None:
             encoded = b""
         elif isinstance(body, bytes):
@@ -115,7 +128,9 @@ class FakeAPI:
         if error is not None:
             raise error
         if status >= 400:
-            raise urllib.error.HTTPError(request.full_url, status, "error", {}, io.BytesIO(body))
+            raise urllib.error.HTTPError(
+                request.full_url, status, "error", {}, io.BytesIO(body)
+            )
         return FakeResponse(body)
 
     def paths(self) -> list[tuple[str, str]]:
@@ -151,7 +166,14 @@ def future_time() -> str:
     return (datetime.now(UTC) + timedelta(days=1)).isoformat()
 
 
-CREATE = ("case", "create", "--title", "Phishing campaign", "--awareness-time", "2026-10-30T09:00:00Z")
+CREATE = (
+    "case",
+    "create",
+    "--title",
+    "Phishing campaign",
+    "--awareness-time",
+    "2026-10-30T09:00:00Z",
+)
 
 
 # --- create ---
@@ -159,7 +181,15 @@ CREATE = ("case", "create", "--title", "Phishing campaign", "--awareness-time", 
 
 def test_create_with_naive_awareness_time_is_a_usage_error(api, capsys):
     code, out, err = run(
-        capsys, "case", "create", "--title", "Phishing", "--awareness-time", "2026-10-30T09:00:00", "--username", "alice"
+        capsys,
+        "case",
+        "create",
+        "--title",
+        "Phishing",
+        "--awareness-time",
+        "2026-10-30T09:00:00",
+        "--username",
+        "alice",
     )
     assert code == 2
     assert api.calls == []
@@ -168,7 +198,15 @@ def test_create_with_naive_awareness_time_is_a_usage_error(api, capsys):
 
 def test_create_with_future_awareness_time_is_rejected_before_any_request(api, capsys):
     code, out, err = run(
-        capsys, "case", "create", "--title", "Phishing", "--awareness-time", future_time(), "--username", "alice"
+        capsys,
+        "case",
+        "create",
+        "--title",
+        "Phishing",
+        "--awareness-time",
+        future_time(),
+        "--username",
+        "alice",
     )
     assert code == 2
     assert api.calls == []
@@ -189,7 +227,10 @@ def test_create_success_prints_the_case_and_ends_the_session(api, capsys):
     ]
     assert api.calls[0]["json"] == {"username": "alice", "password": PASSWORD}
     assert api.calls[1]["headers"]["Authorization"] == f"Bearer {ACCESS}"
-    assert api.calls[1]["json"] == {"title": "Phishing campaign", "awareness_time": "2026-10-30T09:00:00+00:00"}
+    assert api.calls[1]["json"] == {
+        "title": "Phishing campaign",
+        "awareness_time": "2026-10-30T09:00:00+00:00",
+    }
     assert api.calls[2]["json"] == {"refresh_token": REFRESH}
 
 
@@ -203,7 +244,12 @@ def test_create_json_prints_the_api_body_exactly(api, capsys):
 
 
 def test_create_maps_missing_timezone_to_a_clear_message(api, capsys):
-    api.route("POST", "/api/v1/cases", status=409, body={"detail": "system timezone is not configured"})
+    api.route(
+        "POST",
+        "/api/v1/cases",
+        status=409,
+        body={"detail": "system timezone is not configured"},
+    )
     code, out, err = run(capsys, *CREATE, "--username", "alice")
     assert code == 1
     assert out == ""
@@ -219,7 +265,15 @@ def test_create_maps_validation_errors_to_a_clear_message(api, capsys):
 
 def test_create_rejects_a_blank_title_without_a_request(api, capsys):
     code, out, err = run(
-        capsys, "case", "create", "--title", "   ", "--awareness-time", "2026-10-30T09:00:00Z", "--username", "alice"
+        capsys,
+        "case",
+        "create",
+        "--title",
+        "   ",
+        "--awareness-time",
+        "2026-10-30T09:00:00Z",
+        "--username",
+        "alice",
     )
     assert code == 2
     assert api.calls == []
@@ -231,7 +285,17 @@ def test_create_rejects_a_blank_title_without_a_request(api, capsys):
 def test_list_sends_the_paging_arguments(api, capsys):
     page = {"items": [SUMMARY], "next_cursor": None}
     api.route("GET", "/api/v1/cases", body=page)
-    code, out, err = run(capsys, "case", "list", "--limit", "10", "--cursor", "abc-123", "--username", "alice")
+    code, out, err = run(
+        capsys,
+        "case",
+        "list",
+        "--limit",
+        "10",
+        "--cursor",
+        "abc-123",
+        "--username",
+        "alice",
+    )
     assert code == 0
     get = api.calls[1]
     assert get["query"] == {"limit": ["10"], "cursor": ["abc-123"]}
@@ -263,7 +327,9 @@ def test_list_rejects_out_of_range_paging_without_a_request(api, capsys, argv):
 
 
 def test_list_no_longer_takes_an_offset(api, capsys):
-    code, out, err = run(capsys, "case", "list", "--offset", "20", "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "list", "--offset", "20", "--username", "alice"
+    )
     assert code == 2
     assert api.calls == []
 
@@ -273,12 +339,22 @@ def test_list_prints_the_next_page_cursor(api, capsys):
     api.route("GET", "/api/v1/cases", body=page)
     code, out, err = run(capsys, "case", "list", "--username", "alice")
     assert code == 0
-    assert out.splitlines()[-1] == "Next page: --cursor eyJyZWYiOiJTQUZFLTIwMjYtMDAwMDAxIn0"
+    assert (
+        out.splitlines()[-1]
+        == "Next page: --cursor eyJyZWYiOiJTQUZFLTIwMjYtMDAwMDAxIn0"
+    )
 
 
 def test_list_reports_an_invalid_cursor_with_a_clear_message(api, capsys):
-    api.route("GET", "/api/v1/cases", status=400, body={"detail": {"status": "invalid_cursor"}})
-    code, out, err = run(capsys, "case", "list", "--cursor", "not-a-cursor", "--username", "alice")
+    api.route(
+        "GET",
+        "/api/v1/cases",
+        status=400,
+        body={"detail": {"status": "invalid_cursor"}},
+    )
+    code, out, err = run(
+        capsys, "case", "list", "--cursor", "not-a-cursor", "--username", "alice"
+    )
     assert code == 1
     assert out == ""
     assert "error: the cursor is not valid" in err
@@ -288,7 +364,9 @@ def test_list_reports_an_invalid_cursor_with_a_clear_message(api, capsys):
 @pytest.mark.parametrize("status", cli.CASE_STATUS_CHOICES)
 def test_list_sends_the_status_filter(api, capsys, status):
     api.route("GET", "/api/v1/cases", body={"items": [SUMMARY], "next_cursor": None})
-    code, out, err = run(capsys, "case", "list", "--status", status, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "list", "--status", status, "--username", "alice"
+    )
     assert code == 0
     assert api.calls[1]["query"] == {"limit": ["20"], "status": [status]}
 
@@ -300,7 +378,9 @@ def test_list_without_a_status_sends_no_status_parameter(api, capsys):
 
 
 def test_list_refuses_an_unknown_status_without_a_request(api, capsys):
-    code, out, err = run(capsys, "case", "list", "--status", "archived", "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "list", "--status", "archived", "--username", "alice"
+    )
     assert code == 2
     assert api.calls == []
     assert "archived" in err
@@ -313,7 +393,12 @@ def test_status_choices_are_the_case_statuses_of_the_backend():
 
 
 def test_list_prints_the_next_deadline_and_the_last_update(api, capsys):
-    hidden = {**SUMMARY, "reference": "SAFE-2026-000002", "next_deadline": None, "updated_at": "2026-11-02T07:00:00Z"}
+    hidden = {
+        **SUMMARY,
+        "reference": "SAFE-2026-000002",
+        "next_deadline": None,
+        "updated_at": "2026-11-02T07:00:00Z",
+    }
     page = {"items": [SUMMARY, hidden], "next_cursor": None}
     api.route("GET", "/api/v1/cases", body=page)
     code, out, err = run(capsys, "case", "list", "--username", "alice")
@@ -363,13 +448,17 @@ def test_show_success_prints_the_case(api, capsys):
 
 def test_show_json_prints_the_api_body_exactly(api, capsys):
     api.route("GET", f"/api/v1/cases/{CASE_ID}", body=CASE_BODY)
-    code, out, err = run(capsys, "case", "show", CASE_ID, "--username", "alice", "--json")
+    code, out, err = run(
+        capsys, "case", "show", CASE_ID, "--username", "alice", "--json"
+    )
     assert code == 0
     assert out == compact(CASE_BODY).decode("utf-8") + "\n"
 
 
 def test_show_not_found_reports_case_not_found(api, capsys):
-    api.route("GET", f"/api/v1/cases/{CASE_ID}", status=404, body={"detail": "case not found"})
+    api.route(
+        "GET", f"/api/v1/cases/{CASE_ID}", status=404, body={"detail": "case not found"}
+    )
     code, out, err = run(capsys, "case", "show", CASE_ID, "--username", "alice")
     assert code == 1
     assert out == ""
@@ -386,7 +475,9 @@ def test_show_rejects_an_id_that_is_not_a_uuid_without_a_request(api, capsys):
 
 
 def test_login_failure_reports_invalid_credentials(api, capsys):
-    api.route("POST", "/api/v1/auth/token", status=401, body={"detail": "invalid credentials"})
+    api.route(
+        "POST", "/api/v1/auth/token", status=401, body={"detail": "invalid credentials"}
+    )
     code, out, err = run(capsys, "case", "list", "--username", "alice")
     assert code == 1
     assert out == ""
@@ -396,7 +487,9 @@ def test_login_failure_reports_invalid_credentials(api, capsys):
 
 
 def test_password_change_required_stops_with_a_web_ui_message(api, capsys):
-    api.route("POST", "/api/v1/auth/token", body=token_body(password_change_required=True))
+    api.route(
+        "POST", "/api/v1/auth/token", body=token_body(password_change_required=True)
+    )
     code, out, err = run(capsys, *CREATE, "--username", "alice")
     assert code == 1
     assert out == ""
@@ -422,7 +515,9 @@ def test_failed_logout_does_not_change_the_exit_code(api, capsys):
 
 
 def test_unreachable_api_reports_that_the_server_could_not_be_reached(api, capsys):
-    api.route("POST", "/api/v1/auth/token", error=urllib.error.URLError("connection refused"))
+    api.route(
+        "POST", "/api/v1/auth/token", error=urllib.error.URLError("connection refused")
+    )
     code, out, err = run(capsys, "case", "list", "--username", "alice")
     assert code == 1
     assert "could not be reached" in err
@@ -450,7 +545,9 @@ def test_password_is_read_from_stdin_when_stdin_is_not_a_terminal(api, capsys):
     assert api.calls[0]["json"] == {"username": "alice", "password": PASSWORD}
 
 
-def test_empty_password_on_stdin_is_a_usage_error_without_a_request(api, capsys, monkeypatch):
+def test_empty_password_on_stdin_is_a_usage_error_without_a_request(
+    api, capsys, monkeypatch
+):
     monkeypatch.setattr(cli.sys, "stdin", io.StringIO("\n"))
     code, out, err = run(capsys, "case", "list", "--username", "alice")
     assert code == 2
@@ -499,12 +596,22 @@ def test_stdout_and_stderr_never_contain_the_token_or_the_password(api, capsys, 
 # --- import ---
 
 IMPORT_PATH = "/api/v1/cases/import"
-IMPORT_RECORD = {"case_id": "3f2b8c1e-6a4d-4e9b-8f1a-2c7d9e0b5a11", "record_schema_version": "0.1.0"}
+IMPORT_RECORD = {
+    "case_id": "3f2b8c1e-6a4d-4e9b-8f1a-2c7d9e0b5a11",
+    "record_schema_version": "0.1.0",
+}
 IMPORT_FILE = {"import_format_version": 1, "records": [IMPORT_RECORD]}
 
 
 def import_summary(**counts) -> dict:
-    base = {"imported": 0, "duplicate": 0, "conflict": 0, "rejected": 0, "failed": 0, "results": []}
+    base = {
+        "imported": 0,
+        "duplicate": 0,
+        "conflict": 0,
+        "rejected": 0,
+        "failed": 0,
+        "results": [],
+    }
     base.update(counts)
     return base
 
@@ -520,10 +627,22 @@ def test_import_sends_the_file_and_prints_the_summary(api, capsys, tmp_path):
         imported=1,
         duplicate=1,
         results=[
-            {"index": 0, "status": "imported", "source_case_id": None, "case_id": CASE_ID,
-             "reference": "SAFE-2026-000001", "errors": []},
-            {"index": 1, "status": "duplicate", "source_case_id": None, "case_id": CASE_ID,
-             "reference": "SAFE-2026-000002", "errors": []},
+            {
+                "index": 0,
+                "status": "imported",
+                "source_case_id": None,
+                "case_id": CASE_ID,
+                "reference": "SAFE-2026-000001",
+                "errors": [],
+            },
+            {
+                "index": 1,
+                "status": "duplicate",
+                "source_case_id": None,
+                "case_id": CASE_ID,
+                "reference": "SAFE-2026-000002",
+                "errors": [],
+            },
         ],
     )
     api.route("POST", IMPORT_PATH, body=summary)
@@ -532,22 +651,42 @@ def test_import_sends_the_file_and_prints_the_summary(api, capsys, tmp_path):
     code, out, err = run(capsys, "case", "import", path, "--username", "alice")
 
     assert code == 0
-    assert "Import finished: 1 imported, 1 duplicate, 0 conflict, 0 rejected, 0 failed." in out
+    assert (
+        "Import finished: 1 imported, 1 duplicate, 0 conflict, 0 rejected, 0 failed."
+        in out
+    )
     assert "records[0]: imported as SAFE-2026-000001" in out
     assert "records[1]: duplicate of SAFE-2026-000002, nothing written" in out
-    assert api.paths() == [("POST", "/api/v1/auth/token"), ("POST", IMPORT_PATH), ("POST", "/api/v1/auth/logout")]
+    assert api.paths() == [
+        ("POST", "/api/v1/auth/token"),
+        ("POST", IMPORT_PATH),
+        ("POST", "/api/v1/auth/logout"),
+    ]
     assert api.calls[1]["headers"]["Authorization"] == f"Bearer {ACCESS}"
     assert api.calls[1]["json"] == IMPORT_FILE
     assert err == ""
 
 
 def test_import_json_prints_the_api_body_exactly(api, capsys, tmp_path):
-    summary = import_summary(imported=1, results=[{"index": 0, "status": "imported", "source_case_id": None,
-                                                    "case_id": CASE_ID, "reference": "SAFE-2026-000001", "errors": []}])
+    summary = import_summary(
+        imported=1,
+        results=[
+            {
+                "index": 0,
+                "status": "imported",
+                "source_case_id": None,
+                "case_id": CASE_ID,
+                "reference": "SAFE-2026-000001",
+                "errors": [],
+            }
+        ],
+    )
     api.route("POST", IMPORT_PATH, body=summary)
     path = write_file(tmp_path, json.dumps(IMPORT_FILE).encode("utf-8"))
 
-    code, out, err = run(capsys, "case", "import", path, "--username", "alice", "--json")
+    code, out, err = run(
+        capsys, "case", "import", path, "--username", "alice", "--json"
+    )
 
     assert code == 0
     assert out == compact(summary).decode("utf-8") + "\n"
@@ -558,10 +697,22 @@ def test_import_exits_1_and_names_the_rejected_record(api, capsys, tmp_path):
         imported=1,
         rejected=1,
         results=[
-            {"index": 0, "status": "imported", "source_case_id": None, "case_id": CASE_ID,
-             "reference": "SAFE-2026-000001", "errors": []},
-            {"index": 1, "status": "rejected", "source_case_id": None, "case_id": None, "reference": None,
-             "errors": ["/record_schema_version: '0.2.0' was expected"]},
+            {
+                "index": 0,
+                "status": "imported",
+                "source_case_id": None,
+                "case_id": CASE_ID,
+                "reference": "SAFE-2026-000001",
+                "errors": [],
+            },
+            {
+                "index": 1,
+                "status": "rejected",
+                "source_case_id": None,
+                "case_id": None,
+                "reference": None,
+                "errors": ["/record_schema_version: '0.2.0' was expected"],
+            },
         ],
     )
     api.route("POST", IMPORT_PATH, body=summary)
@@ -587,7 +738,9 @@ def test_import_with_only_duplicates_exits_0(api, capsys, tmp_path):
     assert "1 duplicate" in out
 
 
-def test_import_with_invalid_json_is_a_usage_error_without_a_request(api, capsys, tmp_path):
+def test_import_with_invalid_json_is_a_usage_error_without_a_request(
+    api, capsys, tmp_path
+):
     path = write_file(tmp_path, b"{not json")
 
     code, out, err = run(capsys, "case", "import", path, "--username", "alice")
@@ -607,14 +760,18 @@ def test_import_file_must_be_a_json_object(api, capsys, tmp_path):
 
 
 def test_import_missing_file_is_a_usage_error(api, capsys, tmp_path):
-    code, out, err = run(capsys, "case", "import", str(tmp_path / "missing.json"), "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "import", str(tmp_path / "missing.json"), "--username", "alice"
+    )
 
     assert code == 2
     assert api.calls == []
     assert "cannot read" in err
 
 
-def test_import_file_over_the_limit_is_refused_before_any_request(api, capsys, tmp_path):
+def test_import_file_over_the_limit_is_refused_before_any_request(
+    api, capsys, tmp_path
+):
     path = write_file(tmp_path, b" " * (cli.MAX_IMPORT_FILE_BYTES + 1))
 
     code, out, err = run(capsys, "case", "import", path, "--username", "alice")
@@ -637,22 +794,44 @@ REVIEW_LAYER_PATH = f"/api/v1/reviews/{ROUND_ID}/layers/model"
 # The fake API routes by path; the case_id query is sent with the request but is not part of the route key.
 REVIEW_LIST_PATH = "/api/v1/reviews"
 REVIEW_LAYER_NAMES = (
-    "model", "instructions", "safeguards", "tools", "environment", "monitoring", "human-operations",
-    "supply-chain", "serving-path", "authorization-and-commitment", "workflow-composition",
+    "model",
+    "instructions",
+    "safeguards",
+    "tools",
+    "environment",
+    "monitoring",
+    "human-operations",
+    "supply-chain",
+    "serving-path",
+    "authorization-and-commitment",
+    "workflow-composition",
 )
 
 
 def review_round_body(
-    revision: int = 2, reason: str | None = "Checked", status: str = "open", model_set: bool = True
+    revision: int = 2,
+    reason: str | None = "Checked",
+    status: str = "open",
+    model_set: bool = True,
 ) -> dict:
     """A round as the API returns it. The model layer is set to pass unless model_set is False; the others are not set."""
     layers = [
-        {"layer": name, "outcome": None, "reason": None, "evidence_ids": [], "set_at": None}
+        {
+            "layer": name,
+            "outcome": None,
+            "reason": None,
+            "evidence_ids": [],
+            "set_at": None,
+        }
         for name in REVIEW_LAYER_NAMES
     ]
     if model_set:
         layers[0] = {
-            "layer": "model", "outcome": "pass", "reason": reason, "evidence_ids": [], "set_at": CASE_UPDATED_AT,
+            "layer": "model",
+            "outcome": "pass",
+            "reason": reason,
+            "evidence_ids": [],
+            "set_at": CASE_UPDATED_AT,
         }
     return {
         "id": ROUND_ID,
@@ -746,48 +925,127 @@ def empty_classification_payload(expected_version: int) -> dict:
 COMMAND_CASES = [
     pytest.param(
         ("case", "close", CASE_ID, "--reason", "Resolved"),
-        "POST", f"{CASE_PATH}/close", {"reason": "Resolved"}, 200, CASE_BODY,
-        "Case closed.", "cannot be closed now", id="close",
+        "POST",
+        f"{CASE_PATH}/close",
+        {"reason": "Resolved"},
+        200,
+        CASE_BODY,
+        "Case closed.",
+        "cannot be closed now",
+        id="close",
     ),
     pytest.param(
         ("case", "reopen", CASE_ID, "--reason", "Reported again"),
-        "POST", f"{CASE_PATH}/reopen", {"reason": "Reported again"}, 200, CASE_BODY,
-        "Case reopened.", "not closed", id="reopen",
+        "POST",
+        f"{CASE_PATH}/reopen",
+        {"reason": "Reported again"},
+        200,
+        CASE_BODY,
+        "Case reopened.",
+        "not closed",
+        id="reopen",
     ),
     pytest.param(
         ("case", "assign", CASE_ID, "--user-id", USER_ID),
-        "POST", f"{CASE_PATH}/assignments", {"user_id": USER_ID}, 201, ASSIGNMENT_BODY,
-        "Assignment added.", "already assigned", id="assign",
+        "POST",
+        f"{CASE_PATH}/assignments",
+        {"user_id": USER_ID},
+        201,
+        ASSIGNMENT_BODY,
+        "Assignment added.",
+        "already assigned",
+        id="assign",
     ),
     pytest.param(
         ("case", "unassign", CASE_ID, "--user-id", USER_ID),
-        "DELETE", f"{CASE_PATH}/assignments/{USER_ID}", None, 204, None,
-        "Assignment removed.", "cannot change", id="unassign",
-    ),
-    pytest.param(
-        ("case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "pass", "--reason", "Checked",
-         "--evidence", EVIDENCE_ID, "--round", ROUND_ID, "--revision", "1"),
-        "PATCH", REVIEW_LAYER_PATH,
-        {"outcome": "pass", "reason": "Checked", "evidence_ids": [EVIDENCE_ID]}, 200, REVIEW_BODY,
-        "Review layer saved.", "is closed", id="review-record",
-    ),
-    pytest.param(
-        ("case", "classification", "set", CASE_ID, "--expected-version", "1"),
-        "PUT", f"{CASE_PATH}/classification", empty_classification_payload(1), 200, classification_body(),
-        "Classification saved as version 2.", "cannot change", id="classification-set",
-    ),
-    pytest.param(
-        ("case", "impact", "set", CASE_ID, "severity", "--severity", "high", "--scope", "Customer records"),
-        "PUT", f"{CASE_PATH}/impacts/severity", {"severity": "high", "scope": "Customer records"}, 200, IMPACT_BODY,
-        "Impact area severity saved.", "impact assessment cannot change", id="impact-set",
+        "DELETE",
+        f"{CASE_PATH}/assignments/{USER_ID}",
+        None,
+        204,
+        None,
+        "Assignment removed.",
+        "cannot change",
+        id="unassign",
     ),
     pytest.param(
         (
-            "case", "legal-duty", "add", CASE_ID,
-            "--kind", "statutory", "--description", "Notify the regulator", "--source-reference", "Art. 33",
-            "--jurisdiction", "EU", "--due-at", "2026-11-02T09:00:00Z",
+            "case",
+            "review",
+            "record",
+            CASE_ID,
+            "--layer",
+            "model",
+            "--outcome",
+            "pass",
+            "--reason",
+            "Checked",
+            "--evidence",
+            EVIDENCE_ID,
+            "--round",
+            ROUND_ID,
+            "--revision",
+            "1",
         ),
-        "POST", f"{CASE_PATH}/legal-duties",
+        "PATCH",
+        REVIEW_LAYER_PATH,
+        {"outcome": "pass", "reason": "Checked", "evidence_ids": [EVIDENCE_ID]},
+        200,
+        REVIEW_BODY,
+        "Review layer saved.",
+        "is closed",
+        id="review-record",
+    ),
+    pytest.param(
+        ("case", "classification", "set", CASE_ID, "--expected-version", "1"),
+        "PUT",
+        f"{CASE_PATH}/classification",
+        empty_classification_payload(1),
+        200,
+        classification_body(),
+        "Classification saved as version 2.",
+        "cannot change",
+        id="classification-set",
+    ),
+    pytest.param(
+        (
+            "case",
+            "impact",
+            "set",
+            CASE_ID,
+            "severity",
+            "--severity",
+            "high",
+            "--scope",
+            "Customer records",
+        ),
+        "PUT",
+        f"{CASE_PATH}/impacts/severity",
+        {"severity": "high", "scope": "Customer records"},
+        200,
+        IMPACT_BODY,
+        "Impact area severity saved.",
+        "impact assessment cannot change",
+        id="impact-set",
+    ),
+    pytest.param(
+        (
+            "case",
+            "legal-duty",
+            "add",
+            CASE_ID,
+            "--kind",
+            "statutory",
+            "--description",
+            "Notify the regulator",
+            "--source-reference",
+            "Art. 33",
+            "--jurisdiction",
+            "EU",
+            "--due-at",
+            "2026-11-02T09:00:00Z",
+        ),
+        "POST",
+        f"{CASE_PATH}/legal-duties",
         {
             "kind": "statutory",
             "description": "Notify the regulator",
@@ -795,34 +1053,58 @@ COMMAND_CASES = [
             "jurisdiction": "EU",
             "due_at": "2026-11-02T09:00:00+00:00",
         },
-        201, DUTY_BODY,
-        "Legal duty added.", "legal duties cannot change", id="legal-duty-add",
+        201,
+        DUTY_BODY,
+        "Legal duty added.",
+        "legal duties cannot change",
+        id="legal-duty-add",
     ),
     pytest.param(
         ("case", "legal-duty", "update", CASE_ID, DUTY_ID, "--status", "done"),
-        "PATCH", DUTY_PATH, {"status": "done"}, 200, DUTY_BODY,
-        "Legal duty updated.", "legal duties cannot change", id="legal-duty-update",
+        "PATCH",
+        DUTY_PATH,
+        {"status": "done"},
+        200,
+        DUTY_BODY,
+        "Legal duty updated.",
+        "legal duties cannot change",
+        id="legal-duty-update",
     ),
     pytest.param(
         (
-            "case", "awareness", "add", CASE_ID,
-            "--awareness-kind", "operator", "--event-kind", "incident",
-            "--occurred-at", "2026-10-30T09:00:00Z", "--basis", "Log review",
+            "case",
+            "awareness",
+            "add",
+            CASE_ID,
+            "--awareness-kind",
+            "operator",
+            "--event-kind",
+            "incident",
+            "--occurred-at",
+            "2026-10-30T09:00:00Z",
+            "--basis",
+            "Log review",
         ),
-        "POST", f"{CASE_PATH}/awareness-events",
+        "POST",
+        f"{CASE_PATH}/awareness-events",
         {
             "awareness_kind": "operator",
             "event_kind": "incident",
             "occurred_at": "2026-10-30T09:00:00+00:00",
             "basis": "Log review",
         },
-        201, AWARENESS_BODY,
-        "Awareness event recorded.", "no awareness event", id="awareness-add",
+        201,
+        AWARENESS_BODY,
+        "Awareness event recorded.",
+        "no awareness event",
+        id="awareness-add",
     ),
 ]
 
 
-@pytest.mark.parametrize("argv, method, path, payload, status, body, heading, conflict", COMMAND_CASES)
+@pytest.mark.parametrize(
+    "argv, method, path, payload, status, body, heading, conflict", COMMAND_CASES
+)
 def test_case_update_sends_the_request_and_ends_the_session(
     api, capsys, argv, method, path, payload, status, body, heading, conflict
 ):
@@ -830,14 +1112,20 @@ def test_case_update_sends_the_request_and_ends_the_session(
     code, out, err = run(capsys, *argv, "--username", "alice")
     assert code == 0, err
     assert heading in out
-    assert api.paths() == [("POST", "/api/v1/auth/token"), (method, path), ("POST", "/api/v1/auth/logout")]
+    assert api.paths() == [
+        ("POST", "/api/v1/auth/token"),
+        (method, path),
+        ("POST", "/api/v1/auth/logout"),
+    ]
     assert api.calls[1]["headers"]["Authorization"] == f"Bearer {ACCESS}"
     assert api.calls[1]["json"] == payload
     assert api.calls[2]["json"] == {"refresh_token": REFRESH}
     assert err == ""
 
 
-@pytest.mark.parametrize("argv, method, path, payload, status, body, heading, conflict", COMMAND_CASES)
+@pytest.mark.parametrize(
+    "argv, method, path, payload, status, body, heading, conflict", COMMAND_CASES
+)
 def test_case_update_permission_denied_is_reported_and_the_session_ends(
     api, capsys, argv, method, path, payload, status, body, heading, conflict
 ):
@@ -849,7 +1137,9 @@ def test_case_update_permission_denied_is_reported_and_the_session_ends(
     assert api.paths()[-1] == ("POST", "/api/v1/auth/logout")
 
 
-@pytest.mark.parametrize("argv, method, path, payload, status, body, heading, conflict", COMMAND_CASES)
+@pytest.mark.parametrize(
+    "argv, method, path, payload, status, body, heading, conflict", COMMAND_CASES
+)
 def test_case_update_conflict_uses_the_command_message(
     api, capsys, argv, method, path, payload, status, body, heading, conflict
 ):
@@ -863,11 +1153,15 @@ def test_case_update_conflict_uses_the_command_message(
     assert api.paths()[-1] == ("POST", "/api/v1/auth/logout")
 
 
-@pytest.mark.parametrize("argv, method, path, payload, status, body, heading, conflict", COMMAND_CASES)
+@pytest.mark.parametrize(
+    "argv, method, path, payload, status, body, heading, conflict", COMMAND_CASES
+)
 def test_case_update_password_change_required_stops_before_the_write(
     api, capsys, argv, method, path, payload, status, body, heading, conflict
 ):
-    api.route("POST", "/api/v1/auth/token", body=token_body(password_change_required=True))
+    api.route(
+        "POST", "/api/v1/auth/token", body=token_body(password_change_required=True)
+    )
     api.route(method, path, status=status, body=body)
     code, out, err = run(capsys, *argv, "--username", "alice")
     assert code == 1
@@ -878,7 +1172,11 @@ def test_case_update_password_change_required_stops_before_the_write(
 
 @pytest.mark.parametrize(
     "argv, method, path, payload, status, body, heading, conflict",
-    [case for case in COMMAND_CASES if case.id in ("close", "review-record", "classification-set")],
+    [
+        case
+        for case in COMMAND_CASES
+        if case.id in ("close", "review-record", "classification-set")
+    ],
 )
 def test_case_update_secrets_never_reach_the_output(
     api, capsys, argv, method, path, payload, status, body, heading, conflict
@@ -894,18 +1192,76 @@ def test_case_update_secrets_never_reach_the_output(
 @pytest.mark.parametrize(
     "argv, method, path, body",
     [
-        (("case", "close", CASE_ID, "--reason", "Resolved", "--json"), "POST", f"{CASE_PATH}/close", CASE_BODY),
-        (("case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "pass", "--round", ROUND_ID,
-          "--evidence", EVIDENCE_ID, "--revision", "1", "--json"), "PATCH", REVIEW_LAYER_PATH,
-         REVIEW_BODY),
-        (("case", "impact", "set", CASE_ID, "scale", "--severity", "low", "--scope", "x", "--json"), "PUT",
-         f"{CASE_PATH}/impacts/scale", IMPACT_BODY),
-        (("case", "legal-duty", "add", CASE_ID, "--kind", "contractual", "--description", "d",
-          "--source-reference", "s", "--due-at", "2026-11-02T09:00:00Z", "--json"), "POST",
-         f"{CASE_PATH}/legal-duties", DUTY_BODY),
+        (
+            ("case", "close", CASE_ID, "--reason", "Resolved", "--json"),
+            "POST",
+            f"{CASE_PATH}/close",
+            CASE_BODY,
+        ),
+        (
+            (
+                "case",
+                "review",
+                "record",
+                CASE_ID,
+                "--layer",
+                "model",
+                "--outcome",
+                "pass",
+                "--round",
+                ROUND_ID,
+                "--evidence",
+                EVIDENCE_ID,
+                "--revision",
+                "1",
+                "--json",
+            ),
+            "PATCH",
+            REVIEW_LAYER_PATH,
+            REVIEW_BODY,
+        ),
+        (
+            (
+                "case",
+                "impact",
+                "set",
+                CASE_ID,
+                "scale",
+                "--severity",
+                "low",
+                "--scope",
+                "x",
+                "--json",
+            ),
+            "PUT",
+            f"{CASE_PATH}/impacts/scale",
+            IMPACT_BODY,
+        ),
+        (
+            (
+                "case",
+                "legal-duty",
+                "add",
+                CASE_ID,
+                "--kind",
+                "contractual",
+                "--description",
+                "d",
+                "--source-reference",
+                "s",
+                "--due-at",
+                "2026-11-02T09:00:00Z",
+                "--json",
+            ),
+            "POST",
+            f"{CASE_PATH}/legal-duties",
+            DUTY_BODY,
+        ),
     ],
 )
-def test_case_update_json_prints_the_api_body_exactly(api, capsys, argv, method, path, body):
+def test_case_update_json_prints_the_api_body_exactly(
+    api, capsys, argv, method, path, body
+):
     api.route(method, path, status=201, body=body)
     code, out, err = run(capsys, *argv, "--username", "alice")
     assert code == 0
@@ -915,21 +1271,42 @@ def test_case_update_json_prints_the_api_body_exactly(api, capsys, argv, method,
 
 def test_unassign_sends_a_delete_with_no_body(api, capsys):
     api.route("DELETE", f"{CASE_PATH}/assignments/{USER_ID}", status=204)
-    code, out, err = run(capsys, "case", "unassign", CASE_ID, "--user-id", USER_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "unassign", CASE_ID, "--user-id", USER_ID, "--username", "alice"
+    )
     assert code == 0
     assert api.calls[1]["method"] == "DELETE"
     assert api.calls[1]["json"] is None
 
 
 def test_unassign_has_no_json_flag(api, capsys):
-    code, out, err = run(capsys, "case", "unassign", CASE_ID, "--user-id", USER_ID, "--username", "alice", "--json")
+    code, out, err = run(
+        capsys,
+        "case",
+        "unassign",
+        CASE_ID,
+        "--user-id",
+        USER_ID,
+        "--username",
+        "alice",
+        "--json",
+    )
     assert code == 2
     assert api.calls == []
 
 
 def test_close_sends_the_reason_as_given(api, capsys):
     api.route("POST", f"{CASE_PATH}/close", body=CASE_BODY)
-    code, out, err = run(capsys, "case", "close", CASE_ID, "--reason", "  Resolved  ", "--username", "alice")
+    code, out, err = run(
+        capsys,
+        "case",
+        "close",
+        CASE_ID,
+        "--reason",
+        "  Resolved  ",
+        "--username",
+        "alice",
+    )
     assert code == 0
     # Trimming and the rules for blank reasons are the API's job; the CLI sends the text as typed.
     assert api.calls[1]["json"] == {"reason": "  Resolved  "}
@@ -942,13 +1319,34 @@ def test_close_sends_the_reason_as_given(api, capsys):
         ("case", "reopen", CASE_ID),
         ("case", "assign", CASE_ID),
         ("case", "review", "record", CASE_ID, "--outcome", "maybe"),
-        ("case", "impact", "set", CASE_ID, "votes", "--severity", "low", "--scope", "x"),
-        ("case", "awareness", "add", CASE_ID, "--awareness-kind", "operator", "--event-kind", "incident"),
+        (
+            "case",
+            "impact",
+            "set",
+            CASE_ID,
+            "votes",
+            "--severity",
+            "low",
+            "--scope",
+            "x",
+        ),
+        (
+            "case",
+            "awareness",
+            "add",
+            CASE_ID,
+            "--awareness-kind",
+            "operator",
+            "--event-kind",
+            "incident",
+        ),
         ("case", "legal-duty", "add", CASE_ID, "--kind", "statutory"),
         ("case", "classification", "set", CASE_ID),
     ],
 )
-def test_missing_or_invalid_arguments_are_usage_errors_without_a_request(api, capsys, argv):
+def test_missing_or_invalid_arguments_are_usage_errors_without_a_request(
+    api, capsys, argv
+):
     code, out, err = run(capsys, *argv, "--username", "alice")
     assert code == 2
     assert api.calls == []
@@ -956,7 +1354,9 @@ def test_missing_or_invalid_arguments_are_usage_errors_without_a_request(api, ca
 
 @pytest.mark.parametrize("option", ["assign", "unassign"])
 def test_user_id_must_be_a_uuid_before_any_request(api, capsys, option):
-    code, out, err = run(capsys, "case", option, CASE_ID, "--user-id", "bob", "--username", "alice")
+    code, out, err = run(
+        capsys, "case", option, CASE_ID, "--user-id", "bob", "--username", "alice"
+    )
     assert code == 2
     assert api.calls == []
     assert "--user-id must be a UUID" in err
@@ -964,7 +1364,16 @@ def test_user_id_must_be_a_uuid_before_any_request(api, capsys, option):
 
 def test_duty_id_must_be_a_uuid_before_any_request(api, capsys):
     code, out, err = run(
-        capsys, "case", "legal-duty", "update", CASE_ID, "not-a-duty", "--status", "done", "--username", "alice"
+        capsys,
+        "case",
+        "legal-duty",
+        "update",
+        CASE_ID,
+        "not-a-duty",
+        "--status",
+        "done",
+        "--username",
+        "alice",
     )
     assert code == 2
     assert api.calls == []
@@ -972,7 +1381,9 @@ def test_duty_id_must_be_a_uuid_before_any_request(api, capsys):
 
 
 def test_legal_duty_update_without_a_field_is_a_usage_error(api, capsys):
-    code, out, err = run(capsys, "case", "legal-duty", "update", CASE_ID, DUTY_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "legal-duty", "update", CASE_ID, DUTY_ID, "--username", "alice"
+    )
     assert code == 2
     assert api.calls == []
     assert "give at least one field" in err
@@ -981,21 +1392,61 @@ def test_legal_duty_update_without_a_field_is_a_usage_error(api, capsys):
 def test_legal_duty_update_sends_only_the_fields_given(api, capsys):
     api.route("PATCH", DUTY_PATH, body=DUTY_BODY)
     code, out, err = run(
-        capsys, "case", "legal-duty", "update", CASE_ID, DUTY_ID,
-        "--due-at", "2026-11-05T12:00:00+03:00", "--jurisdiction", "", "--username", "alice",
+        capsys,
+        "case",
+        "legal-duty",
+        "update",
+        CASE_ID,
+        DUTY_ID,
+        "--due-at",
+        "2026-11-05T12:00:00+03:00",
+        "--jurisdiction",
+        "",
+        "--username",
+        "alice",
     )
     assert code == 0
     # An empty jurisdiction is sent as an empty string, which the API reads as a clear.
-    assert api.calls[1]["json"] == {"due_at": "2026-11-05T12:00:00+03:00", "jurisdiction": ""}
+    assert api.calls[1]["json"] == {
+        "due_at": "2026-11-05T12:00:00+03:00",
+        "jurisdiction": "",
+    }
 
 
-@pytest.mark.parametrize("option, value", [("--occurred-at", "2026-10-30T09:00:00"), ("--due-at", "2026-11-02T09:00:00")])
+@pytest.mark.parametrize(
+    "option, value",
+    [("--occurred-at", "2026-10-30T09:00:00"), ("--due-at", "2026-11-02T09:00:00")],
+)
 def test_timestamps_without_a_timezone_are_usage_errors(api, capsys, option, value):
-    argv = ["case", "legal-duty", "add", CASE_ID, "--kind", "statutory", "--description", "d",
-            "--source-reference", "s", "--due-at", value]
+    argv = [
+        "case",
+        "legal-duty",
+        "add",
+        CASE_ID,
+        "--kind",
+        "statutory",
+        "--description",
+        "d",
+        "--source-reference",
+        "s",
+        "--due-at",
+        value,
+    ]
     if option == "--occurred-at":
-        argv = ["case", "awareness", "add", CASE_ID, "--awareness-kind", "operator", "--event-kind", "incident",
-                "--occurred-at", value, "--basis", "b"]
+        argv = [
+            "case",
+            "awareness",
+            "add",
+            CASE_ID,
+            "--awareness-kind",
+            "operator",
+            "--event-kind",
+            "incident",
+            "--occurred-at",
+            value,
+            "--basis",
+            "b",
+        ]
     code, out, err = run(capsys, *argv, "--username", "alice")
     assert code == 2
     assert api.calls == []
@@ -1004,8 +1455,21 @@ def test_timestamps_without_a_timezone_are_usage_errors(api, capsys, option, val
 
 def test_awareness_occurred_at_in_the_future_is_refused_before_any_request(api, capsys):
     code, out, err = run(
-        capsys, "case", "awareness", "add", CASE_ID, "--awareness-kind", "operator", "--event-kind", "incident",
-        "--occurred-at", future_time(), "--basis", "b", "--username", "alice",
+        capsys,
+        "case",
+        "awareness",
+        "add",
+        CASE_ID,
+        "--awareness-kind",
+        "operator",
+        "--event-kind",
+        "incident",
+        "--occurred-at",
+        future_time(),
+        "--basis",
+        "b",
+        "--username",
+        "alice",
     )
     assert code == 2
     assert api.calls == []
@@ -1015,8 +1479,17 @@ def test_awareness_occurred_at_in_the_future_is_refused_before_any_request(api, 
 def test_classification_set_accepts_none_applies_as_a_trigger(api, capsys):
     api.route("PUT", f"{CASE_PATH}/classification", body=classification_body(version=1))
     code, out, err = run(
-        capsys, "case", "classification", "set", CASE_ID, "--expected-version", "0", "--trigger", "none_applies",
-        "--username", "alice",
+        capsys,
+        "case",
+        "classification",
+        "set",
+        CASE_ID,
+        "--expected-version",
+        "0",
+        "--trigger",
+        "none_applies",
+        "--username",
+        "alice",
     )
     assert code == 0, err
     assert api.calls[1]["json"]["triggers"] == ["none_applies"]
@@ -1025,16 +1498,37 @@ def test_classification_set_accepts_none_applies_as_a_trigger(api, capsys):
 def test_classification_set_sends_every_field(api, capsys):
     api.route("PUT", f"{CASE_PATH}/classification", body=classification_body(version=4))
     code, out, err = run(
-        capsys, "case", "classification", "set", CASE_ID,
-        "--expected-version", "3",
-        "--trigger", "boundary_escape", "--trigger", "confidential_data_exposure",
-        "--event-kind", "near_miss",
-        "--classification-rationale", "Within the plan",
-        "--responsible-operator", "Ops", "--affected-versions", "1.2",
-        "--approved-scope", "Scope A", "--scope-permission-source", "Contract 7",
-        "--containment", "Keys rotated", "--evidence-gap-plan", "Pull logs",
-        "--next-update-due-at", "2026-11-02T09:00:00Z",
-        "--username", "alice",
+        capsys,
+        "case",
+        "classification",
+        "set",
+        CASE_ID,
+        "--expected-version",
+        "3",
+        "--trigger",
+        "boundary_escape",
+        "--trigger",
+        "confidential_data_exposure",
+        "--event-kind",
+        "near_miss",
+        "--classification-rationale",
+        "Within the plan",
+        "--responsible-operator",
+        "Ops",
+        "--affected-versions",
+        "1.2",
+        "--approved-scope",
+        "Scope A",
+        "--scope-permission-source",
+        "Contract 7",
+        "--containment",
+        "Keys rotated",
+        "--evidence-gap-plan",
+        "Pull logs",
+        "--next-update-due-at",
+        "2026-11-02T09:00:00Z",
+        "--username",
+        "alice",
     )
     assert code == 0, err
     assert "Classification saved as version 4." in out
@@ -1055,13 +1549,25 @@ def test_classification_set_sends_every_field(api, capsys):
 
 def test_classification_set_clears_every_field_that_is_not_given(api, capsys):
     api.route("PUT", f"{CASE_PATH}/classification", body=classification_body(version=1))
-    code, out, err = run(capsys, "case", "classification", "set", CASE_ID, "--expected-version", "0", "--username", "alice")
+    code, out, err = run(
+        capsys,
+        "case",
+        "classification",
+        "set",
+        CASE_ID,
+        "--expected-version",
+        "0",
+        "--username",
+        "alice",
+    )
     assert code == 0
     assert api.calls[1]["json"] == empty_classification_payload(0)
 
 
 def test_classification_set_requires_expected_version(api, capsys):
-    code, out, err = run(capsys, "case", "classification", "set", CASE_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "classification", "set", CASE_ID, "--username", "alice"
+    )
     assert code == 2
     assert api.calls == []
     assert "--expected-version" in err
@@ -1069,7 +1575,15 @@ def test_classification_set_requires_expected_version(api, capsys):
 
 def test_classification_set_refuses_a_negative_expected_version(api, capsys):
     code, out, err = run(
-        capsys, "case", "classification", "set", CASE_ID, "--expected-version", "-1", "--username", "alice"
+        capsys,
+        "case",
+        "classification",
+        "set",
+        CASE_ID,
+        "--expected-version",
+        "-1",
+        "--username",
+        "alice",
     )
     assert code == 2
     assert api.calls == []
@@ -1077,22 +1591,46 @@ def test_classification_set_refuses_a_negative_expected_version(api, capsys):
 
 def test_classification_set_rejects_an_unknown_trigger(api, capsys):
     code, out, err = run(
-        capsys, "case", "classification", "set", CASE_ID, "--expected-version", "0",
-        "--trigger", "not_a_trigger", "--username", "alice",
+        capsys,
+        "case",
+        "classification",
+        "set",
+        CASE_ID,
+        "--expected-version",
+        "0",
+        "--trigger",
+        "not_a_trigger",
+        "--username",
+        "alice",
     )
     assert code == 2
     assert api.calls == []
 
 
-def test_classification_stale_save_prints_the_current_version_and_does_not_retry(api, capsys):
+def test_classification_stale_save_prints_the_current_version_and_does_not_retry(
+    api, capsys
+):
     api.route(
         "PUT",
         f"{CASE_PATH}/classification",
         status=409,
-        body={"detail": {"status": "classification_version_conflict", "current_version": 3}},
+        body={
+            "detail": {
+                "status": "classification_version_conflict",
+                "current_version": 3,
+            }
+        },
     )
     code, out, err = run(
-        capsys, "case", "classification", "set", CASE_ID, "--expected-version", "2", "--username", "alice"
+        capsys,
+        "case",
+        "classification",
+        "set",
+        CASE_ID,
+        "--expected-version",
+        "2",
+        "--username",
+        "alice",
     )
     assert code == 1
     assert out == ""
@@ -1105,9 +1643,22 @@ def test_classification_stale_save_prints_the_current_version_and_does_not_retry
 
 
 def test_classification_closed_case_conflict_uses_the_closed_message(api, capsys):
-    api.route("PUT", f"{CASE_PATH}/classification", status=409, body={"detail": "case is closed"})
+    api.route(
+        "PUT",
+        f"{CASE_PATH}/classification",
+        status=409,
+        body={"detail": "case is closed"},
+    )
     code, out, err = run(
-        capsys, "case", "classification", "set", CASE_ID, "--expected-version", "2", "--username", "alice"
+        capsys,
+        "case",
+        "classification",
+        "set",
+        CASE_ID,
+        "--expected-version",
+        "2",
+        "--username",
+        "alice",
     )
     assert code == 1
     assert "the case is closed, so the classification cannot change" in err
@@ -1115,47 +1666,116 @@ def test_classification_closed_case_conflict_uses_the_closed_message(api, capsys
 
 
 def test_classification_permission_denied_names_the_full_view_requirement(api, capsys):
-    api.route("PUT", f"{CASE_PATH}/classification", status=403, body={"detail": "classification_requires_full_view"})
+    api.route(
+        "PUT",
+        f"{CASE_PATH}/classification",
+        status=403,
+        body={"detail": "classification_requires_full_view"},
+    )
     code, out, err = run(
-        capsys, "case", "classification", "set", CASE_ID, "--expected-version", "2", "--username", "alice"
+        capsys,
+        "case",
+        "classification",
+        "set",
+        CASE_ID,
+        "--expected-version",
+        "2",
+        "--username",
+        "alice",
     )
     assert code == 1
     assert "cases:read_all" in err
 
 
 def test_assign_refusal_names_the_assignable_permission_not_the_role_names(api, capsys):
-    api.route("POST", f"{CASE_PATH}/assignments", status=422, body={"detail": "assignee must be an investigator or reviewer"})
-    code, out, err = run(capsys, "case", "assign", CASE_ID, "--user-id", USER_ID, "--username", "alice")
+    api.route(
+        "POST",
+        f"{CASE_PATH}/assignments",
+        status=422,
+        body={"detail": "assignee must be an investigator or reviewer"},
+    )
+    code, out, err = run(
+        capsys, "case", "assign", CASE_ID, "--user-id", USER_ID, "--username", "alice"
+    )
     assert code == 1
     assert "cases:assignable" in err
     assert "investigator" not in err
 
 
 def test_review_record_permission_denied_names_the_assignment_requirement(api, capsys):
-    api.route("PATCH", REVIEW_LAYER_PATH, status=403, body={"detail": "only an assigned reviewer can record a review"})
+    api.route(
+        "PATCH",
+        REVIEW_LAYER_PATH,
+        status=403,
+        body={"detail": "only an assigned reviewer can record a review"},
+    )
     code, out, err = run(
-        capsys, "case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "fail", "--reason", "Why",
-        "--round", ROUND_ID, "--evidence", EVIDENCE_ID, "--revision", "1", "--username", "alice",
+        capsys,
+        "case",
+        "review",
+        "record",
+        CASE_ID,
+        "--layer",
+        "model",
+        "--outcome",
+        "fail",
+        "--reason",
+        "Why",
+        "--round",
+        ROUND_ID,
+        "--evidence",
+        EVIDENCE_ID,
+        "--revision",
+        "1",
+        "--username",
+        "alice",
     )
     assert code == 1
     assert "assigned to the case" in err
 
 
-def test_review_record_without_round_uses_the_open_round_and_its_revision_is_the_one_given(api, capsys):
-    api.route("GET", REVIEW_LIST_PATH, body=[review_round_body(status="closed", revision=9),
-                                             review_round_body(revision=4)])
+def test_review_record_without_round_uses_the_open_round_and_its_revision_is_the_one_given(
+    api, capsys
+):
+    api.route(
+        "GET",
+        REVIEW_LIST_PATH,
+        body=[
+            review_round_body(status="closed", revision=9),
+            review_round_body(revision=4),
+        ],
+    )
     api.route("PATCH", REVIEW_LAYER_PATH, body=review_round_body(revision=5))
     code, out, err = run(
-        capsys, "case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "pass",
-        "--evidence", EVIDENCE_ID, "--revision", "4", "--username", "alice",
+        capsys,
+        "case",
+        "review",
+        "record",
+        CASE_ID,
+        "--layer",
+        "model",
+        "--outcome",
+        "pass",
+        "--evidence",
+        EVIDENCE_ID,
+        "--revision",
+        "4",
+        "--username",
+        "alice",
     )
     assert code == 0, err
     assert "The round revision is now 5." in out
     assert api.paths() == [
-        ("POST", "/api/v1/auth/token"), ("GET", "/api/v1/reviews"), ("PATCH", REVIEW_LAYER_PATH),
+        ("POST", "/api/v1/auth/token"),
+        ("GET", "/api/v1/reviews"),
+        ("PATCH", REVIEW_LAYER_PATH),
         ("POST", "/api/v1/auth/logout"),
     ]
-    assert api.calls[2]["json"] == {"outcome": "pass", "reason": None, "evidence_ids": [EVIDENCE_ID]}
+    assert api.calls[2]["json"] == {
+        "outcome": "pass",
+        "reason": None,
+        "evidence_ids": [EVIDENCE_ID],
+    }
     # The revision read with 'review list' travels as If-Match, not in the body.
     sent = {name.lower(): value for name, value in api.calls[2]["headers"].items()}
     assert sent["if-match"] == '"4"'
@@ -1164,8 +1784,19 @@ def test_review_record_without_round_uses_the_open_round_and_its_revision_is_the
 def test_review_record_pass_without_evidence_is_refused_before_any_request(api, capsys):
     # A pass cites at least one evidence item of the case (T06). The check runs before the login and the request.
     code, out, err = run(
-        capsys, "case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "pass",
-        "--revision", "1", "--username", "alice",
+        capsys,
+        "case",
+        "review",
+        "record",
+        CASE_ID,
+        "--layer",
+        "model",
+        "--outcome",
+        "pass",
+        "--revision",
+        "1",
+        "--username",
+        "alice",
     )
     assert code == 2
     assert "a pass needs at least one evidence item of this case" in err
@@ -1175,18 +1806,48 @@ def test_review_record_pass_without_evidence_is_refused_before_any_request(api, 
 def test_review_record_without_an_open_round_says_how_to_open_one(api, capsys):
     api.route("GET", REVIEW_LIST_PATH, body=[review_round_body(status="closed")])
     code, out, err = run(
-        capsys, "case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "pass",
-        "--evidence", EVIDENCE_ID, "--revision", "1", "--username", "alice",
+        capsys,
+        "case",
+        "review",
+        "record",
+        CASE_ID,
+        "--layer",
+        "model",
+        "--outcome",
+        "pass",
+        "--evidence",
+        EVIDENCE_ID,
+        "--revision",
+        "1",
+        "--username",
+        "alice",
     )
     assert code == 1
     assert "no open review round" in err
     assert "review open" in err
 
 
-def test_review_record_refuses_a_non_pass_outcome_without_a_reason_before_any_request(api, capsys):
+def test_review_record_refuses_a_non_pass_outcome_without_a_reason_before_any_request(
+    api, capsys
+):
     code, out, err = run(
-        capsys, "case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "fail",
-        "--round", ROUND_ID, "--evidence", EVIDENCE_ID, "--revision", "1", "--username", "alice",
+        capsys,
+        "case",
+        "review",
+        "record",
+        CASE_ID,
+        "--layer",
+        "model",
+        "--outcome",
+        "fail",
+        "--round",
+        ROUND_ID,
+        "--evidence",
+        EVIDENCE_ID,
+        "--revision",
+        "1",
+        "--username",
+        "alice",
     )
     assert code == 2  # a usage error, as in the other argument checks
     assert "a reason is required" in err
@@ -1195,12 +1856,29 @@ def test_review_record_refuses_a_non_pass_outcome_without_a_reason_before_any_re
 
 def test_review_record_revision_conflict_reports_the_current_revision(api, capsys):
     api.route(
-        "PATCH", REVIEW_LAYER_PATH, status=412,
+        "PATCH",
+        REVIEW_LAYER_PATH,
+        status=412,
         body={"detail": {"status": "precondition_failed", "current_revision": 7}},
     )
     code, out, err = run(
-        capsys, "case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "pass",
-        "--evidence", EVIDENCE_ID, "--round", ROUND_ID, "--revision", "3", "--username", "alice",
+        capsys,
+        "case",
+        "review",
+        "record",
+        CASE_ID,
+        "--layer",
+        "model",
+        "--outcome",
+        "pass",
+        "--evidence",
+        EVIDENCE_ID,
+        "--round",
+        ROUND_ID,
+        "--revision",
+        "3",
+        "--username",
+        "alice",
     )
     assert code == 1
     assert out == ""
@@ -1209,9 +1887,18 @@ def test_review_record_revision_conflict_reports_the_current_revision(api, capsy
     assert "--revision 7" in err
 
 
-def test_review_open_posts_the_case_with_an_idempotency_key_and_prints_the_round(api, capsys):
-    api.route("POST", "/api/v1/reviews", status=201, body=review_round_body(revision=1, model_set=False))
-    code, out, err = run(capsys, "case", "review", "open", CASE_ID, "--username", "alice")
+def test_review_open_posts_the_case_with_an_idempotency_key_and_prints_the_round(
+    api, capsys
+):
+    api.route(
+        "POST",
+        "/api/v1/reviews",
+        status=201,
+        body=review_round_body(revision=1, model_set=False),
+    )
+    code, out, err = run(
+        capsys, "case", "review", "open", CASE_ID, "--username", "alice"
+    )
     assert code == 0, err
     assert "Review round opened." in out
     assert f"Round ID:   {ROUND_ID}" in out
@@ -1223,9 +1910,22 @@ def test_review_open_posts_the_case_with_an_idempotency_key_and_prints_the_round
 
 
 def test_review_open_sends_the_key_given_so_a_retry_can_reuse_it(api, capsys):
-    api.route("POST", "/api/v1/reviews", status=201, body=review_round_body(revision=1, model_set=False))
+    api.route(
+        "POST",
+        "/api/v1/reviews",
+        status=201,
+        body=review_round_body(revision=1, model_set=False),
+    )
     code, out, err = run(
-        capsys, "case", "review", "open", CASE_ID, "--idempotency-key", "retry-1", "--username", "alice"
+        capsys,
+        "case",
+        "review",
+        "open",
+        CASE_ID,
+        "--idempotency-key",
+        "retry-1",
+        "--username",
+        "alice",
     )
     assert code == 0, err
     sent = {name.lower(): value for name, value in api.calls[1]["headers"].items()}
@@ -1235,7 +1935,9 @@ def test_review_open_sends_the_key_given_so_a_retry_can_reuse_it(api, capsys):
 def test_review_list_hides_a_reason_the_caller_may_not_read(api, capsys):
     api.route("GET", REVIEW_LIST_PATH, body=[review_round_body(reason=None)])
     route_me(api, ["cases:read_own"])
-    code, out, err = run(capsys, "case", "review", "list", CASE_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "review", "list", CASE_ID, "--username", "alice"
+    )
     assert code == 0, err
     assert "Revision:   2" in out
     assert "model" in out and "pass" in out
@@ -1243,9 +1945,13 @@ def test_review_list_hides_a_reason_the_caller_may_not_read(api, capsys):
 
 
 def test_review_list_shows_a_reason_to_the_full_view(api, capsys):
-    api.route("GET", REVIEW_LIST_PATH, body=[review_round_body(reason="Export missing")])
+    api.route(
+        "GET", REVIEW_LIST_PATH, body=[review_round_body(reason="Export missing")]
+    )
     route_me(api, FULL_VIEW)
-    code, out, err = run(capsys, "case", "review", "list", CASE_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "review", "list", CASE_ID, "--username", "alice"
+    )
     assert code == 0, err
     assert "Reason: Export missing" in out
 
@@ -1254,13 +1960,23 @@ def test_review_list_shows_a_reason_to_the_full_view(api, capsys):
 
 LINKS_PATH = f"{CASE_PATH}/links"
 LINKED_ID = "dddddddd-eeee-4fff-8000-111111111111"
-LINK_BODY = {"linked_case_id": LINKED_ID, "linked_case_title": "Related case", "created_at": "2026-11-01T09:00:00Z"}
-HIDDEN_LINK_BODY = {"linked_case_id": None, "linked_case_title": None, "created_at": "2026-11-01T09:00:00Z"}
+LINK_BODY = {
+    "linked_case_id": LINKED_ID,
+    "linked_case_title": "Related case",
+    "created_at": "2026-11-01T09:00:00Z",
+}
+HIDDEN_LINK_BODY = {
+    "linked_case_id": None,
+    "linked_case_title": None,
+    "created_at": "2026-11-01T09:00:00Z",
+}
 
 
 def test_link_add_sends_the_linked_case_id_and_says_nothing_else_changes(api, capsys):
     api.route("POST", LINKS_PATH, status=201, body=LINK_BODY)
-    code, out, err = run(capsys, "case", "link", "add", CASE_ID, LINKED_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "link", "add", CASE_ID, LINKED_ID, "--username", "alice"
+    )
     assert code == 0
     assert api.calls[1]["method"] == "POST"
     assert api.calls[1]["json"] == {"linked_case_id": LINKED_ID}
@@ -1271,7 +1987,17 @@ def test_link_add_sends_the_linked_case_id_and_says_nothing_else_changes(api, ca
 
 def test_link_add_json_prints_the_api_body_exactly(api, capsys):
     api.route("POST", LINKS_PATH, status=201, body=LINK_BODY)
-    code, out, err = run(capsys, "case", "link", "add", CASE_ID, LINKED_ID, "--username", "alice", "--json")
+    code, out, err = run(
+        capsys,
+        "case",
+        "link",
+        "add",
+        CASE_ID,
+        LINKED_ID,
+        "--username",
+        "alice",
+        "--json",
+    )
     assert code == 0
     assert out == compact(LINK_BODY).decode("utf-8") + "\n"
 
@@ -1279,20 +2005,43 @@ def test_link_add_json_prints_the_api_body_exactly(api, capsys):
 @pytest.mark.parametrize(
     ("status", "detail", "message"),
     [
-        pytest.param(404, {"detail": "case not found"}, "case not found, or the other case", id="not-found"),
-        pytest.param(409, {"detail": "cases are already linked"}, "already linked", id="duplicate-or-closed"),
-        pytest.param(422, {"detail": "a case cannot be linked to itself"}, "cannot be linked to itself", id="same-case"),
+        pytest.param(
+            404,
+            {"detail": "case not found"},
+            "case not found, or the other case",
+            id="not-found",
+        ),
+        pytest.param(
+            409,
+            {"detail": "cases are already linked"},
+            "already linked",
+            id="duplicate-or-closed",
+        ),
+        pytest.param(
+            422,
+            {"detail": "a case cannot be linked to itself"},
+            "cannot be linked to itself",
+            id="same-case",
+        ),
     ],
 )
-def test_link_add_refusals_are_reported_as_messages(api, capsys, status, detail, message):
+def test_link_add_refusals_are_reported_as_messages(
+    api, capsys, status, detail, message
+):
     api.route("POST", LINKS_PATH, status=status, body=detail)
-    code, out, err = run(capsys, "case", "link", "add", CASE_ID, LINKED_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "link", "add", CASE_ID, LINKED_ID, "--username", "alice"
+    )
     assert code == 1
     assert message in err
 
 
-def test_link_add_rejects_a_linked_case_id_that_is_not_a_uuid_without_a_request(api, capsys):
-    code, out, err = run(capsys, "case", "link", "add", CASE_ID, "not-a-uuid", "--username", "alice")
+def test_link_add_rejects_a_linked_case_id_that_is_not_a_uuid_without_a_request(
+    api, capsys
+):
+    code, out, err = run(
+        capsys, "case", "link", "add", CASE_ID, "not-a-uuid", "--username", "alice"
+    )
     assert code == 2
     assert "LINKED_CASE_ID must be a UUID" in err
     assert api.calls == []
@@ -1316,14 +2065,18 @@ def test_link_list_empty_says_so(api, capsys):
 
 def test_link_list_json_prints_the_api_body_exactly(api, capsys):
     api.route("GET", LINKS_PATH, body=[LINK_BODY])
-    code, out, err = run(capsys, "case", "link", "list", CASE_ID, "--username", "alice", "--json")
+    code, out, err = run(
+        capsys, "case", "link", "list", CASE_ID, "--username", "alice", "--json"
+    )
     assert code == 0
     assert out == compact([LINK_BODY]).decode("utf-8") + "\n"
 
 
 def test_link_remove_sends_a_delete_and_reports_the_removal(api, capsys):
     api.route("DELETE", f"{LINKS_PATH}/{LINKED_ID}", status=204)
-    code, out, err = run(capsys, "case", "link", "remove", CASE_ID, LINKED_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "link", "remove", CASE_ID, LINKED_ID, "--username", "alice"
+    )
     assert code == 0
     assert api.calls[1]["method"] == "DELETE"
     assert api.calls[1]["json"] is None
@@ -1331,14 +2084,31 @@ def test_link_remove_sends_a_delete_and_reports_the_removal(api, capsys):
 
 
 def test_link_remove_not_found_is_reported(api, capsys):
-    api.route("DELETE", f"{LINKS_PATH}/{LINKED_ID}", status=404, body={"detail": "link not found"})
-    code, out, err = run(capsys, "case", "link", "remove", CASE_ID, LINKED_ID, "--username", "alice")
+    api.route(
+        "DELETE",
+        f"{LINKS_PATH}/{LINKED_ID}",
+        status=404,
+        body={"detail": "link not found"},
+    )
+    code, out, err = run(
+        capsys, "case", "link", "remove", CASE_ID, LINKED_ID, "--username", "alice"
+    )
     assert code == 1
     assert "no link between the two cases" in err
 
 
 def test_link_remove_has_no_json_flag(api, capsys):
-    code, out, err = run(capsys, "case", "link", "remove", CASE_ID, LINKED_ID, "--username", "alice", "--json")
+    code, out, err = run(
+        capsys,
+        "case",
+        "link",
+        "remove",
+        CASE_ID,
+        LINKED_ID,
+        "--username",
+        "alice",
+        "--json",
+    )
     assert code == 2
     assert api.calls == []
 
@@ -1388,7 +2158,13 @@ IMPACTS_BODY = [
         "scope": "Tenant A users",
         "updated_at": "2026-11-01T08:30:00Z",
     },
-    {"area": "severity", "assessed": False, "severity": None, "scope": None, "updated_at": None},
+    {
+        "area": "severity",
+        "assessed": False,
+        "severity": None,
+        "scope": None,
+        "updated_at": None,
+    },
 ]
 LEGAL_DUTIES_BODY = [
     {
@@ -1423,7 +2199,10 @@ REPORT_BODY = {
     "generated_at": "2026-11-01T10:00:00+00:00",
     "awareness_time": "2026-10-30T09:00:00+00:00",
     "complete": False,
-    "missing_fields": [{"field": "contact", "state": "missing"}, {"field": "impacts.severity", "state": "unknown"}],
+    "missing_fields": [
+        {"field": "contact", "state": "missing"},
+        {"field": "impacts.severity", "state": "unknown"},
+    ],
     "contact": {"status": "missing"},
     "classification": {
         "version": 2,
@@ -1441,7 +2220,12 @@ REPORT_BODY = {
         }
     ],
     "impacts": [
-        {"area": "affected_people_groups", "assessed": True, "severity": "high", "scope": "Tenant A users"},
+        {
+            "area": "affected_people_groups",
+            "assessed": True,
+            "severity": "high",
+            "scope": "Tenant A users",
+        },
         {"area": "severity", "assessed": False, "severity": None, "scope": None},
     ],
     "legal_duties": [
@@ -1455,7 +2239,13 @@ REPORT_BODY = {
             "status": "open",
         }
     ],
-    "safe_deadlines": [{"kind": "initial_notice", "due_at": "2026-11-01T09:00:00+00:00", "status": "pending"}],
+    "safe_deadlines": [
+        {
+            "kind": "initial_notice",
+            "due_at": "2026-11-01T09:00:00+00:00",
+            "status": "pending",
+        }
+    ],
 }
 
 
@@ -1482,7 +2272,9 @@ def hidden(body: dict, fields: tuple[str, ...]) -> dict:
 
 def field_line(out: str, label: str) -> str:
     """The output line of one label. Labels are unique within one command's output."""
-    return next(line for line in out.splitlines() if line.strip().startswith(f"{label}:"))
+    return next(
+        line for line in out.splitlines() if line.strip().startswith(f"{label}:")
+    )
 
 
 def row_of(out: str, first_cell: str) -> str:
@@ -1491,10 +2283,18 @@ def row_of(out: str, first_cell: str) -> str:
 
 
 CASE_RECORD_READS = [
-    pytest.param(("case", "classification", "show", CASE_ID), CLASSIFICATION_PATH, id="classification"),
+    pytest.param(
+        ("case", "classification", "show", CASE_ID),
+        CLASSIFICATION_PATH,
+        id="classification",
+    ),
     pytest.param(("case", "impact", "list", CASE_ID), IMPACTS_PATH, id="impacts"),
-    pytest.param(("case", "legal-duty", "list", CASE_ID), LEGAL_DUTIES_PATH, id="legal-duties"),
-    pytest.param(("case", "awareness", "list", CASE_ID), AWARENESS_PATH, id="awareness"),
+    pytest.param(
+        ("case", "legal-duty", "list", CASE_ID), LEGAL_DUTIES_PATH, id="legal-duties"
+    ),
+    pytest.param(
+        ("case", "awareness", "list", CASE_ID), AWARENESS_PATH, id="awareness"
+    ),
     pytest.param(("case", "report", "show", CASE_ID), REPORT_PATH, id="report"),
 ]
 
@@ -1505,10 +2305,14 @@ CASE_RECORD_READS = [
 def test_classification_show_prints_the_fields_for_a_full_view_caller(api, capsys):
     api.route("GET", CLASSIFICATION_PATH, body=CLASSIFICATION_BODY)
     route_me(api, FULL_VIEW)
-    code, out, err = run(capsys, "case", "classification", "show", CASE_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "classification", "show", CASE_ID, "--username", "alice"
+    )
     assert code == 0
     assert "Classification version 2:" in out
-    assert field_line(out, "Triggers").endswith("boundary_escape, confidential_data_exposure")
+    assert field_line(out, "Triggers").endswith(
+        "boundary_escape, confidential_data_exposure"
+    )
     assert field_line(out, "Rationale").endswith("Customer data left the boundary")
     assert field_line(out, "Next update (UTC)").endswith("2026-11-02T09:00:00Z")
     # Unset free text is a dash for this caller: nothing is hidden from it.
@@ -1519,7 +2323,9 @@ def test_classification_show_prints_the_fields_for_a_full_view_caller(api, capsy
 def test_classification_show_sends_a_bearer_get_and_ends_the_session(api, capsys):
     api.route("GET", CLASSIFICATION_PATH, body=CLASSIFICATION_BODY)
     route_me(api, FULL_VIEW)
-    code, out, err = run(capsys, "case", "classification", "show", CASE_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "classification", "show", CASE_ID, "--username", "alice"
+    )
     assert code == 0
     assert api.paths() == [
         ("POST", "/api/v1/auth/token"),
@@ -1533,24 +2339,43 @@ def test_classification_show_sends_a_bearer_get_and_ends_the_session(api, capsys
 
 def test_classification_show_json_prints_the_api_body_exactly(api, capsys):
     api.route("GET", CLASSIFICATION_PATH, body=CLASSIFICATION_BODY)
-    code, out, err = run(capsys, "case", "classification", "show", CASE_ID, "--username", "alice", "--json")
+    code, out, err = run(
+        capsys,
+        "case",
+        "classification",
+        "show",
+        CASE_ID,
+        "--username",
+        "alice",
+        "--json",
+    )
     assert code == 0
     assert out == compact(CLASSIFICATION_BODY).decode("utf-8") + "\n"
     # The JSON output makes no second request: the permission is read only for the human output.
     assert ("GET", ME_PATH) not in api.paths()
 
 
-def test_classification_show_marks_hidden_free_text_for_a_caller_without_read_all(api, capsys):
-    api.route("GET", CLASSIFICATION_PATH, body=hidden(CLASSIFICATION_BODY, CLASSIFICATION_FREE_FIELDS))
+def test_classification_show_marks_hidden_free_text_for_a_caller_without_read_all(
+    api, capsys
+):
+    api.route(
+        "GET",
+        CLASSIFICATION_PATH,
+        body=hidden(CLASSIFICATION_BODY, CLASSIFICATION_FREE_FIELDS),
+    )
     route_me(api, LIMITED_VIEW)
-    code, out, err = run(capsys, "case", "classification", "show", CASE_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "classification", "show", CASE_ID, "--username", "alice"
+    )
     assert code == 0
     assert field_line(out, "Rationale").endswith(NOT_VISIBLE)
     assert field_line(out, "Approved scope").endswith(NOT_VISIBLE)
     assert field_line(out, "Containment").endswith(NOT_VISIBLE)
     # Fields that are not free text stay visible.
     assert field_line(out, "Event kind").endswith("incident")
-    assert field_line(out, "Triggers").endswith("boundary_escape, confidential_data_exposure")
+    assert field_line(out, "Triggers").endswith(
+        "boundary_escape, confidential_data_exposure"
+    )
 
 
 def test_classification_show_says_when_none_is_recorded(api, capsys):
@@ -1565,7 +2390,9 @@ def test_classification_show_says_when_none_is_recorded(api, capsys):
     body = hidden(empty, CLASSIFICATION_FREE_FIELDS)
     api.route("GET", CLASSIFICATION_PATH, body=body)
     route_me(api, FULL_VIEW)
-    code, out, err = run(capsys, "case", "classification", "show", CASE_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "classification", "show", CASE_ID, "--username", "alice"
+    )
     assert code == 0
     assert out == "No classification recorded for this case.\n"
 
@@ -1573,7 +2400,9 @@ def test_classification_show_says_when_none_is_recorded(api, capsys):
 def test_classification_show_with_no_triggers_says_not_assessed(api, capsys):
     api.route("GET", CLASSIFICATION_PATH, body={**CLASSIFICATION_BODY, "triggers": []})
     route_me(api, FULL_VIEW)
-    code, out, err = run(capsys, "case", "classification", "show", CASE_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "classification", "show", CASE_ID, "--username", "alice"
+    )
     assert code == 0
     assert field_line(out, "Triggers").endswith("not assessed")
 
@@ -1584,18 +2413,30 @@ def test_classification_show_with_no_triggers_says_not_assessed(api, capsys):
 def test_impact_list_prints_one_line_per_area_for_a_full_view_caller(api, capsys):
     api.route("GET", IMPACTS_PATH, body=IMPACTS_BODY)
     route_me(api, FULL_VIEW)
-    code, out, err = run(capsys, "case", "impact", "list", CASE_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "impact", "list", CASE_ID, "--username", "alice"
+    )
     assert code == 0
-    assert out.splitlines()[0].split() == ["AREA", "SEVERITY", "SCOPE", "UPDATED", "(UTC)"]
+    assert out.splitlines()[0].split() == [
+        "AREA",
+        "SEVERITY",
+        "SCOPE",
+        "UPDATED",
+        "(UTC)",
+    ]
     assert "Tenant A users" in row_of(out, "affected_people_groups")
     assert "not assessed" in row_of(out, "severity")
     assert NOT_VISIBLE not in out
 
 
 def test_impact_list_marks_hidden_scope_and_keeps_unassessed_areas_apart(api, capsys):
-    api.route("GET", IMPACTS_PATH, body=[hidden(IMPACTS_BODY[0], ("scope",)), IMPACTS_BODY[1]])
+    api.route(
+        "GET", IMPACTS_PATH, body=[hidden(IMPACTS_BODY[0], ("scope",)), IMPACTS_BODY[1]]
+    )
     route_me(api, LIMITED_VIEW)
-    code, out, err = run(capsys, "case", "impact", "list", CASE_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "impact", "list", CASE_ID, "--username", "alice"
+    )
     assert code == 0
     assert NOT_VISIBLE in row_of(out, "affected_people_groups")
     # An area with no assessment is "not assessed", never the hidden text or a severity.
@@ -1605,7 +2446,9 @@ def test_impact_list_marks_hidden_scope_and_keeps_unassessed_areas_apart(api, ca
 
 def test_impact_list_json_prints_the_api_body_exactly(api, capsys):
     api.route("GET", IMPACTS_PATH, body=IMPACTS_BODY)
-    code, out, err = run(capsys, "case", "impact", "list", CASE_ID, "--username", "alice", "--json")
+    code, out, err = run(
+        capsys, "case", "impact", "list", CASE_ID, "--username", "alice", "--json"
+    )
     assert code == 0
     assert out == compact(IMPACTS_BODY).decode("utf-8") + "\n"
     assert ("GET", ME_PATH) not in api.paths()
@@ -1617,7 +2460,9 @@ def test_impact_list_json_prints_the_api_body_exactly(api, capsys):
 def test_legal_duty_list_prints_one_line_per_duty(api, capsys):
     api.route("GET", LEGAL_DUTIES_PATH, body=LEGAL_DUTIES_BODY)
     route_me(api, FULL_VIEW)
-    code, out, err = run(capsys, "case", "legal-duty", "list", CASE_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "legal-duty", "list", CASE_ID, "--username", "alice"
+    )
     assert code == 0
     row = row_of(out, DUTY_ID)
     assert "statutory" in row and "open" in row and "2026-11-03T09:00:00Z" in row
@@ -1625,11 +2470,19 @@ def test_legal_duty_list_prints_one_line_per_duty(api, capsys):
     assert NOT_VISIBLE not in out
 
 
-def test_legal_duty_list_marks_hidden_free_text_for_a_caller_without_read_all(api, capsys):
-    hidden_duties = [hidden(LEGAL_DUTIES_BODY[0], ("description", "source_reference", "jurisdiction"))]
+def test_legal_duty_list_marks_hidden_free_text_for_a_caller_without_read_all(
+    api, capsys
+):
+    hidden_duties = [
+        hidden(
+            LEGAL_DUTIES_BODY[0], ("description", "source_reference", "jurisdiction")
+        )
+    ]
     api.route("GET", LEGAL_DUTIES_PATH, body=hidden_duties)
     route_me(api, LIMITED_VIEW)
-    code, out, err = run(capsys, "case", "legal-duty", "list", CASE_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "legal-duty", "list", CASE_ID, "--username", "alice"
+    )
     assert code == 0
     assert row_of(out, DUTY_ID).count(NOT_VISIBLE) == 3
     assert "statutory" in row_of(out, DUTY_ID)
@@ -1638,14 +2491,18 @@ def test_legal_duty_list_marks_hidden_free_text_for_a_caller_without_read_all(ap
 def test_legal_duty_list_empty_says_so(api, capsys):
     api.route("GET", LEGAL_DUTIES_PATH, body=[])
     route_me(api, FULL_VIEW)
-    code, out, err = run(capsys, "case", "legal-duty", "list", CASE_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "legal-duty", "list", CASE_ID, "--username", "alice"
+    )
     assert code == 0
     assert out == "No legal duties recorded for this case.\n"
 
 
 def test_legal_duty_list_json_prints_the_api_body_exactly(api, capsys):
     api.route("GET", LEGAL_DUTIES_PATH, body=LEGAL_DUTIES_BODY)
-    code, out, err = run(capsys, "case", "legal-duty", "list", CASE_ID, "--username", "alice", "--json")
+    code, out, err = run(
+        capsys, "case", "legal-duty", "list", CASE_ID, "--username", "alice", "--json"
+    )
     assert code == 0
     assert out == compact(LEGAL_DUTIES_BODY).decode("utf-8") + "\n"
     assert ("GET", ME_PATH) not in api.paths()
@@ -1657,16 +2514,25 @@ def test_legal_duty_list_json_prints_the_api_body_exactly(api, capsys):
 def test_awareness_list_prints_one_line_per_event(api, capsys):
     api.route("GET", AWARENESS_PATH, body=AWARENESS_LIST_BODY)
     route_me(api, FULL_VIEW)
-    code, out, err = run(capsys, "case", "awareness", "list", CASE_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "awareness", "list", CASE_ID, "--username", "alice"
+    )
     assert code == 0
     row = row_of(out, AWARENESS_ID)
-    assert "operator" in row and "incident" in row and "2026-10-30T08:00:00Z" in row and "Log review" in row
+    assert (
+        "operator" in row
+        and "incident" in row
+        and "2026-10-30T08:00:00Z" in row
+        and "Log review" in row
+    )
 
 
 def test_awareness_list_marks_hidden_basis_for_a_caller_without_read_all(api, capsys):
     api.route("GET", AWARENESS_PATH, body=[hidden(AWARENESS_LIST_BODY[0], ("basis",))])
     route_me(api, LIMITED_VIEW)
-    code, out, err = run(capsys, "case", "awareness", "list", CASE_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "awareness", "list", CASE_ID, "--username", "alice"
+    )
     assert code == 0
     assert row_of(out, AWARENESS_ID).endswith(NOT_VISIBLE)
 
@@ -1674,14 +2540,18 @@ def test_awareness_list_marks_hidden_basis_for_a_caller_without_read_all(api, ca
 def test_awareness_list_empty_says_so(api, capsys):
     api.route("GET", AWARENESS_PATH, body=[])
     route_me(api, FULL_VIEW)
-    code, out, err = run(capsys, "case", "awareness", "list", CASE_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "awareness", "list", CASE_ID, "--username", "alice"
+    )
     assert code == 0
     assert out == "No awareness events recorded for this case.\n"
 
 
 def test_awareness_list_json_prints_the_api_body_exactly(api, capsys):
     api.route("GET", AWARENESS_PATH, body=AWARENESS_LIST_BODY)
-    code, out, err = run(capsys, "case", "awareness", "list", CASE_ID, "--username", "alice", "--json")
+    code, out, err = run(
+        capsys, "case", "awareness", "list", CASE_ID, "--username", "alice", "--json"
+    )
     assert code == 0
     assert out == compact(AWARENESS_LIST_BODY).decode("utf-8") + "\n"
     assert ("GET", ME_PATH) not in api.paths()
@@ -1692,32 +2562,47 @@ def test_awareness_list_json_prints_the_api_body_exactly(api, capsys):
 
 def test_report_show_prints_the_summary_without_a_permission_read(api, capsys):
     api.route("GET", REPORT_PATH, body=REPORT_BODY)
-    code, out, err = run(capsys, "case", "report", "show", CASE_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "report", "show", CASE_ID, "--username", "alice"
+    )
     assert code == 0
     assert out.splitlines()[0] == "Preliminary report for SAFE-2026-000001 (case open)"
     assert field_line(out, "Complete").endswith("no")
     assert "    contact: missing" in out.splitlines()
     assert "    impacts.severity: unknown" in out.splitlines()
-    assert field_line(out, "Classification").endswith("version 2, triggers: boundary_escape")
+    assert field_line(out, "Classification").endswith(
+        "version 2, triggers: boundary_escape"
+    )
     assert field_line(out, "Impacts assessed").endswith("1 of 2")
     assert field_line(out, "Legal duties").endswith("1 (1 open)")
-    assert api.paths() == [("POST", "/api/v1/auth/token"), ("GET", REPORT_PATH), ("POST", "/api/v1/auth/logout")]
+    assert api.paths() == [
+        ("POST", "/api/v1/auth/token"),
+        ("GET", REPORT_PATH),
+        ("POST", "/api/v1/auth/logout"),
+    ]
     assert api.calls[1]["headers"]["Authorization"] == f"Bearer {ACCESS}"
 
 
 def test_report_show_json_prints_the_api_body_exactly(api, capsys):
     api.route("GET", REPORT_PATH, body=REPORT_BODY)
-    code, out, err = run(capsys, "case", "report", "show", CASE_ID, "--username", "alice", "--json")
+    code, out, err = run(
+        capsys, "case", "report", "show", CASE_ID, "--username", "alice", "--json"
+    )
     assert code == 0
     assert out == compact(REPORT_BODY).decode("utf-8") + "\n"
 
 
 def test_report_show_forbidden_names_the_read_all_permission(api, capsys):
     api.route("GET", REPORT_PATH, status=403, body={"detail": "forbidden"})
-    code, out, err = run(capsys, "case", "report", "show", CASE_ID, "--username", "alice")
+    code, out, err = run(
+        capsys, "case", "report", "show", CASE_ID, "--username", "alice"
+    )
     assert code == 1
     assert out == ""
-    assert "the preliminary report needs cases:read_all, which your account does not hold" in err
+    assert (
+        "the preliminary report needs cases:read_all, which your account does not hold"
+        in err
+    )
     assert api.paths()[-1] == ("POST", "/api/v1/auth/logout")
 
 
@@ -1732,7 +2617,9 @@ def test_report_show_forbidden_names_the_read_all_permission(api, capsys):
         pytest.param(404, "case not found", id="not-found"),
     ],
 )
-def test_case_record_reads_report_refusals_and_end_the_session(api, capsys, argv, path, status, message):
+def test_case_record_reads_report_refusals_and_end_the_session(
+    api, capsys, argv, path, status, message
+):
     api.route("GET", path, status=status, body={"detail": "refused"})
     code, out, err = run(capsys, *argv, "--username", "alice")
     assert code == 1
@@ -1744,14 +2631,18 @@ def test_case_record_reads_report_refusals_and_end_the_session(api, capsys, argv
 @pytest.mark.parametrize(
     "argv",
     [
-        pytest.param(("case", "classification", "show", "not-a-case"), id="classification"),
+        pytest.param(
+            ("case", "classification", "show", "not-a-case"), id="classification"
+        ),
         pytest.param(("case", "impact", "list", "not-a-case"), id="impacts"),
         pytest.param(("case", "legal-duty", "list", "not-a-case"), id="legal-duties"),
         pytest.param(("case", "awareness", "list", "not-a-case"), id="awareness"),
         pytest.param(("case", "report", "show", "not-a-case"), id="report"),
     ],
 )
-def test_case_record_reads_reject_a_case_id_that_is_not_a_uuid_without_a_request(api, capsys, argv):
+def test_case_record_reads_reject_a_case_id_that_is_not_a_uuid_without_a_request(
+    api, capsys, argv
+):
     code, out, err = run(capsys, *argv, "--username", "alice")
     assert code == 2
     assert "CASE_ID must be the case ID" in err
@@ -1761,14 +2652,38 @@ def test_case_record_reads_reject_a_case_id_that_is_not_a_uuid_without_a_request
 @pytest.mark.parametrize(
     ("argv", "path", "body"),
     [
-        pytest.param(("case", "classification", "show", CASE_ID), CLASSIFICATION_PATH, CLASSIFICATION_BODY, id="classification"),
-        pytest.param(("case", "impact", "list", CASE_ID), IMPACTS_PATH, IMPACTS_BODY, id="impacts"),
-        pytest.param(("case", "legal-duty", "list", CASE_ID), LEGAL_DUTIES_PATH, LEGAL_DUTIES_BODY, id="legal-duties"),
-        pytest.param(("case", "awareness", "list", CASE_ID), AWARENESS_PATH, AWARENESS_LIST_BODY, id="awareness"),
-        pytest.param(("case", "report", "show", CASE_ID), REPORT_PATH, REPORT_BODY, id="report"),
+        pytest.param(
+            ("case", "classification", "show", CASE_ID),
+            CLASSIFICATION_PATH,
+            CLASSIFICATION_BODY,
+            id="classification",
+        ),
+        pytest.param(
+            ("case", "impact", "list", CASE_ID),
+            IMPACTS_PATH,
+            IMPACTS_BODY,
+            id="impacts",
+        ),
+        pytest.param(
+            ("case", "legal-duty", "list", CASE_ID),
+            LEGAL_DUTIES_PATH,
+            LEGAL_DUTIES_BODY,
+            id="legal-duties",
+        ),
+        pytest.param(
+            ("case", "awareness", "list", CASE_ID),
+            AWARENESS_PATH,
+            AWARENESS_LIST_BODY,
+            id="awareness",
+        ),
+        pytest.param(
+            ("case", "report", "show", CASE_ID), REPORT_PATH, REPORT_BODY, id="report"
+        ),
     ],
 )
-def test_case_record_reads_never_print_the_token_or_the_password(api, capsys, argv, path, body):
+def test_case_record_reads_never_print_the_token_or_the_password(
+    api, capsys, argv, path, body
+):
     api.route("GET", path, body=body)
     route_me(api, FULL_VIEW)
     code, out, err = run(capsys, *argv, "--username", "alice")
@@ -1816,7 +2731,11 @@ APPEAL_ENTRY = {
 
 def last_post(api) -> dict:
     """The last request to a review route. The logout that ends each session comes after it."""
-    posts = [call for call in api.calls if call["method"] == "POST" and call["path"].startswith("/api/v1/reviews/")]
+    posts = [
+        call
+        for call in api.calls
+        if call["method"] == "POST" and call["path"].startswith("/api/v1/reviews/")
+    ]
     return posts[-1]
 
 
@@ -1825,43 +2744,104 @@ def posted_key(api) -> str:
     return sent["idempotency-key"]
 
 
-def test_review_conflict_declared_posts_the_kind_and_description_with_a_key(api, capsys):
+def test_review_conflict_declared_posts_the_kind_and_description_with_a_key(
+    api, capsys
+):
     api.route("POST", CONFLICT_PATH, status=201, body=CONFLICT_ENTRY)
     code, out, err = run(
-        capsys, "case", "review", "conflict", ROUND_ID, "--kind", "declared", "--description", "Built the system",
-        "--username", "alice",
+        capsys,
+        "case",
+        "review",
+        "conflict",
+        ROUND_ID,
+        "--kind",
+        "declared",
+        "--description",
+        "Built the system",
+        "--username",
+        "alice",
     )
     assert code == 0, err
     assert "Conflict declared." in out
     assert f"ID:               {CONFLICT_ENTRY['id']}" in out
-    assert last_post(api)["json"] == {"kind": "declared", "description": "Built the system", "supersedes_id": None}
+    assert last_post(api)["json"] == {
+        "kind": "declared",
+        "description": "Built the system",
+        "supersedes_id": None,
+    }
     assert len(posted_key(api)) >= 1
 
 
 def test_review_conflict_declared_needs_a_description_before_any_request(api, capsys):
-    code, out, err = run(capsys, "case", "review", "conflict", ROUND_ID, "--kind", "declared", "--username", "alice")
+    code, out, err = run(
+        capsys,
+        "case",
+        "review",
+        "conflict",
+        ROUND_ID,
+        "--kind",
+        "declared",
+        "--username",
+        "alice",
+    )
     assert code == 2
     assert "a description is required for a declared conflict" in err
     assert all(method != "POST" for method, _ in api.paths())
 
 
-def test_review_conflict_withdrawn_needs_no_description_and_can_correct_an_entry(api, capsys):
-    api.route("POST", CONFLICT_PATH, status=201, body={**CONFLICT_ENTRY, "kind": "withdrawn", "description": None})
+def test_review_conflict_withdrawn_needs_no_description_and_can_correct_an_entry(
+    api, capsys
+):
+    api.route(
+        "POST",
+        CONFLICT_PATH,
+        status=201,
+        body={**CONFLICT_ENTRY, "kind": "withdrawn", "description": None},
+    )
     code, out, err = run(
-        capsys, "case", "review", "conflict", ROUND_ID, "--kind", "withdrawn",
-        "--supersedes", CONFLICT_ENTRY["id"], "--idempotency-key", "retry-7", "--username", "alice",
+        capsys,
+        "case",
+        "review",
+        "conflict",
+        ROUND_ID,
+        "--kind",
+        "withdrawn",
+        "--supersedes",
+        CONFLICT_ENTRY["id"],
+        "--idempotency-key",
+        "retry-7",
+        "--username",
+        "alice",
     )
     assert code == 0, err
     assert "Conflict withdrawn." in out
-    assert last_post(api)["json"] == {"kind": "withdrawn", "description": None, "supersedes_id": CONFLICT_ENTRY["id"]}
+    assert last_post(api)["json"] == {
+        "kind": "withdrawn",
+        "description": None,
+        "supersedes_id": CONFLICT_ENTRY["id"],
+    }
     assert posted_key(api) == "retry-7"
 
 
 def test_review_conflict_409_says_how_to_check_the_round(api, capsys):
-    api.route("POST", CONFLICT_PATH, status=409, body={"detail": {"status": "conflict_already_declared"}})
+    api.route(
+        "POST",
+        CONFLICT_PATH,
+        status=409,
+        body={"detail": {"status": "conflict_already_declared"}},
+    )
     code, out, err = run(
-        capsys, "case", "review", "conflict", ROUND_ID, "--kind", "declared", "--description", "Again",
-        "--username", "alice",
+        capsys,
+        "case",
+        "review",
+        "conflict",
+        ROUND_ID,
+        "--kind",
+        "declared",
+        "--description",
+        "Again",
+        "--username",
+        "alice",
     )
     assert code != 0
     assert "already declared" in err
@@ -1871,8 +2851,18 @@ def test_review_conflict_409_says_how_to_check_the_round(api, capsys):
 def test_review_conflict_json_prints_the_api_body_exactly(api, capsys):
     api.route("POST", CONFLICT_PATH, status=201, body=CONFLICT_ENTRY)
     code, out, err = run(
-        capsys, "case", "review", "conflict", ROUND_ID, "--kind", "declared", "--description", "Built the system",
-        "--json", "--username", "alice",
+        capsys,
+        "case",
+        "review",
+        "conflict",
+        ROUND_ID,
+        "--kind",
+        "declared",
+        "--description",
+        "Built the system",
+        "--json",
+        "--username",
+        "alice",
     )
     assert code == 0, err
     assert json.loads(out) == CONFLICT_ENTRY
@@ -1881,36 +2871,84 @@ def test_review_conflict_json_prints_the_api_body_exactly(api, capsys):
 def test_review_recuse_posts_the_replacement_and_prints_it(api, capsys):
     api.route("POST", RECUSAL_PATH, status=201, body=RECUSAL_ENTRY)
     code, out, err = run(
-        capsys, "case", "review", "recuse", ROUND_ID, "--replacement", REPLACEMENT_ID, "--reason", "Too close",
-        "--username", "alice",
+        capsys,
+        "case",
+        "review",
+        "recuse",
+        ROUND_ID,
+        "--replacement",
+        REPLACEMENT_ID,
+        "--reason",
+        "Too close",
+        "--username",
+        "alice",
     )
     assert code == 0, err
     assert "Recusal recorded." in out
     assert f"Replacement ID:   {REPLACEMENT_ID}" in out
-    assert last_post(api)["json"] == {"replacement_id": REPLACEMENT_ID, "reason": "Too close", "supersedes_id": None}
+    assert last_post(api)["json"] == {
+        "replacement_id": REPLACEMENT_ID,
+        "reason": "Too close",
+        "supersedes_id": None,
+    }
     assert len(posted_key(api)) >= 1
 
 
-def test_review_recuse_refuses_a_replacement_that_is_not_a_uuid_before_any_request(api, capsys):
-    code, out, err = run(capsys, "case", "review", "recuse", ROUND_ID, "--replacement", "nobody", "--username", "alice")
+def test_review_recuse_refuses_a_replacement_that_is_not_a_uuid_before_any_request(
+    api, capsys
+):
+    code, out, err = run(
+        capsys,
+        "case",
+        "review",
+        "recuse",
+        ROUND_ID,
+        "--replacement",
+        "nobody",
+        "--username",
+        "alice",
+    )
     assert code == 2
     assert "--replacement must be a UUID" in err
     assert all(method != "POST" for method, _ in api.paths())
 
 
 def test_review_recuse_replacement_refusal_names_the_rule(api, capsys):
-    api.route("POST", RECUSAL_PATH, status=422, body={"detail": "the replacement has a declared conflict"})
+    api.route(
+        "POST",
+        RECUSAL_PATH,
+        status=422,
+        body={"detail": "the replacement has a declared conflict"},
+    )
     code, out, err = run(
-        capsys, "case", "review", "recuse", ROUND_ID, "--replacement", REPLACEMENT_ID, "--username", "alice",
+        capsys,
+        "case",
+        "review",
+        "recuse",
+        ROUND_ID,
+        "--replacement",
+        REPLACEMENT_ID,
+        "--username",
+        "alice",
     )
     assert code != 0
     assert "declared conflict" in err
 
 
-def test_review_appeal_posts_only_the_grounds_and_the_system_names_the_reviewer(api, capsys):
+def test_review_appeal_posts_only_the_grounds_and_the_system_names_the_reviewer(
+    api, capsys
+):
     api.route("POST", APPEAL_PATH, status=201, body=APPEAL_ENTRY)
     code, out, err = run(
-        capsys, "case", "review", "appeal", ROUND_ID, "--grounds", "The layer was not tested", "--username", "alice",
+        capsys,
+        "case",
+        "review",
+        "appeal",
+        ROUND_ID,
+        "--grounds",
+        "The layer was not tested",
+        "--username",
+        "alice",
     )
     assert code == 0, err
     assert "Appeal filed." in out
@@ -1921,8 +2959,17 @@ def test_review_appeal_posts_only_the_grounds_and_the_system_names_the_reviewer(
 
 def test_review_appeal_has_no_reviewer_option(api, capsys):
     code, out, err = run(
-        capsys, "case", "review", "appeal", ROUND_ID, "--grounds", "Wrong", "--independent", REPLACEMENT_ID,
-        "--username", "alice",
+        capsys,
+        "case",
+        "review",
+        "appeal",
+        ROUND_ID,
+        "--grounds",
+        "Wrong",
+        "--independent",
+        REPLACEMENT_ID,
+        "--username",
+        "alice",
     )
     assert code == 2
     assert all(method != "POST" for method, _ in api.paths())
@@ -1930,7 +2977,15 @@ def test_review_appeal_has_no_reviewer_option(api, capsys):
 
 def test_review_appeal_refuses_blank_grounds_before_any_request(api, capsys):
     code, out, err = run(
-        capsys, "case", "review", "appeal", ROUND_ID, "--grounds", "   ", "--username", "alice",
+        capsys,
+        "case",
+        "review",
+        "appeal",
+        ROUND_ID,
+        "--grounds",
+        "   ",
+        "--username",
+        "alice",
     )
     assert code == 2
     assert "--grounds must not be blank" in err
@@ -1938,8 +2993,23 @@ def test_review_appeal_refuses_blank_grounds_before_any_request(api, capsys):
 
 
 def test_review_appeal_409_says_no_reviewer_is_eligible(api, capsys):
-    api.route("POST", APPEAL_PATH, status=409, body={"detail": {"status": "no_eligible_reviewer"}})
-    code, out, err = run(capsys, "case", "review", "appeal", ROUND_ID, "--grounds", "Wrong", "--username", "alice")
+    api.route(
+        "POST",
+        APPEAL_PATH,
+        status=409,
+        body={"detail": {"status": "no_eligible_reviewer"}},
+    )
+    code, out, err = run(
+        capsys,
+        "case",
+        "review",
+        "appeal",
+        ROUND_ID,
+        "--grounds",
+        "Wrong",
+        "--username",
+        "alice",
+    )
     assert code != 0
     assert "no reviewer is eligible for this round" in err
 
@@ -1965,24 +3035,46 @@ def dry_run_summary(**counts) -> dict:
     return base
 
 
-def test_import_dry_run_posts_to_the_dry_run_route_and_prints_the_report(api, capsys, tmp_path):
+def test_import_dry_run_posts_to_the_dry_run_route_and_prints_the_report(
+    api, capsys, tmp_path
+):
     summary = dry_run_summary(
         would_import=1,
-        results=[{"index": 0, "status": "would_import", "source_case_id": None, "case_id": None,
-                  "reference": None, "title": "Phishing campaign", "awareness_time": "2026-10-30T09:00:00+00:00",
-                  "errors": []}],
+        results=[
+            {
+                "index": 0,
+                "status": "would_import",
+                "source_case_id": None,
+                "case_id": None,
+                "reference": None,
+                "title": "Phishing campaign",
+                "awareness_time": "2026-10-30T09:00:00+00:00",
+                "errors": [],
+            }
+        ],
     )
     api.route("POST", DRY_RUN_PATH, body=summary)
     path = write_file(tmp_path, json.dumps(IMPORT_FILE).encode("utf-8"))
 
-    code, out, err = run(capsys, "case", "import", path, "--username", "alice", "--dry-run")
+    code, out, err = run(
+        capsys, "case", "import", path, "--username", "alice", "--dry-run"
+    )
 
     assert code == 0
-    assert "Dry run finished: 1 would be imported, 0 duplicate, 0 conflict, 0 rejected. Nothing was written." in out
+    assert (
+        "Dry run finished: 1 would be imported, 0 duplicate, 0 conflict, 0 rejected. Nothing was written."
+        in out
+    )
     assert 'records[0]: would be imported as "Phishing campaign"' in out
-    assert api.paths() == [("POST", "/api/v1/auth/token"), ("POST", DRY_RUN_PATH), ("POST", "/api/v1/auth/logout")]
+    assert api.paths() == [
+        ("POST", "/api/v1/auth/token"),
+        ("POST", DRY_RUN_PATH),
+        ("POST", "/api/v1/auth/logout"),
+    ]
     assert api.calls[1]["json"] == IMPORT_FILE
-    assert not any(name.lower() == "idempotency-key" for name in api.calls[1]["headers"])
+    assert not any(
+        name.lower() == "idempotency-key" for name in api.calls[1]["headers"]
+    )
     assert err == ""
 
 
@@ -1991,7 +3083,9 @@ def test_import_dry_run_json_prints_the_api_body_exactly(api, capsys, tmp_path):
     api.route("POST", DRY_RUN_PATH, body=summary)
     path = write_file(tmp_path, json.dumps(IMPORT_FILE).encode("utf-8"))
 
-    code, out, err = run(capsys, "case", "import", path, "--username", "alice", "--dry-run", "--json")
+    code, out, err = run(
+        capsys, "case", "import", path, "--username", "alice", "--dry-run", "--json"
+    )
 
     assert code == 0
     assert out == compact(summary).decode("utf-8") + "\n"
@@ -2003,14 +3097,25 @@ def test_import_dry_run_exits_1_when_a_record_would_be_rejected(api, capsys, tmp
         DRY_RUN_PATH,
         body=dry_run_summary(
             rejected=1,
-            results=[{"index": 0, "status": "rejected", "source_case_id": None, "case_id": None, "reference": None,
-                      "title": None, "awareness_time": None,
-                      "errors": ["/record_schema_version: '0.2.0' was expected"]}],
+            results=[
+                {
+                    "index": 0,
+                    "status": "rejected",
+                    "source_case_id": None,
+                    "case_id": None,
+                    "reference": None,
+                    "title": None,
+                    "awareness_time": None,
+                    "errors": ["/record_schema_version: '0.2.0' was expected"],
+                }
+            ],
         ),
     )
     path = write_file(tmp_path, json.dumps(IMPORT_FILE).encode("utf-8"))
 
-    code, out, err = run(capsys, "case", "import", path, "--username", "alice", "--dry-run")
+    code, out, err = run(
+        capsys, "case", "import", path, "--username", "alice", "--dry-run"
+    )
 
     assert code == 1
     assert "records[0]: rejected, nothing written" in out
@@ -2030,7 +3135,9 @@ def test_import_dry_run_exits_1_when_the_file_is_not_accepted(api, capsys, tmp_p
     )
     path = write_file(tmp_path, json.dumps(IMPORT_FILE).encode("utf-8"))
 
-    code, out, err = run(capsys, "case", "import", path, "--username", "alice", "--dry-run")
+    code, out, err = run(
+        capsys, "case", "import", path, "--username", "alice", "--dry-run"
+    )
 
     assert code == 1
     assert "file: unsupported import_format_version; this version reads 1" in out
@@ -2041,17 +3148,29 @@ def test_import_dry_run_with_only_duplicates_exits_0(api, capsys, tmp_path):
     api.route("POST", DRY_RUN_PATH, body=dry_run_summary(duplicate=1))
     path = write_file(tmp_path, json.dumps(IMPORT_FILE).encode("utf-8"))
 
-    code, out, err = run(capsys, "case", "import", path, "--username", "alice", "--dry-run")
+    code, out, err = run(
+        capsys, "case", "import", path, "--username", "alice", "--dry-run"
+    )
 
     assert code == 0
     assert "1 duplicate" in out
 
 
-def test_import_dry_run_refuses_an_idempotency_key_before_any_request(api, capsys, tmp_path):
+def test_import_dry_run_refuses_an_idempotency_key_before_any_request(
+    api, capsys, tmp_path
+):
     path = write_file(tmp_path, json.dumps(IMPORT_FILE).encode("utf-8"))
 
     code, out, err = run(
-        capsys, "case", "import", path, "--username", "alice", "--dry-run", "--idempotency-key", "k-1"
+        capsys,
+        "case",
+        "import",
+        path,
+        "--username",
+        "alice",
+        "--dry-run",
+        "--idempotency-key",
+        "k-1",
     )
 
     assert code == 2
@@ -2062,7 +3181,10 @@ def test_import_dry_run_refuses_an_idempotency_key_before_any_request(api, capsy
 # --- catalog export ---
 
 CATALOG_EXPORT_PATH = "/api/v1/catalog/export"
-CATALOG_BODY = {"catalog_export_schema_version": "0.1.0", "catalog_export": {"entries": []}}
+CATALOG_BODY = {
+    "catalog_export_schema_version": "0.1.0",
+    "catalog_export": {"entries": []},
+}
 
 
 def test_catalog_export_prints_the_api_body_with_a_session(api, capsys):
@@ -2072,7 +3194,11 @@ def test_catalog_export_prints_the_api_body_with_a_session(api, capsys):
 
     assert code == 0
     assert out == compact(CATALOG_BODY).decode("utf-8") + "\n"
-    assert api.paths() == [("POST", "/api/v1/auth/token"), ("GET", CATALOG_EXPORT_PATH), ("POST", "/api/v1/auth/logout")]
+    assert api.paths() == [
+        ("POST", "/api/v1/auth/token"),
+        ("GET", CATALOG_EXPORT_PATH),
+        ("POST", "/api/v1/auth/logout"),
+    ]
     assert api.calls[1]["headers"]["Authorization"] == f"Bearer {ACCESS}"
     assert err == ""
 
@@ -2081,7 +3207,9 @@ def test_catalog_export_out_writes_the_same_json_to_the_file(api, capsys, tmp_pa
     api.route("GET", CATALOG_EXPORT_PATH, body=CATALOG_BODY)
     target = tmp_path / "catalog-export.json"
 
-    code, out, err = run(capsys, "catalog", "export", "--username", "alice", "--out", str(target))
+    code, out, err = run(
+        capsys, "catalog", "export", "--username", "alice", "--out", str(target)
+    )
 
     assert code == 0
     assert out == ""
@@ -2089,7 +3217,9 @@ def test_catalog_export_out_writes_the_same_json_to_the_file(api, capsys, tmp_pa
     assert api.paths()[-1] == ("POST", "/api/v1/auth/logout")
 
 
-def test_catalog_export_refused_for_a_role_without_catalog_read_is_a_failed_command(api, capsys, tmp_path):
+def test_catalog_export_refused_for_a_role_without_catalog_read_is_a_failed_command(
+    api, capsys, tmp_path
+):
     api.route("GET", CATALOG_EXPORT_PATH, status=403, body={"detail": "forbidden"})
 
     code, out, err = run(capsys, "catalog", "export", "--username", "alice")
@@ -2104,7 +3234,9 @@ def test_catalog_export_to_an_unwritable_path_is_a_usage_error(api, capsys, tmp_
     api.route("GET", CATALOG_EXPORT_PATH, body=CATALOG_BODY)
     target = tmp_path / "missing-directory" / "catalog-export.json"
 
-    code, out, err = run(capsys, "catalog", "export", "--username", "alice", "--out", str(target))
+    code, out, err = run(
+        capsys, "catalog", "export", "--username", "alice", "--out", str(target)
+    )
 
     assert code == 2
     assert "cannot write" in err

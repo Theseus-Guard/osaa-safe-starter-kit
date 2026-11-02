@@ -75,21 +75,31 @@ def only_active_admin(user_id: str):
             (user_id,),
         ).fetchall()
     if any(protected for _, protected in others):
-        pytest.skip("a protected admin is active: the last-admin rule is not reachable in this database")
+        pytest.skip(
+            "a protected admin is active: the last-admin rule is not reachable in this database"
+        )
     other_ids = [row[0] for row in others]
     with connect() as conn:
-        conn.execute("UPDATE users SET is_active = false WHERE id = ANY(%s::uuid[])", (other_ids,))
+        conn.execute(
+            "UPDATE users SET is_active = false WHERE id = ANY(%s::uuid[])",
+            (other_ids,),
+        )
     try:
         yield
     finally:
         with connect() as conn:
-            conn.execute("UPDATE users SET is_active = true WHERE id = ANY(%s::uuid[])", (other_ids,))
+            conn.execute(
+                "UPDATE users SET is_active = true WHERE id = ANY(%s::uuid[])",
+                (other_ids,),
+            )
 
 
 def protected_admin() -> str:
     """The protected admin of this database. If there is none, protect a new admin (the unique index allows one)."""
     with connect() as conn:
-        row = conn.execute("SELECT id::text FROM users WHERE is_protected AND NOT is_deleted").fetchone()
+        row = conn.execute(
+            "SELECT id::text FROM users WHERE is_protected AND NOT is_deleted"
+        ).fetchone()
     if row:
         return row[0]
     admin = new_user("admin")
@@ -159,7 +169,8 @@ def test_soft_delete_keeps_the_row_disables_the_account_and_ends_its_sessions():
 
     with connect() as conn:
         row = conn.execute(
-            "SELECT is_deleted, deleted_at IS NOT NULL, is_active FROM users WHERE id = %s", (user,)
+            "SELECT is_deleted, deleted_at IS NOT NULL, is_active FROM users WHERE id = %s",
+            (user,),
         ).fetchone()
     assert row == (True, True, False)
     assert session_revoked(token) is True
@@ -193,7 +204,10 @@ def test_role_change_is_audited_and_an_unchanged_request_writes_no_audit_row():
         (actor, {"changes": {"role": {"from": "reporter", "to": "triager"}}})
     ]
 
-    assert users.update_user(user, role="triager", is_active=True, actor_id=actor) is UpdateOutcome.OK
+    assert (
+        users.update_user(user, role="triager", is_active=True, actor_id=actor)
+        is UpdateOutcome.OK
+    )
     assert len(audit_rows(user, audit.USER_UPDATE)) == 1
 
 
@@ -219,7 +233,10 @@ def test_list_pages_follow_the_username_order_and_skip_deleted_users():
     everyone = users.list_users(total, 0)
     with connect() as conn:
         expected_order = [
-            row[0] for row in conn.execute("SELECT id::text FROM users WHERE NOT is_deleted ORDER BY username").fetchall()
+            row[0]
+            for row in conn.execute(
+                "SELECT id::text FROM users WHERE NOT is_deleted ORDER BY username"
+            ).fetchall()
         ]
 
     assert [user.id for user in everyone] == expected_order

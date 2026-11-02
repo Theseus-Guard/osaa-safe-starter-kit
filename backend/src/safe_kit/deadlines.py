@@ -16,7 +16,9 @@ from zoneinfo import ZoneInfo
 WEEKLY_UPDATE_INTERVAL = timedelta(days=7)
 
 
-def deadline_start(awareness_time: datetime, operator_occurrences: Iterable[datetime]) -> datetime:
+def deadline_start(
+    awareness_time: datetime, operator_occurrences: Iterable[datetime]
+) -> datetime:
     """The t0 that the SAFE deadlines run from. This is the only place where the rule is written.
 
     t0 is the earliest of the case awareness_time and the recorded operator awareness events. It never moves later:
@@ -55,7 +57,9 @@ class BusinessCalendar:
             current += timedelta(days=1)
             if self.is_business_day(current):
                 remaining -= 1
-        local_result = datetime.combine(current, local_start.time(), tzinfo=self.timezone)
+        local_result = datetime.combine(
+            current, local_start.time(), tzinfo=self.timezone
+        )
         return local_result.astimezone(UTC)
 
 

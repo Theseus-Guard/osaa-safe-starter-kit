@@ -680,9 +680,7 @@ def list_recommendations(
         )
         for row in rows
     ]
-    next_cursor = (
-        encode_cursor(rows[-1][9], rows[-1][0]) if has_more and rows else None
-    )
+    next_cursor = encode_cursor(rows[-1][9], rows[-1][0]) if has_more and rows else None
     return recommendations, next_cursor
 
 

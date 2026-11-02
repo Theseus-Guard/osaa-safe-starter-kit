@@ -26,7 +26,14 @@ from safe_kit import audit
 from safe_kit.db import connect
 from test_evidence import db_user, request_as
 from test_evidence_lifecycle import provider, requires_database  # provider: fixture
-from test_fixture_p6_disclosure import approve, body, create, dworld, first_version, grant  # dworld: fixture
+from test_fixture_p6_disclosure import (
+    approve,
+    body,
+    create,
+    dworld,
+    first_version,
+    grant,
+)  # dworld: fixture
 from test_fixture_t06a_redaction import world  # world: fixture
 from test_fixture_t12_notices import (
     REASON,
@@ -53,11 +60,15 @@ def backup_approver(dw) -> dict:
 
 
 def preliminary_report(dw, who: str = "triager") -> dict:
-    return request_as(dw["people"][who], "get", f"/api/v1/cases/{dw['case_id']}/preliminary-report").json()
+    return request_as(
+        dw["people"][who], "get", f"/api/v1/cases/{dw['case_id']}/preliminary-report"
+    ).json()
 
 
 @requires_database
-def test_an_urgent_notice_is_recorded_by_an_independent_person_while_the_approver_is_unavailable(dworld):
+def test_an_urgent_notice_is_recorded_by_an_independent_person_while_the_approver_is_unavailable(
+    dworld,
+):
     dw = with_independent_triager(dworld)
     version, _ = approved_version(dw)
     # The case record is incomplete (no classification, no contact). That does not stop the escalation.
@@ -85,12 +96,17 @@ def test_an_urgent_notice_is_recorded_by_an_independent_person_while_the_approve
 
 
 @requires_database
-def test_the_escalation_is_audited_with_its_flag_and_the_length_of_its_reason_only(dworld):
+def test_the_escalation_is_audited_with_its_flag_and_the_length_of_its_reason_only(
+    dworld,
+):
     dw = with_independent_triager(dworld)
     version, _ = approved_version(dw)
     reason = "Approver unavailable; the member notice is needed before the deadline"
     notice = record(
-        dw, "independent", version["id"], payload(manual_fallback=True, fallback_reason=reason)
+        dw,
+        "independent",
+        version["id"],
+        payload(manual_fallback=True, fallback_reason=reason),
     ).json()
 
     with connect() as conn:
@@ -118,7 +134,10 @@ def test_a_manual_record_cannot_stand_in_for_a_missing_approval(dworld):
         dw,
         "independent",
         view["id"],
-        payload(manual_fallback=True, fallback_reason="Urgent, and the approver is unavailable"),
+        payload(
+            manual_fallback=True,
+            fallback_reason="Urgent, and the approver is unavailable",
+        ),
     )
     assert response.status_code == 409
     assert response.json()["detail"] == {"status": "version_not_approved"}
@@ -126,13 +145,18 @@ def test_a_manual_record_cannot_stand_in_for_a_missing_approval(dworld):
 
 
 @requires_database
-def test_the_person_who_prepared_the_version_cannot_send_it_on_the_escalation_path(dworld):
+def test_the_person_who_prepared_the_version_cannot_send_it_on_the_escalation_path(
+    dworld,
+):
     version, _ = approved_version(dworld)
     response = record(
         dworld,
         "triager",
         version["id"],
-        payload(manual_fallback=True, fallback_reason="Approver unavailable and I am the only one here"),
+        payload(
+            manual_fallback=True,
+            fallback_reason="Approver unavailable and I am the only one here",
+        ),
     )
     assert response.status_code == 403
     assert response.json()["detail"] == {"status": "preparer_cannot_record"}
@@ -143,7 +167,9 @@ def test_the_person_who_prepared_the_version_cannot_send_it_on_the_escalation_pa
 def test_a_backup_approver_approves_and_the_notice_goes_out_on_the_normal_path(dworld):
     dw = backup_approver(with_independent_triager(dworld))
     view, _ = first_version(dw)
-    approval = approve(dw, "backup", view["id"], view["recipient"], view["purpose"], view["digest"])
+    approval = approve(
+        dw, "backup", view["id"], view["recipient"], view["purpose"], view["digest"]
+    )
     assert approval.status_code == 201, approval.text
 
     response = record(dw, "backup", view["id"], payload(recipient_ref="cert-07"))
@@ -153,11 +179,16 @@ def test_a_backup_approver_approves_and_the_notice_goes_out_on_the_normal_path(d
 
 
 @requires_database
-def test_the_escalated_notice_is_followed_through_by_the_same_independent_person(dworld):
+def test_the_escalated_notice_is_followed_through_by_the_same_independent_person(
+    dworld,
+):
     dw = with_independent_triager(dworld)
     version, _ = approved_version(dw)
     notice = record(
-        dw, "independent", version["id"], payload(manual_fallback=True, fallback_reason="Approver unavailable")
+        dw,
+        "independent",
+        version["id"],
+        payload(manual_fallback=True, fallback_reason="Approver unavailable"),
     ).json()
 
     unknown = receipt(
@@ -171,7 +202,12 @@ def test_the_escalated_notice_is_followed_through_by_the_same_independent_person
     assert unknown.json()["state"] == "receipt_unknown"
 
     required = notice_action(
-        dw, "independent", version["id"], notice["id"], "follow-up", {"action": "require", "reason": REASON}
+        dw,
+        "independent",
+        version["id"],
+        notice["id"],
+        "follow-up",
+        {"action": "require", "reason": REASON},
     )
     assert required.status_code == 200, required.text
     done = notice_action(
@@ -183,7 +219,12 @@ def test_the_escalated_notice_is_followed_through_by_the_same_independent_person
         {"action": "complete", "reason": "Reached the member's security contact"},
     )
     assert done.status_code == 200, done.text
-    assert revision_states(notice["id"]) == ["sent", "receipt_unknown", "follow_up_required", "follow_up_done"]
+    assert revision_states(notice["id"]) == [
+        "sent",
+        "receipt_unknown",
+        "follow_up_required",
+        "follow_up_done",
+    ]
 
 
 @requires_database
@@ -193,12 +234,20 @@ def test_a_superseded_version_cannot_be_sent_on_the_escalation_path_either(dworl
     changed = create(
         dw,
         "triager",
-        body([derived], package_id=first["package_id"], expected_version=1, purpose="Changed after the approval"),
+        body(
+            [derived],
+            package_id=first["package_id"],
+            expected_version=1,
+            purpose="Changed after the approval",
+        ),
     )
     assert changed.status_code == 201, changed.text
 
     response = record(
-        dw, "independent", first["id"], payload(manual_fallback=True, fallback_reason="Approver unavailable")
+        dw,
+        "independent",
+        first["id"],
+        payload(manual_fallback=True, fallback_reason="Approver unavailable"),
     )
     assert response.status_code == 409
     assert response.json()["detail"] == {"status": "version_superseded"}

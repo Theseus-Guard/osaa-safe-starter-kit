@@ -30,9 +30,13 @@ def system_timezone_configured():
     """Day grouping needs the system timezone. Set one on a freshly migrated test database."""
     migrate()  # idempotent: applies pending migrations on a fresh test database
     with connect() as conn:
-        exists = conn.execute("SELECT EXISTS (SELECT 1 FROM system_timezone WHERE NOT is_deleted)").fetchone()[0]
+        exists = conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM system_timezone WHERE NOT is_deleted)"
+        ).fetchone()[0]
         if not exists:
-            conn.execute("INSERT INTO system_timezone (timezone) VALUES ('Europe/Istanbul')")
+            conn.execute(
+                "INSERT INTO system_timezone (timezone) VALUES ('Europe/Istanbul')"
+            )
     yield
 
 
@@ -69,11 +73,17 @@ def set_impact(triager: ActingClient, case_id: str, severity: str) -> None:
 
 
 def assign(triager: ActingClient, case_id: str, user_id: str) -> None:
-    response = triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": user_id}, headers=idem())
+    response = triager.post(
+        f"/api/v1/cases/{case_id}/assignments",
+        json={"user_id": user_id},
+        headers=idem(),
+    )
     assert response.status_code == 201, response.text
 
 
-def insert_audit(actor_id: str, action: str, case_id: str, created_at: datetime | None = None) -> None:
+def insert_audit(
+    actor_id: str, action: str, case_id: str, created_at: datetime | None = None
+) -> None:
     """An audit row written directly, for the cases where the test needs an action the API would not produce."""
     with connect() as conn:
         conn.execute(
@@ -105,7 +115,8 @@ def close_directly(case_id: str, actor_id: str) -> None:
 def soft_delete_case(case_id: str) -> None:
     with connect() as conn:
         conn.execute(
-            "UPDATE cases SET is_deleted = true, deleted_at = now() WHERE id = %s AND NOT is_deleted", (case_id,)
+            "UPDATE cases SET is_deleted = true, deleted_at = now() WHERE id = %s AND NOT is_deleted",
+            (case_id,),
         )
 
 
@@ -250,7 +261,8 @@ def _insert_version(package_id, case_id, created_by, version, template, created_
 def _insert_package(case_id, created_by) -> str:
     with connect() as conn:
         return conn.execute(
-            "INSERT INTO disclosure_packages (case_id, created_by) VALUES (%s, %s) RETURNING id", (case_id, created_by)
+            "INSERT INTO disclosure_packages (case_id, created_by) VALUES (%s, %s) RETURNING id",
+            (case_id, created_by),
         ).fetchone()[0]
 
 
@@ -261,30 +273,63 @@ def test_pending_approvals_count_the_latest_unapproved_version_and_only_for_the_
     case_id = new_case(reporter)
     triager_id = user_id_of(triager)
     before = summary(approver)["approvals"]
-    before_rapid = next(i for i in before["by_template"] if i["template"] == "confidential_rapid_alert")["pending"]
-    before_advisory = next(i for i in before["by_template"] if i["template"] == "de_identified_member_advisory")
+    before_rapid = next(
+        i for i in before["by_template"] if i["template"] == "confidential_rapid_alert"
+    )["pending"]
+    before_advisory = next(
+        i
+        for i in before["by_template"]
+        if i["template"] == "de_identified_member_advisory"
+    )
 
     package = _insert_package(case_id, triager_id)
     old_time = datetime.now(UTC) - timedelta(days=10)
-    _insert_version(package, case_id, triager_id, 1, "confidential_rapid_alert", old_time)  # superseded by version 2
-    _insert_version(package, case_id, triager_id, 2, "confidential_rapid_alert", datetime.now(UTC) - timedelta(days=3))
+    _insert_version(
+        package, case_id, triager_id, 1, "confidential_rapid_alert", old_time
+    )  # superseded by version 2
+    _insert_version(
+        package,
+        case_id,
+        triager_id,
+        2,
+        "confidential_rapid_alert",
+        datetime.now(UTC) - timedelta(days=3),
+    )
 
     # An approved version: the approval names the recipient, purpose and digest of the version, by another user.
     approved_package = _insert_package(case_id, triager_id)
     approved_version = _insert_version(
-        approved_package, case_id, triager_id, 1, "de_identified_member_advisory", datetime.now(UTC)
+        approved_package,
+        case_id,
+        triager_id,
+        1,
+        "de_identified_member_advisory",
+        datetime.now(UTC),
     )
     with connect() as conn:
         conn.execute(
             "INSERT INTO disclosure_approvals (version_id, package_id, case_id, recipient, purpose, digest, preparer_id, "
             "approved_by, separation_rule) VALUES (%s, %s, %s, 'Test recipient', 'Test purpose', %s, %s, %s, "
             "'preparer_differs_from_approver')",
-            (approved_version, approved_package, case_id, DIGEST, triager_id, user_id_of(approver)),
+            (
+                approved_version,
+                approved_package,
+                case_id,
+                DIGEST,
+                triager_id,
+                user_id_of(approver),
+            ),
         )
 
     after = summary(approver)["approvals"]
-    after_rapid = next(i for i in after["by_template"] if i["template"] == "confidential_rapid_alert")
-    after_advisory = next(i for i in after["by_template"] if i["template"] == "de_identified_member_advisory")
+    after_rapid = next(
+        i for i in after["by_template"] if i["template"] == "confidential_rapid_alert"
+    )
+    after_advisory = next(
+        i
+        for i in after["by_template"]
+        if i["template"] == "de_identified_member_advisory"
+    )
 
     assert after["pending"] == before["pending"] + 1
     assert after_rapid["pending"] == before_rapid + 1

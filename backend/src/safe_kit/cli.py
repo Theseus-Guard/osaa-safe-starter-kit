@@ -101,7 +101,13 @@ class RequestFailed(Exception):
     (see _error_detail). It is never a request body.
     """
 
-    def __init__(self, message: str, *, status: int | None = None, detail: str | dict | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        detail: str | dict | None = None,
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.detail = detail
@@ -126,7 +132,10 @@ def health(base_url: str) -> int:
     url = f"{base_url}/api/v1/health/ready"
     try:
         with urllib.request.urlopen(url, timeout=5) as response:
-            result = {"status": json.load(response)["status"], "http_status": response.status}
+            result = {
+                "status": json.load(response)["status"],
+                "http_status": response.status,
+            }
     except urllib.error.HTTPError as error:
         result = {"status": "unavailable", "http_status": error.code}
     except urllib.error.URLError:
@@ -210,11 +219,15 @@ def _call(
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+        with urllib.request.urlopen(
+            request, timeout=REQUEST_TIMEOUT_SECONDS
+        ) as response:
             return response.read()
     except urllib.error.HTTPError as error:
         raise RequestFailed(
-            _http_message(error.code, messages), status=error.code, detail=_error_detail(error)
+            _http_message(error.code, messages),
+            status=error.code,
+            detail=_error_detail(error),
         ) from None
     except OSError:
         raise RequestFailed("the server could not be reached") from None
@@ -238,7 +251,9 @@ def _read_password() -> str:
         line = sys.stdin.readline() if sys.stdin is not None else ""
         password = line.rstrip("\r\n")
     if not password:
-        raise UsageError("a password is required: enter it at the prompt or pipe it on stdin")
+        raise UsageError(
+            "a password is required: enter it at the prompt or pipe it on stdin"
+        )
     return password
 
 
@@ -264,7 +279,9 @@ def _demo_sign_in_options(args: argparse.Namespace) -> tuple[str, str] | None:
     """
     if args.demo_username is not None or args.demo_credential_file is not None:
         if args.username:
-            raise UsageError("use --username for a password sign-in or the demo options for a demo sign-in, not both")
+            raise UsageError(
+                "use --username for a password sign-in or the demo options for a demo sign-in, not both"
+            )
         username = (args.demo_username or "").strip()
         path = (args.demo_credential_file or "").strip()
     else:
@@ -297,7 +314,9 @@ def _read_demo_credential(path: str) -> str:
     try:
         credential = head.split(b"\n", 1)[0].decode("utf-8").strip()
     except UnicodeDecodeError:
-        raise UsageError(f"the demo credential file has no usable first line: {path}") from None
+        raise UsageError(
+            f"the demo credential file has no usable first line: {path}"
+        ) from None
     if not credential or len(credential) > DEMO_CREDENTIAL_MAX_LENGTH:
         raise UsageError(f"the demo credential file has no usable first line: {path}")
     return credential
@@ -330,9 +349,16 @@ def _with_session(base_url: str, args: argparse.Namespace, action) -> None:
         username = _username(args)
         password = _read_password()
         tokens = _json_object(
-            _call(base_url, "POST", "/api/v1/auth/token", payload={"username": username, "password": password})
+            _call(
+                base_url,
+                "POST",
+                "/api/v1/auth/token",
+                payload={"username": username, "password": password},
+            )
         )
-    if not isinstance(tokens.get("access_token"), str) or not isinstance(tokens.get("refresh_token"), str):
+    if not isinstance(tokens.get("access_token"), str) or not isinstance(
+        tokens.get("refresh_token"), str
+    ):
         raise RequestFailed("unexpected response from the server")
     try:
         if tokens.get("password_change_required") is True:
@@ -368,7 +394,9 @@ def _parse_timestamp(text: str, label: str, *, not_in_future: bool) -> datetime:
         )
     # The same rule as the API and the web UI: a time that already happened cannot be later than now.
     if not_in_future and value > datetime.now(UTC):
-        raise UsageError(f"{label} cannot be in the future. Enter the time it happened, not a later one")
+        raise UsageError(
+            f"{label} cannot be in the future. Enter the time it happened, not a later one"
+        )
     return value
 
 
@@ -417,7 +445,15 @@ def _print_case_page(page: dict) -> None:
         print("No cases to show.")
     else:
         rows = [
-            ("REFERENCE", "STATUS", "AWARENESS (UTC)", "NEXT DEADLINE (UTC)", "LAST UPDATED (UTC)", "RISK", "TITLE")
+            (
+                "REFERENCE",
+                "STATUS",
+                "AWARENESS (UTC)",
+                "NEXT DEADLINE (UTC)",
+                "LAST UPDATED (UTC)",
+                "RISK",
+                "TITLE",
+            )
         ]
         rows += [
             (
@@ -440,7 +476,9 @@ def _case_create(base_url: str, args: argparse.Namespace) -> None:
     title = args.title
     # The same checks as the API: 1 to 200 characters, not only whitespace.
     if not 1 <= len(title) <= MAX_TITLE_LENGTH or not title.strip():
-        raise UsageError(f"the title must be 1 to {MAX_TITLE_LENGTH} characters and not only spaces")
+        raise UsageError(
+            f"the title must be 1 to {MAX_TITLE_LENGTH} characters and not only spaces"
+        )
     awareness = _parse_awareness_time(args.awareness_time)
     payload = {"title": title.strip(), "awareness_time": awareness.isoformat()}
 
@@ -448,7 +486,12 @@ def _case_create(base_url: str, args: argparse.Namespace) -> None:
 
     def action(base: str, token: str) -> None:
         raw = _call(
-            base, "POST", "/api/v1/cases", token=token, payload=payload, extra_headers={"Idempotency-Key": key}
+            base,
+            "POST",
+            "/api/v1/cases",
+            token=token,
+            payload=payload,
+            extra_headers={"Idempotency-Key": key},
         )
         if args.json:
             _print_json(raw)
@@ -463,7 +506,9 @@ def _case_id_arg(text: str) -> str:
     try:
         return str(uuid.UUID(text))
     except ValueError:
-        raise UsageError("CASE_ID must be the case ID (a UUID) shown by 'case list'") from None
+        raise UsageError(
+            "CASE_ID must be the case ID (a UUID) shown by 'case list'"
+        ) from None
 
 
 def _uuid_arg(text: str, option: str) -> str:
@@ -497,8 +542,14 @@ def _case_list(base_url: str, args: argparse.Namespace) -> None:
             raw = _call(base, "GET", "/api/v1/cases", token=token, query=query)
         except RequestFailed as error:
             detail = error.detail
-            if error.status == 400 and isinstance(detail, dict) and detail.get("status") == "invalid_cursor":
-                raise RequestFailed(CURSOR_INVALID_TEXT, status=error.status, detail=detail) from None
+            if (
+                error.status == 400
+                and isinstance(detail, dict)
+                and detail.get("status") == "invalid_cursor"
+            ):
+                raise RequestFailed(
+                    CURSOR_INVALID_TEXT, status=error.status, detail=detail
+                ) from None
             raise
         if args.json:
             _print_json(raw)
@@ -526,7 +577,9 @@ def _read_bounded_file(path: str, limit: int, too_large: str) -> bytes:
         with open(path, "rb") as handle:
             raw = handle.read(limit + 1)
     except OSError as error:
-        raise UsageError(f"cannot read {path}: {error.strerror or 'unknown error'}") from None
+        raise UsageError(
+            f"cannot read {path}: {error.strerror or 'unknown error'}"
+        ) from None
     if len(raw) > limit:
         raise UsageError(too_large)
     return raw
@@ -534,7 +587,9 @@ def _read_bounded_file(path: str, limit: int, too_large: str) -> bytes:
 
 def _read_import_file(path: str) -> bytes:
     return _read_bounded_file(
-        path, MAX_IMPORT_FILE_BYTES, f"the import file is larger than {MAX_IMPORT_FILE_BYTES} bytes"
+        path,
+        MAX_IMPORT_FILE_BYTES,
+        f"the import file is larger than {MAX_IMPORT_FILE_BYTES} bytes",
     )
 
 
@@ -551,7 +606,9 @@ def _print_import_summary(summary: dict) -> None:
         elif status == "duplicate":
             print(f"  {position}: duplicate of {result['reference']}, nothing written")
         elif status == "conflict":
-            print(f"  {position}: same case ID as {result['reference']} with different content, nothing written")
+            print(
+                f"  {position}: same case ID as {result['reference']} with different content, nothing written"
+            )
         elif status == "rejected":
             print(f"  {position}: rejected, nothing written")
         else:
@@ -571,20 +628,28 @@ def _print_dry_run_summary(summary: dict) -> None:
         position = f"records[{result['index']}]"
         status = result["status"]
         if status == "would_import":
-            print(f"  {position}: would be imported as \"{result['title']}\"")
+            print(f'  {position}: would be imported as "{result["title"]}"')
         elif status == "duplicate":
-            print(f"  {position}: duplicate of {result['reference'] or 'a stored case'}, nothing written")
+            print(
+                f"  {position}: duplicate of {result['reference'] or 'a stored case'}, nothing written"
+            )
         elif status == "conflict":
-            print(f"  {position}: same case ID as {result['reference'] or 'a stored case'} with different content")
+            print(
+                f"  {position}: same case ID as {result['reference'] or 'a stored case'} with different content"
+            )
         else:
             print(f"  {position}: rejected, nothing written")
         for error in result["errors"]:
             print(f"    {error}")
 
 
-def _case_import_dry_run(base_url: str, payload: dict, args: argparse.Namespace) -> None:
+def _case_import_dry_run(
+    base_url: str, payload: dict, args: argparse.Namespace
+) -> None:
     def action(base: str, token: str) -> None:
-        raw = _call(base, "POST", "/api/v1/cases/import/dry-run", token=token, payload=payload)
+        raw = _call(
+            base, "POST", "/api/v1/cases/import/dry-run", token=token, payload=payload
+        )
         summary = _json_object(raw)
         if args.json:
             _print_json(raw)
@@ -596,21 +661,27 @@ def _case_import_dry_run(base_url: str, payload: dict, args: argparse.Namespace)
             raise RequestFailed("the import file is not accepted; see the report above")
         blocked = summary["rejected"] + summary["conflict"]
         if blocked:
-            raise RequestFailed(f"{blocked} record(s) would not be stored; see the report above")
+            raise RequestFailed(
+                f"{blocked} record(s) would not be stored; see the report above"
+            )
 
     _with_session(base_url, args, action)
 
 
 def _case_import(base_url: str, args: argparse.Namespace) -> None:
     if args.dry_run and args.idempotency_key:
-        raise UsageError("--idempotency-key does not apply to --dry-run, which writes nothing")
+        raise UsageError(
+            "--idempotency-key does not apply to --dry-run, which writes nothing"
+        )
     raw = _read_import_file(args.file)
     try:
         payload = json.loads(raw)
     except ValueError:
         raise UsageError(f"{args.file} is not valid JSON") from None
     if not isinstance(payload, dict):
-        raise UsageError(f"{args.file} must hold a JSON object with import_format_version and records")
+        raise UsageError(
+            f"{args.file} must hold a JSON object with import_format_version and records"
+        )
     if args.dry_run:
         _case_import_dry_run(base_url, payload, args)
         return
@@ -634,7 +705,9 @@ def _case_import(base_url: str, args: argparse.Namespace) -> None:
         # Duplicates are expected on a repeated import. Anything that was not stored is a failed command.
         not_stored = summary["rejected"] + summary["conflict"] + summary["failed"]
         if not_stored:
-            raise RequestFailed(f"{not_stored} record(s) were not stored; see the results above")
+            raise RequestFailed(
+                f"{not_stored} record(s) were not stored; see the results above"
+            )
 
     _with_session(base_url, args, action)
 
@@ -649,7 +722,9 @@ def _write_document(raw: bytes, out: str | None) -> None:
         with open(out, "wb") as handle:
             handle.write(body)
     except OSError as error:
-        raise UsageError(f"cannot write {out}: {error.strerror or 'unknown error'}") from None
+        raise UsageError(
+            f"cannot write {out}: {error.strerror or 'unknown error'}"
+        ) from None
 
 
 def _catalog_export(base_url: str, args: argparse.Namespace) -> None:
@@ -680,7 +755,13 @@ def _print_evidence_page(page: dict) -> None:
         return
     rows = [("ID", "STATUS", "MEDIA TYPE", "SIZE (BYTES)", "FILE")]
     rows += [
-        (item["id"], item["status"], item["media_type"], str(item["size_bytes"]), item["original_filename"])
+        (
+            item["id"],
+            item["status"],
+            item["media_type"],
+            str(item["size_bytes"]),
+            item["original_filename"],
+        )
         for item in items
     ]
     widths = [max(len(row[column]) for row in rows) for column in range(4)]
@@ -699,7 +780,13 @@ def _print_tasks(case: dict) -> None:
         return
     rows = [("ID", "KIND", "DUE (UTC)", "STATUS", "NOTE")]
     rows += [
-        (task["id"] or "-", task["kind"], task["due_at"], task["status"], task["not_applicable_reason"] or "")
+        (
+            task["id"] or "-",
+            task["kind"],
+            task["due_at"],
+            task["status"],
+            task["not_applicable_reason"] or "",
+        )
         for task in tasks
     ]
     widths = [max(len(row[column]) for row in rows) for column in range(4)]
@@ -709,7 +796,9 @@ def _print_tasks(case: dict) -> None:
         print("  ".join(cells).rstrip())
 
 
-def _multipart_file(field: str, filename: str, content_type: str, data: bytes) -> tuple[bytes, str]:
+def _multipart_file(
+    field: str, filename: str, content_type: str, data: bytes
+) -> tuple[bytes, str]:
     """A multipart/form-data body holding one file. Returns the body and the Content-Type header value."""
     boundary = uuid.uuid4().hex
     # A quote or line break in the name would break the part header. The API sanitizes the name again.
@@ -829,7 +918,10 @@ def _task_update(base_url: str, args: argparse.Namespace) -> None:
         args,
         "PATCH",
         f"/api/v1/cases/{case_id}/deadlines/{task_id}",
-        payload={"status": status, "reason": reason if status == "not_applicable" else None},
+        payload={
+            "status": status,
+            "reason": reason if status == "not_applicable" else None,
+        },
         messages=TASK_UPDATE_MESSAGES,
         render=_render_tasks_change("Deadline task updated."),
     )
@@ -845,7 +937,9 @@ def _task_restore(base_url: str, args: argparse.Namespace) -> None:
         "POST",
         f"/api/v1/cases/{case_id}/deadlines/{task_id}/restore",
         messages=TASK_RESTORE_MESSAGES,
-        render=_render_tasks_change("Deadline task restored to the status it had before."),
+        render=_render_tasks_change(
+            "Deadline task restored to the status it had before."
+        ),
     )
 
 
@@ -861,10 +955,25 @@ def _write_case(
 ) -> None:
     """One write request in its own login session. --json prints the API body; otherwise render prints a summary."""
     # A POST, PUT or PATCH carries an Idempotency-Key. The key is made once per run, so a retry in the same run reuses it.
-    headers = None if method == "DELETE" else {"Idempotency-Key": getattr(args, "idempotency_key", None) or str(uuid.uuid4())}
+    headers = (
+        None
+        if method == "DELETE"
+        else {
+            "Idempotency-Key": getattr(args, "idempotency_key", None)
+            or str(uuid.uuid4())
+        }
+    )
 
     def action(base: str, token: str) -> None:
-        raw = _call(base, method, path, token=token, payload=payload, messages=messages, extra_headers=headers)
+        raw = _call(
+            base,
+            method,
+            path,
+            token=token,
+            payload=payload,
+            messages=messages,
+            extra_headers=headers,
+        )
         if getattr(args, "json", False):
             _print_json(raw)
         else:
@@ -975,13 +1084,19 @@ CLOSE_MESSAGES = {
     404: "case not found",
     409: "the case cannot be closed now: it is already closed, or it has no review or an open deadline task",
 }
-REOPEN_MESSAGES = {404: "case not found", 409: "the case is not closed, so it cannot be reopened"}
+REOPEN_MESSAGES = {
+    404: "case not found",
+    409: "the case is not closed, so it cannot be reopened",
+}
 ASSIGN_MESSAGES = {
     404: "case not found",
     409: "the case is closed, or the user is already assigned to it",
     422: "the user must be active and hold the cases:assignable permission",
 }
-UNASSIGN_MESSAGES = {404: "case or assignment not found", 409: "the case is closed, so its assignments cannot change"}
+UNASSIGN_MESSAGES = {
+    404: "case or assignment not found",
+    409: "the case is closed, so its assignments cannot change",
+}
 LINK_ADD_MESSAGES = {
     404: "case not found, or the other case is not available to your account",
     409: "a case is closed, or the two cases are already linked",
@@ -1004,20 +1119,33 @@ CLASSIFICATION_MESSAGES = {
     404: "case not found",
     409: "the case is closed, so the classification cannot change",
 }
-IMPACT_MESSAGES = {404: "case not found", 409: "the case is closed, so its impact assessment cannot change"}
+IMPACT_MESSAGES = {
+    404: "case not found",
+    409: "the case is closed, so its impact assessment cannot change",
+}
 RISK_MESSAGES = {
     403: "forbidden: saving the impact values needs cases:triage",
     404: "case not found",
     409: "the case is closed, so the impact values cannot change",
 }
 # The three impact values in the order C, B, A, with the field each one has in the API body.
-RISK_VALUES = (("C – Confidentiality", "c"), ("B – Integrity", "b"), ("A – Availability", "a"))
-LEGAL_DUTY_MESSAGES = {404: "case not found", 409: "the case is closed, so its legal duties cannot change"}
+RISK_VALUES = (
+    ("C – Confidentiality", "c"),
+    ("B – Integrity", "b"),
+    ("A – Availability", "a"),
+)
+LEGAL_DUTY_MESSAGES = {
+    404: "case not found",
+    409: "the case is closed, so its legal duties cannot change",
+}
 LEGAL_DUTY_UPDATE_MESSAGES = {
     404: "case or legal duty not found",
     409: "the case is closed, so its legal duties cannot change",
 }
-AWARENESS_MESSAGES = {404: "case not found", 409: "the case is closed, so no awareness event can be recorded"}
+AWARENESS_MESSAGES = {
+    404: "case not found",
+    409: "the case is closed, so no awareness event can be recorded",
+}
 READ_MESSAGES = {
     403: "forbidden: reading case records needs cases:read_own, cases:read_assigned or cases:read_all",
     404: "case not found",
@@ -1094,7 +1222,9 @@ def _case_unassign(base_url: str, args: argparse.Namespace) -> None:
 
 def _print_link(link: dict) -> None:
     # The other case is shown only when the API gives its ID, which it does only for a case the caller can see.
-    print(f"  Linked case ID:   {link['linked_case_id'] or '(not available to your account)'}")
+    print(
+        f"  Linked case ID:   {link['linked_case_id'] or '(not available to your account)'}"
+    )
     print(f"  Title:            {link['linked_case_title'] or '-'}")
     print(f"  Linked (UTC):     {link['created_at']}")
 
@@ -1145,7 +1275,9 @@ def _case_link_remove(base_url: str, args: argparse.Namespace) -> None:
         "DELETE",
         f"/api/v1/cases/{case_id}/links/{linked_case_id}",
         messages=LINK_REMOVE_MESSAGES,
-        render=lambda raw: print("Link removed. Linking changes no task, deadline or status."),
+        render=lambda raw: print(
+            "Link removed. Linking changes no task, deadline or status."
+        ),
     )
 
 
@@ -1167,21 +1299,36 @@ MODEL_REVOKE_MESSAGES = {
 
 def _model_identifier(text: str, option: str) -> str:
     if MODEL_IDENTIFIER.fullmatch(text) is None:
-        raise UsageError(f"{option} may use only letters, digits and . _ : / @ + - (up to 200 characters)")
+        raise UsageError(
+            f"{option} may use only letters, digits and . _ : / @ + - (up to 200 characters)"
+        )
     return text
 
 
 def _model_record_links(args: argparse.Namespace) -> tuple[str | None, str | None]:
-    evidence = _uuid_arg(args.evidence_item, "--evidence-item") if args.evidence_item else None
-    review_round = _uuid_arg(args.review_round, "--review-round") if args.review_round else None
+    evidence = (
+        _uuid_arg(args.evidence_item, "--evidence-item") if args.evidence_item else None
+    )
+    review_round = (
+        _uuid_arg(args.review_round, "--review-round") if args.review_round else None
+    )
     return evidence, review_round
 
 
 def _model_record_reasoning(args: argparse.Namespace) -> dict:
-    if args.reasoning_mode != "enabled" and (args.reasoning_effort or args.reasoning_budget_tokens is not None):
-        raise UsageError("--reasoning-effort and --reasoning-budget-tokens need --reasoning-mode enabled")
-    if args.reasoning_budget_tokens is not None and not 1 <= args.reasoning_budget_tokens <= REASONING_BUDGET_LIMIT:
-        raise UsageError(f"--reasoning-budget-tokens must be between 1 and {REASONING_BUDGET_LIMIT}")
+    if args.reasoning_mode != "enabled" and (
+        args.reasoning_effort or args.reasoning_budget_tokens is not None
+    ):
+        raise UsageError(
+            "--reasoning-effort and --reasoning-budget-tokens need --reasoning-mode enabled"
+        )
+    if (
+        args.reasoning_budget_tokens is not None
+        and not 1 <= args.reasoning_budget_tokens <= REASONING_BUDGET_LIMIT
+    ):
+        raise UsageError(
+            f"--reasoning-budget-tokens must be between 1 and {REASONING_BUDGET_LIMIT}"
+        )
     return {
         "mode": args.reasoning_mode,
         "effort": args.reasoning_effort,
@@ -1193,7 +1340,11 @@ def _print_model_record(record: dict) -> None:
     config = record["configuration"]
     reasoning = config["reasoning"]
     effort = f", effort {reasoning['effort']}" if reasoning["effort"] else ""
-    budget = f", budget {reasoning['budget_tokens']} tokens" if reasoning["budget_tokens"] else ""
+    budget = (
+        f", budget {reasoning['budget_tokens']} tokens"
+        if reasoning["budget_tokens"]
+        else ""
+    )
     if record["evidence_item_id"]:
         linked = f"evidence item {record['evidence_item_id']}"
     elif record["review_round_id"]:
@@ -1245,7 +1396,9 @@ def _model_record_add(base_url: str, args: argparse.Namespace) -> None:
 
 
 def _render_model_record_revoked(raw: bytes) -> None:
-    print("Model record revoked. It stays readable for audit and is no longer the current configuration.")
+    print(
+        "Model record revoked. It stays readable for audit and is no longer the current configuration."
+    )
     _print_model_record(_json_object(raw))
 
 
@@ -1330,7 +1483,11 @@ def _review_list(base_url: str, args: argparse.Namespace) -> None:
 def _review_conflict_revision(error: RequestFailed) -> int | None:
     """The current round revision from a stale-write 412, or None for any other failure."""
     detail = error.detail
-    if error.status != 412 or not isinstance(detail, dict) or detail.get("status") != REVIEW_PRECONDITION_FAILED:
+    if (
+        error.status != 412
+        or not isinstance(detail, dict)
+        or detail.get("status") != REVIEW_PRECONDITION_FAILED
+    ):
         return None
     revision = detail.get("current_revision")
     if isinstance(revision, int) and not isinstance(revision, bool):
@@ -1344,14 +1501,18 @@ def _review_record(base_url: str, args: argparse.Namespace) -> None:
     # One key per run: a retry with --idempotency-key of an earlier run gets the first answer.
     key = args.idempotency_key or str(uuid.uuid4())
     if args.revision < 1:
-        raise UsageError("--revision must be 1 or more. Read it with: case review list CASE_ID")
+        raise UsageError(
+            "--revision must be 1 or more. Read it with: case review list CASE_ID"
+        )
     reason = args.reason if args.reason is not None else args.note
     if args.outcome != "pass" and (reason is None or not reason.strip()):
         raise UsageError("a reason is required for this outcome: pass --reason TEXT")
     round_id = _case_id_arg(args.round) if args.round is not None else None
     evidence_ids = [_case_id_arg(item) for item in args.evidence]
     if args.outcome == "pass" and not evidence_ids:
-        raise UsageError("a pass needs at least one evidence item of this case: pass --evidence EVIDENCE_ID")
+        raise UsageError(
+            "a pass needs at least one evidence item of this case: pass --evidence EVIDENCE_ID"
+        )
     payload = {
         "outcome": args.outcome,
         "reason": reason,
@@ -1361,10 +1522,20 @@ def _review_record(base_url: str, args: argparse.Namespace) -> None:
     def action(base: str, token: str) -> None:
         target = round_id
         if target is None:
-            rounds = json.loads(_call(base, "GET", f"/api/v1/reviews?case_id={case_id}", token=token, messages=REVIEW_READ_MESSAGES))
+            rounds = json.loads(
+                _call(
+                    base,
+                    "GET",
+                    f"/api/v1/reviews?case_id={case_id}",
+                    token=token,
+                    messages=REVIEW_READ_MESSAGES,
+                )
+            )
             open_rounds = [item for item in rounds if item["status"] == "open"]
             if not open_rounds:
-                raise RequestFailed("this case has no open review round. Open one with: case review open CASE_ID")
+                raise RequestFailed(
+                    "this case has no open review round. Open one with: case review open CASE_ID"
+                )
             target = open_rounds[0]["id"]
         try:
             raw = _call(
@@ -1375,7 +1546,10 @@ def _review_record(base_url: str, args: argparse.Namespace) -> None:
                 payload=payload,
                 messages=REVIEW_MESSAGES,
                 # The revision read with 'review list' travels as the ETag in If-Match (D-16).
-                extra_headers={"Idempotency-Key": key, "If-Match": f'"{args.revision}"'},
+                extra_headers={
+                    "Idempotency-Key": key,
+                    "If-Match": f'"{args.revision}"',
+                },
             )
         except RequestFailed as error:
             current = _review_conflict_revision(error)
@@ -1400,7 +1574,9 @@ def _optional_uuid(text: str | None, option: str) -> str | None:
 
 def _render_conflict(raw: bytes) -> None:
     entry = _json_object(raw)
-    print("Conflict declared." if entry["kind"] == "declared" else "Conflict withdrawn.")
+    print(
+        "Conflict declared." if entry["kind"] == "declared" else "Conflict withdrawn."
+    )
     print(f"  ID:               {entry['id']}")
     print(f"  Round ID:         {entry['round_id']}")
     print(f"  Reviewer ID:      {entry['reviewer_id']}")
@@ -1421,7 +1597,9 @@ def _render_recusal(raw: bytes) -> None:
 
 def _render_appeal(raw: bytes) -> None:
     entry = _json_object(raw)
-    print("Appeal filed. The system named the independent reviewer; the product does not decide the appeal.")
+    print(
+        "Appeal filed. The system named the independent reviewer; the product does not decide the appeal."
+    )
     print(f"  ID:               {entry['id']}")
     print(f"  Round ID:         {entry['round_id']}")
     print(f"  Filed by:         {entry['filed_by']}")
@@ -1452,8 +1630,12 @@ APPEAL_MESSAGES = {
 def _review_conflict(base_url: str, args: argparse.Namespace) -> None:
     """Declare, withdraw or correct your own conflict on a review round. Without a key, each run gets a new one."""
     round_id = _uuid_arg(args.round_id, "ROUND_ID")
-    if args.kind == "declared" and (args.description is None or not args.description.strip()):
-        raise UsageError("a description is required for a declared conflict: pass --description TEXT")
+    if args.kind == "declared" and (
+        args.description is None or not args.description.strip()
+    ):
+        raise UsageError(
+            "a description is required for a declared conflict: pass --description TEXT"
+        )
     payload = {
         "kind": args.kind,
         "description": args.description,
@@ -1536,7 +1718,11 @@ def _review_appeal(base_url: str, args: argparse.Namespace) -> None:
 def _classification_conflict_version(error: RequestFailed) -> int | None:
     """The current classification version from a stale-save 409, or None for any other failure."""
     detail = error.detail
-    if error.status != 409 or not isinstance(detail, dict) or detail.get("status") != CLASSIFICATION_VERSION_CONFLICT:
+    if (
+        error.status != 409
+        or not isinstance(detail, dict)
+        or detail.get("status") != CLASSIFICATION_VERSION_CONFLICT
+    ):
         return None
     version = detail.get("current_version")
     if isinstance(version, int) and not isinstance(version, bool):
@@ -1550,7 +1736,9 @@ def _classification_set(base_url: str, args: argparse.Namespace) -> None:
         raise UsageError("--expected-version must be 0 or more")
     next_update = None
     if args.next_update_due_at is not None:
-        next_update = _parse_timestamp(args.next_update_due_at, "--next-update-due-at", not_in_future=False)
+        next_update = _parse_timestamp(
+            args.next_update_due_at, "--next-update-due-at", not_in_future=False
+        )
     # The save replaces every field. A field left out is sent as empty and cleared, as in the web UI.
     payload = {
         "expected_version": args.expected_version,
@@ -1563,13 +1751,22 @@ def _classification_set(base_url: str, args: argparse.Namespace) -> None:
         "scope_permission_source": args.scope_permission_source,
         "containment": args.containment,
         "evidence_gap_plan": args.evidence_gap_plan,
-        "next_update_due_at": next_update.isoformat() if next_update is not None else None,
+        "next_update_due_at": next_update.isoformat()
+        if next_update is not None
+        else None,
     }
     path = f"/api/v1/cases/{case_id}/classification"
 
     def action(base: str, token: str) -> None:
         try:
-            raw = _call(base, "PUT", path, token=token, payload=payload, messages=CLASSIFICATION_MESSAGES)
+            raw = _call(
+                base,
+                "PUT",
+                path,
+                token=token,
+                payload=payload,
+                messages=CLASSIFICATION_MESSAGES,
+            )
         except RequestFailed as error:
             version = _classification_conflict_version(error)
             if version is None:
@@ -1622,7 +1819,13 @@ def _risk_show(base_url: str, args: argparse.Namespace) -> None:
     case_id = _case_id_arg(args.case_id)
 
     def action(base: str, token: str) -> None:
-        raw = _call(base, "GET", f"/api/v1/cases/{case_id}/impact-scores", token=token, messages=READ_MESSAGES)
+        raw = _call(
+            base,
+            "GET",
+            f"/api/v1/cases/{case_id}/impact-scores",
+            token=token,
+            messages=READ_MESSAGES,
+        )
         if args.json:
             _print_json(raw)
             return
@@ -1639,7 +1842,11 @@ def _risk_show(base_url: str, args: argparse.Namespace) -> None:
 def _risk_conflict_version(error: RequestFailed) -> int | None:
     """The current impact version from a stale-save 409, or None for any other failure."""
     detail = error.detail
-    if error.status != 409 or not isinstance(detail, dict) or detail.get("status") != IMPACT_VERSION_CONFLICT:
+    if (
+        error.status != 409
+        or not isinstance(detail, dict)
+        or detail.get("status") != IMPACT_VERSION_CONFLICT
+    ):
         return None
     version = detail.get("current_version")
     if isinstance(version, int) and not isinstance(version, bool):
@@ -1652,7 +1859,12 @@ def _risk_set(base_url: str, args: argparse.Namespace) -> None:
     if args.expected_version < 0:
         raise UsageError("--expected-version must be 0 or more")
     # The save replaces the three values. A value left out is sent as empty and cleared, as in the web UI.
-    payload = {"expected_version": args.expected_version, "c": args.c, "b": args.b, "a": args.a}
+    payload = {
+        "expected_version": args.expected_version,
+        "c": args.c,
+        "b": args.b,
+        "a": args.a,
+    }
     path = f"/api/v1/cases/{case_id}/impact-scores"
     key = args.idempotency_key or str(uuid.uuid4())
 
@@ -1718,7 +1930,9 @@ def _legal_duty_update(base_url: str, args: argparse.Namespace) -> None:
     if args.jurisdiction is not None:
         changes["jurisdiction"] = args.jurisdiction
     if args.due_at is not None:
-        changes["due_at"] = _parse_timestamp(args.due_at, "--due-at", not_in_future=False).isoformat()
+        changes["due_at"] = _parse_timestamp(
+            args.due_at, "--due-at", not_in_future=False
+        ).isoformat()
     if args.status is not None:
         changes["status"] = args.status
     if not changes:
@@ -1738,7 +1952,9 @@ def _legal_duty_update(base_url: str, args: argparse.Namespace) -> None:
 
 def _awareness_add(base_url: str, args: argparse.Namespace) -> None:
     case_id = _case_id_arg(args.case_id)
-    occurred_at = _parse_timestamp(args.occurred_at, "--occurred-at", not_in_future=True)
+    occurred_at = _parse_timestamp(
+        args.occurred_at, "--occurred-at", not_in_future=True
+    )
     _write_case(
         base_url,
         args,
@@ -1780,9 +1996,13 @@ def _free_text(value: str | None, full_view: bool) -> str:
 
 def _print_table(rows: list[tuple[str, ...]]) -> None:
     """rows[0] is the header. Every column but the last is padded to its widest cell."""
-    widths = [max(len(row[column]) for row in rows) for column in range(len(rows[0]) - 1)]
+    widths = [
+        max(len(row[column]) for row in rows) for column in range(len(rows[0]) - 1)
+    ]
     for row in rows:
-        cells = [row[column].ljust(widths[column]) for column in range(len(widths))] + [row[-1]]
+        cells = [row[column].ljust(widths[column]) for column in range(len(widths))] + [
+            row[-1]
+        ]
         print("  ".join(cells).rstrip())
 
 
@@ -1790,7 +2010,9 @@ def _print_field(label: str, value: str) -> None:
     print(f"  {label + ':':<26}{value}")
 
 
-def _case_read(base_url: str, args: argparse.Namespace, path: str, messages: dict[int, str], render) -> None:
+def _case_read(
+    base_url: str, args: argparse.Namespace, path: str, messages: dict[int, str], render
+) -> None:
     """One GET in its own login session. --json prints the API body as received. Otherwise render gets the raw body
     and whether the caller holds cases:read_all, which decides how a null free text is shown."""
 
@@ -1813,14 +2035,18 @@ def _classification_show(base_url: str, args: argparse.Namespace) -> None:
             print("No classification recorded for this case.")
             return
         print(f"Classification version {classification['version']}:")
-        _print_field("Triggers", ", ".join(classification["triggers"]) or "not assessed")
+        _print_field(
+            "Triggers", ", ".join(classification["triggers"]) or "not assessed"
+        )
         _print_field("Event kind", classification["event_kind"] or "-")
         for label, field in CLASSIFICATION_FREE_TEXT:
             _print_field(label, _free_text(classification[field], full_view))
         _print_field("Next update (UTC)", classification["next_update_due_at"] or "-")
         _print_field("Saved (UTC)", classification["created_at"] or "-")
 
-    _case_read(base_url, args, f"/api/v1/cases/{case_id}/classification", READ_MESSAGES, render)
+    _case_read(
+        base_url, args, f"/api/v1/cases/{case_id}/classification", READ_MESSAGES, render
+    )
 
 
 def _impact_list(base_url: str, args: argparse.Namespace) -> None:
@@ -1843,7 +2069,9 @@ def _impact_list(base_url: str, args: argparse.Namespace) -> None:
                 rows.append((impact["area"], "not assessed", "-", "-"))
         _print_table(rows)
 
-    _case_read(base_url, args, f"/api/v1/cases/{case_id}/impacts", READ_MESSAGES, render)
+    _case_read(
+        base_url, args, f"/api/v1/cases/{case_id}/impacts", READ_MESSAGES, render
+    )
 
 
 def _legal_duty_list(base_url: str, args: argparse.Namespace) -> None:
@@ -1854,7 +2082,17 @@ def _legal_duty_list(base_url: str, args: argparse.Namespace) -> None:
         if not duties:
             print("No legal duties recorded for this case.")
             return
-        rows = [("ID", "KIND", "STATUS", "DUE (UTC)", "JURISDICTION", "SOURCE REFERENCE", "DESCRIPTION")]
+        rows = [
+            (
+                "ID",
+                "KIND",
+                "STATUS",
+                "DUE (UTC)",
+                "JURISDICTION",
+                "SOURCE REFERENCE",
+                "DESCRIPTION",
+            )
+        ]
         rows += [
             (
                 duty["id"],
@@ -1869,7 +2107,9 @@ def _legal_duty_list(base_url: str, args: argparse.Namespace) -> None:
         ]
         _print_table(rows)
 
-    _case_read(base_url, args, f"/api/v1/cases/{case_id}/legal-duties", READ_MESSAGES, render)
+    _case_read(
+        base_url, args, f"/api/v1/cases/{case_id}/legal-duties", READ_MESSAGES, render
+    )
 
 
 def _awareness_list(base_url: str, args: argparse.Namespace) -> None:
@@ -1893,14 +2133,22 @@ def _awareness_list(base_url: str, args: argparse.Namespace) -> None:
         ]
         _print_table(rows)
 
-    _case_read(base_url, args, f"/api/v1/cases/{case_id}/awareness-events", READ_MESSAGES, render)
+    _case_read(
+        base_url,
+        args,
+        f"/api/v1/cases/{case_id}/awareness-events",
+        READ_MESSAGES,
+        render,
+    )
 
 
 def _render_report(report: dict) -> None:
     classification = report["classification"]
     impacts = report["impacts"]
     duties = report["legal_duties"]
-    print(f"Preliminary report for {report['reference']} (case {report['case_status']})")
+    print(
+        f"Preliminary report for {report['reference']} (case {report['case_status']})"
+    )
     _print_field("Generated (UTC)", report["generated_at"])
     _print_field("Awareness (UTC)", report["awareness_time"])
     _print_field("Complete", "yes" if report["complete"] else "no")
@@ -1915,7 +2163,10 @@ def _render_report(report: dict) -> None:
         _print_field("Classification", "none recorded")
     else:
         triggers = ", ".join(classification["triggers"]) or "not assessed"
-        _print_field("Classification", f"version {classification['version']}, triggers: {triggers}")
+        _print_field(
+            "Classification",
+            f"version {classification['version']}, triggers: {triggers}",
+        )
     _print_field("Awareness events", str(len(report["awareness_events"])))
     assessed = sum(1 for impact in impacts if impact["assessed"])
     _print_field("Impacts assessed", f"{assessed} of {len(impacts)}")
@@ -1935,7 +2186,9 @@ def _weekly_list(base_url: str, args: argparse.Namespace) -> None:
     def render(raw: bytes, full_view: bool) -> None:
         updates = _json_list(raw)
         if not updates:
-            print("No weekly updates for this case. One is made each week while it has an open significant risk.")
+            print(
+                "No weekly updates for this case. One is made each week while it has an open significant risk."
+            )
             return
         rows = [("SEQUENCE", "GENERATED (UTC)", "NEXT DUE (UTC)", "RISKS", "UPDATE ID")]
         for update in updates:
@@ -1950,7 +2203,13 @@ def _weekly_list(base_url: str, args: argparse.Namespace) -> None:
             )
         _print_table(rows)
 
-    _case_read(base_url, args, f"/api/v1/cases/{case_id}/weekly-updates", WEEKLY_MESSAGES, render)
+    _case_read(
+        base_url,
+        args,
+        f"/api/v1/cases/{case_id}/weekly-updates",
+        WEEKLY_MESSAGES,
+        render,
+    )
 
 
 def _weekly_show(base_url: str, args: argparse.Namespace) -> None:
@@ -1970,14 +2229,26 @@ def _weekly_show(base_url: str, args: argparse.Namespace) -> None:
         for task in update["deadline_tasks"]:
             print(f"    {task['kind']}: due {task['due_at']}, {task['status']}")
 
-    _case_read(base_url, args, f"/api/v1/cases/{case_id}/weekly-updates/{update_id}", WEEKLY_MESSAGES, render)
+    _case_read(
+        base_url,
+        args,
+        f"/api/v1/cases/{case_id}/weekly-updates/{update_id}",
+        WEEKLY_MESSAGES,
+        render,
+    )
 
 
 def _report_show(base_url: str, args: argparse.Namespace) -> None:
     case_id = _case_id_arg(args.case_id)
 
     def action(base: str, token: str) -> None:
-        raw = _call(base, "GET", f"/api/v1/cases/{case_id}/preliminary-report", token=token, messages=REPORT_MESSAGES)
+        raw = _call(
+            base,
+            "GET",
+            f"/api/v1/cases/{case_id}/preliminary-report",
+            token=token,
+            messages=REPORT_MESSAGES,
+        )
         if args.json:
             _print_json(raw)
         else:
@@ -1988,11 +2259,19 @@ def _report_show(base_url: str, args: argparse.Namespace) -> None:
 
 # --- disclosure packages (safe_kit.disclosure_api) ----------------------------------------------------------------
 
-DISCLOSURE_TEMPLATES = ("confidential_rapid_alert", "de_identified_member_advisory", "redacted_public_safety_report")
+DISCLOSURE_TEMPLATES = (
+    "confidential_rapid_alert",
+    "de_identified_member_advisory",
+    "redacted_public_safety_report",
+)
 DISCLOSURE_AUDIENCES = ("RED", "AMBER", "AMBER+STRICT", "GREEN", "CLEAR")
 DISCLOSURE_DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-DISCLOSURE_LIST_MESSAGES = {404: "case not found, or the case is not visible to your account"}
-DISCLOSURE_VERSION_MESSAGES = {404: "case or disclosure version not found, or the case is not visible to your account"}
+DISCLOSURE_LIST_MESSAGES = {
+    404: "case not found, or the case is not visible to your account"
+}
+DISCLOSURE_VERSION_MESSAGES = {
+    404: "case or disclosure version not found, or the case is not visible to your account"
+}
 DISCLOSURE_APPROVAL_TEXT = {
     "approved": "approved for this version",
     "not_approved": "not approved yet",
@@ -2039,7 +2318,13 @@ def _disclosure_failure(error: RequestFailed) -> RequestFailed:
 
 
 def _disclosure_write(
-    base_url: str, args: argparse.Namespace, method: str, path: str, payload: dict, render, failure=None
+    base_url: str,
+    args: argparse.Namespace,
+    method: str,
+    path: str,
+    payload: dict,
+    render,
+    failure=None,
 ) -> None:
     """One disclosure write in its own login session, with an Idempotency-Key. --json prints the API body.
 
@@ -2050,7 +2335,9 @@ def _disclosure_write(
 
     def action(base: str, token: str) -> None:
         try:
-            raw = _call(base, method, path, token=token, payload=payload, extra_headers=headers)
+            raw = _call(
+                base, method, path, token=token, payload=payload, extra_headers=headers
+            )
         except RequestFailed as error:
             raise to_message(error) from None
         if args.json:
@@ -2101,7 +2388,9 @@ def _render_disclosure_list(raw: bytes, _full_view: bool) -> None:
 
 
 def _render_disclosure_created(version: dict) -> None:
-    print("Disclosure version saved. It has no approval yet: an approver must approve this exact version before it can be sent.")
+    print(
+        "Disclosure version saved. It has no approval yet: an approver must approve this exact version before it can be sent."
+    )
     _print_field("Version ID", version["id"])
     _print_field("Package ID", version["package_id"])
     _print_field("Version", str(version["version"]))
@@ -2110,7 +2399,9 @@ def _render_disclosure_created(version: dict) -> None:
 
 def _render_disclosure_approved(version: dict) -> None:
     approval = version["approval"]
-    print("Approval recorded. It covers this version and its digest only; a later version needs its own approval.")
+    print(
+        "Approval recorded. It covers this version and its digest only; a later version needs its own approval."
+    )
     _print_field("Version ID", version["id"])
     _print_field("Digest", approval["digest"])
     _print_field("Approved by", approval["approved_by"])
@@ -2127,9 +2418,13 @@ def _disclosure_create(base_url: str, args: argparse.Namespace) -> None:
             "--package-id and --expected-version go together: give both to add a version to a package, or neither for a new one"
         )
     if args.expected_version is not None and args.expected_version < 1:
-        raise UsageError("--expected-version must be 1 or more. Read it with: case disclosure show CASE_ID")
+        raise UsageError(
+            "--expected-version must be 1 or more. Read it with: case disclosure show CASE_ID"
+        )
     payload = {
-        "package_id": _uuid_arg(args.package_id, "--package-id") if args.package_id else None,
+        "package_id": _uuid_arg(args.package_id, "--package-id")
+        if args.package_id
+        else None,
         "expected_version": args.expected_version,
         "template": args.template,
         "tlp_audience": args.tlp_audience,
@@ -2137,13 +2432,26 @@ def _disclosure_create(base_url: str, args: argparse.Namespace) -> None:
         "purpose": args.purpose,
         "evidence_ids": evidence_ids,
     }
-    _disclosure_write(base_url, args, "POST", f"/api/v1/cases/{case_id}/disclosures", payload, _render_disclosure_created)
+    _disclosure_write(
+        base_url,
+        args,
+        "POST",
+        f"/api/v1/cases/{case_id}/disclosures",
+        payload,
+        _render_disclosure_created,
+    )
 
 
 def _disclosure_show(base_url: str, args: argparse.Namespace) -> None:
     case_id = _case_id_arg(args.case_id)
     if args.version_id is None:
-        _case_read(base_url, args, f"/api/v1/cases/{case_id}/disclosures", DISCLOSURE_LIST_MESSAGES, _render_disclosure_list)
+        _case_read(
+            base_url,
+            args,
+            f"/api/v1/cases/{case_id}/disclosures",
+            DISCLOSURE_LIST_MESSAGES,
+            _render_disclosure_list,
+        )
         return
     version_id = _uuid_arg(args.version_id, "VERSION_ID")
     _case_read(
@@ -2159,8 +2467,14 @@ def _disclosure_approve(base_url: str, args: argparse.Namespace) -> None:
     case_id = _case_id_arg(args.case_id)
     version_id = _uuid_arg(args.version_id, "VERSION_ID")
     if not DISCLOSURE_DIGEST_PATTERN.match(args.digest):
-        raise UsageError("--digest must be the 64-character digest shown by 'case disclosure show CASE_ID VERSION_ID'")
-    payload = {"recipient": args.recipient, "purpose": args.purpose, "digest": args.digest}
+        raise UsageError(
+            "--digest must be the 64-character digest shown by 'case disclosure show CASE_ID VERSION_ID'"
+        )
+    payload = {
+        "recipient": args.recipient,
+        "purpose": args.purpose,
+        "digest": args.digest,
+    }
     _disclosure_write(
         base_url,
         args,
@@ -2191,6 +2505,8 @@ def _disclosure_export(base_url: str, args: argparse.Namespace) -> None:
 
     _with_session(base_url, args, action)
     _write_document(captured["raw"], args.out)
+
+
 # --- external notices (safe_kit.external_notices_api) -----------------------------------------------------------------
 
 NOTICE_CHANNELS = ("email", "postal", "webhook", "secure_manual", "other")
@@ -2199,7 +2515,9 @@ NOTICE_FOLLOW_UP_ACTIONS = ("require", "complete")
 NOTICE_RECIPIENT_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 NOTICE_REASON_LIMIT = 500
 NOTICE_CHANNEL_OTHER_LIMIT = 200
-NOTICE_LIST_MESSAGES = {404: "case or disclosure version not found, or the case is not visible to your account"}
+NOTICE_LIST_MESSAGES = {
+    404: "case or disclosure version not found, or the case is not visible to your account"
+}
 NOTICE_STATE_TEXT = {
     "sent": "sent; no receipt recorded yet",
     "receipt_received": "receipt received",
@@ -2270,9 +2588,15 @@ def _notice_base(case_id: str, version_id: str) -> str:
 
 
 def _render_notice(notice: dict) -> None:
-    print(f"Notice {notice['id']} (revision {notice['revision']}): {NOTICE_STATE_TEXT[notice['state']]}")
+    print(
+        f"Notice {notice['id']} (revision {notice['revision']}): {NOTICE_STATE_TEXT[notice['state']]}"
+    )
     _print_field("Version", f"{notice['version']} ({notice['version_id']})")
-    channel = notice["channel"] if notice["channel_other"] is None else f"other: {notice['channel_other']}"
+    channel = (
+        notice["channel"]
+        if notice["channel_other"] is None
+        else f"other: {notice['channel_other']}"
+    )
     _print_field("Channel", channel)
     _print_field("Recipient reference", notice["recipient_ref"])
     _print_field("Sent (UTC)", notice["sent_at"])
@@ -2288,7 +2612,9 @@ def _render_notice(notice: dict) -> None:
 
 
 def _render_notice_recorded(notice: dict) -> None:
-    print("Notice recorded as sent. No receipt is assumed: record the receipt, or that it is unknown, with 'case notice receipt'.")
+    print(
+        "Notice recorded as sent. No receipt is assumed: record the receipt, or that it is unknown, with 'case notice receipt'."
+    )
     _render_notice(notice)
 
 
@@ -2308,17 +2634,23 @@ def _notice_record(base_url: str, args: argparse.Namespace) -> None:
     case_id = _case_id_arg(args.case_id)
     version_id = _uuid_arg(args.version_id, "VERSION_ID")
     if (args.channel == "other") != (args.channel_other is not None):
-        raise UsageError("--channel-other is required with --channel other, and only then")
+        raise UsageError(
+            "--channel-other is required with --channel other, and only then"
+        )
     channel_other = None
     if args.channel_other is not None:
-        channel_other = _notice_text(args.channel_other, "--channel-other", NOTICE_CHANNEL_OTHER_LIMIT)
+        channel_other = _notice_text(
+            args.channel_other, "--channel-other", NOTICE_CHANNEL_OTHER_LIMIT
+        )
     if not NOTICE_RECIPIENT_PATTERN.match(args.recipient_ref):
         raise UsageError(
             "--recipient-ref is an identifier of the recipient kept outside SAFE: letters, digits, '.', '_', ':' or '-', "
             "up to 64 characters. Do not put a name or an address"
         )
     if args.manual_fallback != (args.fallback_reason is not None):
-        raise UsageError("--fallback-reason is required with --manual-fallback, and only then")
+        raise UsageError(
+            "--fallback-reason is required with --manual-fallback, and only then"
+        )
     sent_at = _parse_timestamp(args.sent_at, "--sent-at", not_in_future=True)
     payload = {
         "channel": args.channel,
@@ -2326,10 +2658,14 @@ def _notice_record(base_url: str, args: argparse.Namespace) -> None:
         "recipient_ref": args.recipient_ref,
         "sent_at": sent_at.isoformat(),
         "manual_fallback": args.manual_fallback,
-        "fallback_reason": _notice_text(args.fallback_reason, "--fallback-reason", NOTICE_REASON_LIMIT)
+        "fallback_reason": _notice_text(
+            args.fallback_reason, "--fallback-reason", NOTICE_REASON_LIMIT
+        )
         if args.fallback_reason is not None
         else None,
-        "repeat_reason": _notice_text(args.repeat_reason, "--repeat-reason", NOTICE_REASON_LIMIT)
+        "repeat_reason": _notice_text(
+            args.repeat_reason, "--repeat-reason", NOTICE_REASON_LIMIT
+        )
         if args.repeat_reason is not None
         else None,
     }
@@ -2347,19 +2683,41 @@ def _notice_record(base_url: str, args: argparse.Namespace) -> None:
 def _notice_list(base_url: str, args: argparse.Namespace) -> None:
     case_id = _case_id_arg(args.case_id)
     version_id = _uuid_arg(args.version_id, "VERSION_ID")
-    _case_read(base_url, args, _notice_base(case_id, version_id), NOTICE_LIST_MESSAGES, _render_notice_list)
+    _case_read(
+        base_url,
+        args,
+        _notice_base(case_id, version_id),
+        NOTICE_LIST_MESSAGES,
+        _render_notice_list,
+    )
 
 
 def _notice_receipt(base_url: str, args: argparse.Namespace) -> None:
     case_id = _case_id_arg(args.case_id)
     version_id = _uuid_arg(args.version_id, "VERSION_ID")
     notice_id = _uuid_arg(args.notice_id, "NOTICE_ID")
-    reason = _notice_text(args.reason, "--reason", NOTICE_REASON_LIMIT) if args.reason is not None else None
+    reason = (
+        _notice_text(args.reason, "--reason", NOTICE_REASON_LIMIT)
+        if args.reason is not None
+        else None
+    )
     if args.received_at is not None:
-        received_at = _parse_timestamp(args.received_at, "--received-at", not_in_future=True)
-        payload = {"outcome": "received", "received_at": received_at.isoformat(), "reason_code": None, "reason": reason}
+        received_at = _parse_timestamp(
+            args.received_at, "--received-at", not_in_future=True
+        )
+        payload = {
+            "outcome": "received",
+            "received_at": received_at.isoformat(),
+            "reason_code": None,
+            "reason": reason,
+        }
     else:
-        payload = {"outcome": "unknown", "received_at": None, "reason_code": args.unknown, "reason": reason}
+        payload = {
+            "outcome": "unknown",
+            "received_at": None,
+            "reason_code": args.unknown,
+            "reason": reason,
+        }
     _disclosure_write(
         base_url,
         args,
@@ -2375,7 +2733,10 @@ def _notice_follow_up(base_url: str, args: argparse.Namespace) -> None:
     case_id = _case_id_arg(args.case_id)
     version_id = _uuid_arg(args.version_id, "VERSION_ID")
     notice_id = _uuid_arg(args.notice_id, "NOTICE_ID")
-    payload = {"action": args.action, "reason": _notice_text(args.reason, "--reason", NOTICE_REASON_LIMIT)}
+    payload = {
+        "action": args.action,
+        "reason": _notice_text(args.reason, "--reason", NOTICE_REASON_LIMIT),
+    }
     _disclosure_write(
         base_url,
         args,
@@ -2413,8 +2774,13 @@ def _add_idempotency_option(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_auth_options(parser: argparse.ArgumentParser, *, json_output: bool = True) -> None:
-    parser.add_argument("--username", help="Account name. Defaults to the SAFE_USERNAME environment variable")
+def _add_auth_options(
+    parser: argparse.ArgumentParser, *, json_output: bool = True
+) -> None:
+    parser.add_argument(
+        "--username",
+        help="Account name. Defaults to the SAFE_USERNAME environment variable",
+    )
     parser.add_argument(
         "--demo-username",
         metavar="USERNAME",
@@ -2428,20 +2794,28 @@ def _add_auth_options(parser: argparse.ArgumentParser, *, json_output: bool = Tr
         "Defaults to the SAFE_DEMO_CREDENTIAL_FILE environment variable",
     )
     if json_output:
-        parser.add_argument("--json", action="store_true", help="Print the API response body as JSON")
+        parser.add_argument(
+            "--json", action="store_true", help="Print the API response body as JSON"
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="safe-kit")
-    parser.add_argument("--no-banner", action="store_true", help="Do not print the startup banner")
+    parser.add_argument(
+        "--no-banner", action="store_true", help="Do not print the startup banner"
+    )
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("health", help="Check whether the API is ready")
 
-    case = subcommands.add_parser("case", help="Create, import, list and show your cases")
+    case = subcommands.add_parser(
+        "case", help="Create, import, list and show your cases"
+    )
     case_commands = case.add_subparsers(dest="case_command", required=True)
 
     create = case_commands.add_parser("create", help="Submit a new case")
-    create.add_argument("--title", required=True, help="Case title (1 to 200 characters)")
+    create.add_argument(
+        "--title", required=True, help="Case title (1 to 200 characters)"
+    )
     create.add_argument(
         "--awareness-time",
         required=True,
@@ -2453,12 +2827,20 @@ def build_parser() -> argparse.ArgumentParser:
     create.set_defaults(handler=_case_create)
 
     listing = case_commands.add_parser("list", help="List your cases, newest first")
-    listing.add_argument("--limit", type=int, default=DEFAULT_PAGE_SIZE, help="Cases per page (1 to 200)")
     listing.add_argument(
-        "--cursor", default=None, metavar="CURSOR", help="Continue from the cursor printed as 'Next page'"
+        "--limit", type=int, default=DEFAULT_PAGE_SIZE, help="Cases per page (1 to 200)"
     )
     listing.add_argument(
-        "--status", choices=CASE_STATUS_CHOICES, default=None, help="Only cases with this status (default: all)"
+        "--cursor",
+        default=None,
+        metavar="CURSOR",
+        help="Continue from the cursor printed as 'Next page'",
+    )
+    listing.add_argument(
+        "--status",
+        choices=CASE_STATUS_CHOICES,
+        default=None,
+        help="Only cases with this status (default: all)",
     )
     _add_auth_options(listing)
     listing.set_defaults(handler=_case_list)
@@ -2468,8 +2850,14 @@ def build_parser() -> argparse.ArgumentParser:
     _add_auth_options(show)
     show.set_defaults(handler=_case_show)
 
-    imported = case_commands.add_parser("import", help="Import case records from a JSON file in the project format")
-    imported.add_argument("file", metavar="FILE", help='JSON file: {"import_format_version": 1, "records": [...]}')
+    imported = case_commands.add_parser(
+        "import", help="Import case records from a JSON file in the project format"
+    )
+    imported.add_argument(
+        "file",
+        metavar="FILE",
+        help='JSON file: {"import_format_version": 1, "records": [...]}',
+    )
     imported.add_argument(
         "--dry-run",
         action="store_true",
@@ -2481,10 +2869,14 @@ def build_parser() -> argparse.ArgumentParser:
     _add_case_update_commands(case_commands)
     _add_case_report_commands(case_commands)
 
-    evidence = subcommands.add_parser("evidence", help="Add, list, show and redact the evidence of a case")
+    evidence = subcommands.add_parser(
+        "evidence", help="Add, list, show and redact the evidence of a case"
+    )
     evidence_commands = evidence.add_subparsers(dest="evidence_command", required=True)
 
-    added = evidence_commands.add_parser("add", help="Upload a file as evidence for a case")
+    added = evidence_commands.add_parser(
+        "add", help="Upload a file as evidence for a case"
+    )
     added.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     added.add_argument(
         "file",
@@ -2495,10 +2887,16 @@ def build_parser() -> argparse.ArgumentParser:
     _add_auth_options(added)
     added.set_defaults(handler=_evidence_add)
 
-    evidence_list = evidence_commands.add_parser("list", help="List the evidence of one of your cases")
+    evidence_list = evidence_commands.add_parser(
+        "list", help="List the evidence of one of your cases"
+    )
     evidence_list.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    evidence_list.add_argument("--limit", type=int, default=DEFAULT_PAGE_SIZE, help="Items per page (1 to 200)")
-    evidence_list.add_argument("--offset", type=int, default=0, help="Number of items to skip")
+    evidence_list.add_argument(
+        "--limit", type=int, default=DEFAULT_PAGE_SIZE, help="Items per page (1 to 200)"
+    )
+    evidence_list.add_argument(
+        "--offset", type=int, default=0, help="Number of items to skip"
+    )
     _add_auth_options(evidence_list)
     evidence_list.set_defaults(handler=_evidence_list)
     _add_evidence_commands(evidence_commands)
@@ -2506,27 +2904,43 @@ def build_parser() -> argparse.ArgumentParser:
     task = subcommands.add_parser("task", help="Show the deadline tasks of a case")
     task_commands = task.add_subparsers(dest="task_command", required=True)
 
-    task_listing = task_commands.add_parser("list", help="List the deadline tasks of one of your cases")
+    task_listing = task_commands.add_parser(
+        "list", help="List the deadline tasks of one of your cases"
+    )
     task_listing.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     _add_auth_options(task_listing)
     task_listing.set_defaults(handler=_task_list)
 
     task_update = task_commands.add_parser(
-        "update", help="Set a deadline task to open, done or not-applicable. Not applicable needs a reason"
+        "update",
+        help="Set a deadline task to open, done or not-applicable. Not applicable needs a reason",
     )
     task_update.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    task_update.add_argument("task_id", metavar="TASK_ID", help="Deadline task ID (UUID), from task list")
-    task_update.add_argument("--status", required=True, choices=["open", "done", "not-applicable"], help="New status")
-    task_update.add_argument("--reason", help="Why the deadline does not apply, 1 to 1000 characters (not-applicable only)")
+    task_update.add_argument(
+        "task_id", metavar="TASK_ID", help="Deadline task ID (UUID), from task list"
+    )
+    task_update.add_argument(
+        "--status",
+        required=True,
+        choices=["open", "done", "not-applicable"],
+        help="New status",
+    )
+    task_update.add_argument(
+        "--reason",
+        help="Why the deadline does not apply, 1 to 1000 characters (not-applicable only)",
+    )
     _add_idempotency_option(task_update)
     _add_auth_options(task_update)
     task_update.set_defaults(handler=_task_update)
 
     task_restore = task_commands.add_parser(
-        "restore", help="Turn off a not-applicable deadline: it returns to the status it had before"
+        "restore",
+        help="Turn off a not-applicable deadline: it returns to the status it had before",
     )
     task_restore.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    task_restore.add_argument("task_id", metavar="TASK_ID", help="Deadline task ID (UUID), from task list")
+    task_restore.add_argument(
+        "task_id", metavar="TASK_ID", help="Deadline task ID (UUID), from task list"
+    )
     _add_idempotency_option(task_restore)
     _add_auth_options(task_restore)
     task_restore.set_defaults(handler=_task_restore)
@@ -2537,52 +2951,89 @@ def build_parser() -> argparse.ArgumentParser:
 def _add_case_update_commands(case_commands) -> None:
     """The commands that change a case, and the read commands of the record groups that also have a write command.
     Each one is a thin wrapper over one API route."""
-    close = case_commands.add_parser("close", help="Close a case. It needs a review and every deadline task settled")
+    close = case_commands.add_parser(
+        "close", help="Close a case. It needs a review and every deadline task settled"
+    )
     close.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    close.add_argument("--reason", required=True, help="Why the case is closed (required)")
+    close.add_argument(
+        "--reason", required=True, help="Why the case is closed (required)"
+    )
     _add_idempotency_option(close)
     _add_auth_options(close)
     close.set_defaults(handler=_case_close)
 
     reopen = case_commands.add_parser("reopen", help="Reopen a closed case")
     reopen.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    reopen.add_argument("--reason", required=True, help="Why the case is reopened (required)")
+    reopen.add_argument(
+        "--reason", required=True, help="Why the case is reopened (required)"
+    )
     _add_idempotency_option(reopen)
     _add_auth_options(reopen)
     reopen.set_defaults(handler=_case_reopen)
 
-    assign = case_commands.add_parser("assign", help="Assign an active user whose role holds cases:assignable to a case")
+    assign = case_commands.add_parser(
+        "assign",
+        help="Assign an active user whose role holds cases:assignable to a case",
+    )
     assign.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    assign.add_argument("--user-id", required=True, metavar="USER_ID", help="ID (UUID) of the user to assign")
+    assign.add_argument(
+        "--user-id",
+        required=True,
+        metavar="USER_ID",
+        help="ID (UUID) of the user to assign",
+    )
     _add_idempotency_option(assign)
     _add_auth_options(assign)
     assign.set_defaults(handler=_case_assign)
 
     unassign = case_commands.add_parser("unassign", help="Remove a user from a case")
     unassign.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    unassign.add_argument("--user-id", required=True, metavar="USER_ID", help="ID (UUID) of the user to remove")
+    unassign.add_argument(
+        "--user-id",
+        required=True,
+        metavar="USER_ID",
+        help="ID (UUID) of the user to remove",
+    )
     _add_auth_options(unassign, json_output=False)
     unassign.set_defaults(handler=_case_unassign)
 
-    link = case_commands.add_parser("link", help="Link two cases that concern the same incident. A link changes nothing else")
+    link = case_commands.add_parser(
+        "link",
+        help="Link two cases that concern the same incident. A link changes nothing else",
+    )
     link_commands = link.add_subparsers(dest="link_command", required=True)
-    link_add = link_commands.add_parser("add", help="Link a case to another case you can see")
+    link_add = link_commands.add_parser(
+        "add", help="Link a case to another case you can see"
+    )
     link_add.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    link_add.add_argument("linked_case_id", metavar="LINKED_CASE_ID", help="Case ID (UUID) of the other case")
+    link_add.add_argument(
+        "linked_case_id",
+        metavar="LINKED_CASE_ID",
+        help="Case ID (UUID) of the other case",
+    )
     _add_idempotency_option(link_add)
     _add_auth_options(link_add)
     link_add.set_defaults(handler=_case_link_add)
-    link_list = link_commands.add_parser("list", help="List the cases linked to one of your cases")
+    link_list = link_commands.add_parser(
+        "list", help="List the cases linked to one of your cases"
+    )
     link_list.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     _add_auth_options(link_list)
     link_list.set_defaults(handler=_case_link_list)
-    link_remove = link_commands.add_parser("remove", help="Remove the link between two cases")
+    link_remove = link_commands.add_parser(
+        "remove", help="Remove the link between two cases"
+    )
     link_remove.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    link_remove.add_argument("linked_case_id", metavar="LINKED_CASE_ID", help="Case ID (UUID) of the linked case")
+    link_remove.add_argument(
+        "linked_case_id",
+        metavar="LINKED_CASE_ID",
+        help="Case ID (UUID) of the linked case",
+    )
     _add_auth_options(link_remove, json_output=False)
     link_remove.set_defaults(handler=_case_link_remove)
     model = case_commands.add_parser(
-        "model", help="Record, list and revoke the model, runtime and reasoning configuration"
+        "model",
+        help="Record, list and revoke the model, runtime and reasoning configuration",
     )
     model_commands = model.add_subparsers(dest="model_command", required=True)
     model_record = model_commands.add_parser(
@@ -2590,10 +3041,20 @@ def _add_case_update_commands(case_commands) -> None:
         help="Record the configuration of an agent run. Identifiers only: no prompt and no reasoning text",
     )
     model_record.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    model_record.add_argument("--model-name", required=True, help="Model name, up to 200 characters")
-    model_record.add_argument("--model-version", required=True, help="Model version, up to 200 characters")
-    model_record.add_argument("--runtime", required=True, help="Runtime name and version, up to 200 characters")
-    model_record.add_argument("--provider-alias", required=True, help="Provider alias, up to 200 characters")
+    model_record.add_argument(
+        "--model-name", required=True, help="Model name, up to 200 characters"
+    )
+    model_record.add_argument(
+        "--model-version", required=True, help="Model version, up to 200 characters"
+    )
+    model_record.add_argument(
+        "--runtime",
+        required=True,
+        help="Runtime name and version, up to 200 characters",
+    )
+    model_record.add_argument(
+        "--provider-alias", required=True, help="Provider alias, up to 200 characters"
+    )
     model_record.add_argument(
         "--reasoning-mode",
         required=True,
@@ -2601,7 +3062,9 @@ def _add_case_update_commands(case_commands) -> None:
         help="Whether reasoning was on: " + ", ".join(REASONING_MODES),
     )
     model_record.add_argument(
-        "--reasoning-effort", choices=REASONING_EFFORTS, help="Effort, only with --reasoning-mode enabled"
+        "--reasoning-effort",
+        choices=REASONING_EFFORTS,
+        help="Effort, only with --reasoning-mode enabled",
     )
     model_record.add_argument(
         "--reasoning-budget-tokens",
@@ -2610,25 +3073,41 @@ def _add_case_update_commands(case_commands) -> None:
         help="Token budget, only with --reasoning-mode enabled",
     )
     model_record.add_argument(
-        "--evidence-item", metavar="EVIDENCE_ID", help="Link to one evidence item of the case (UUID)"
+        "--evidence-item",
+        metavar="EVIDENCE_ID",
+        help="Link to one evidence item of the case (UUID)",
     )
-    model_record.add_argument("--review-round", metavar="ROUND_ID", help="Link to one review round of the case (UUID)")
+    model_record.add_argument(
+        "--review-round",
+        metavar="ROUND_ID",
+        help="Link to one review round of the case (UUID)",
+    )
     _add_idempotency_option(model_record)
     _add_auth_options(model_record)
     model_record.set_defaults(handler=_model_record_add)
     model_list = model_commands.add_parser(
-        "list", help="List the model records of a case. Revoked records are shown unless --current-only is given"
+        "list",
+        help="List the model records of a case. Revoked records are shown unless --current-only is given",
     )
     model_list.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    model_list.add_argument("--current-only", action="store_true", help="Leave out revoked records")
+    model_list.add_argument(
+        "--current-only", action="store_true", help="Leave out revoked records"
+    )
     _add_auth_options(model_list)
     model_list.set_defaults(handler=_model_record_list)
     model_revoke = model_commands.add_parser(
-        "revoke", help="Revoke a model record with a reason. The record stays readable for audit"
+        "revoke",
+        help="Revoke a model record with a reason. The record stays readable for audit",
     )
     model_revoke.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    model_revoke.add_argument("record_id", metavar="RECORD_ID", help="Model record ID (UUID)")
-    model_revoke.add_argument("--reason", required=True, help="Why the record is revoked, up to 1000 characters")
+    model_revoke.add_argument(
+        "record_id", metavar="RECORD_ID", help="Model record ID (UUID)"
+    )
+    model_revoke.add_argument(
+        "--reason",
+        required=True,
+        help="Why the record is revoked, up to 1000 characters",
+    )
     _add_idempotency_option(model_revoke)
     _add_auth_options(model_revoke)
     model_revoke.set_defaults(handler=_model_record_revoke)
@@ -2637,17 +3116,32 @@ def _add_case_update_commands(case_commands) -> None:
         "disclosure",
         help="Create, show, approve and export disclosure packages: redacted derivatives for one recipient and purpose",
     )
-    disclosure_commands = disclosure.add_subparsers(dest="disclosure_command", required=True)
+    disclosure_commands = disclosure.add_subparsers(
+        dest="disclosure_command", required=True
+    )
     disclosure_create = disclosure_commands.add_parser(
-        "create", help="Save a disclosure version: a new package, or the next version of one"
+        "create",
+        help="Save a disclosure version: a new package, or the next version of one",
     )
     disclosure_create.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    disclosure_create.add_argument("--template", required=True, choices=DISCLOSURE_TEMPLATES, help="Template of the package")
     disclosure_create.add_argument(
-        "--tlp-audience", required=True, choices=DISCLOSURE_AUDIENCES, help="TLP audience of the package"
+        "--template",
+        required=True,
+        choices=DISCLOSURE_TEMPLATES,
+        help="Template of the package",
     )
-    disclosure_create.add_argument("--recipient", required=True, help="Recipient, up to 200 characters")
-    disclosure_create.add_argument("--purpose", required=True, help="Purpose, up to 500 characters")
+    disclosure_create.add_argument(
+        "--tlp-audience",
+        required=True,
+        choices=DISCLOSURE_AUDIENCES,
+        help="TLP audience of the package",
+    )
+    disclosure_create.add_argument(
+        "--recipient", required=True, help="Recipient, up to 200 characters"
+    )
+    disclosure_create.add_argument(
+        "--purpose", required=True, help="Purpose, up to 500 characters"
+    )
     disclosure_create.add_argument(
         "--evidence",
         action="append",
@@ -2655,7 +3149,11 @@ def _add_case_update_commands(case_commands) -> None:
         metavar="EVIDENCE_ID",
         help="Redacted derivative evidence item (UUID). Repeat for each item, up to 50 in all",
     )
-    disclosure_create.add_argument("--package-id", metavar="PACKAGE_ID", help="Add a version to this package (UUID)")
+    disclosure_create.add_argument(
+        "--package-id",
+        metavar="PACKAGE_ID",
+        help="Add a version to this package (UUID)",
+    )
     disclosure_create.add_argument(
         "--expected-version",
         type=int,
@@ -2671,7 +3169,10 @@ def _add_case_update_commands(case_commands) -> None:
     )
     disclosure_show.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     disclosure_show.add_argument(
-        "version_id", metavar="VERSION_ID", nargs="?", help="Version ID (UUID). Without it, the versions are listed"
+        "version_id",
+        metavar="VERSION_ID",
+        nargs="?",
+        help="Version ID (UUID). Without it, the versions are listed",
     )
     _add_auth_options(disclosure_show)
     disclosure_show.set_defaults(handler=_disclosure_show)
@@ -2680,10 +3181,18 @@ def _add_case_update_commands(case_commands) -> None:
         help="Approve one version. Give its recipient, purpose and digest exactly as 'case disclosure show' prints them",
     )
     disclosure_approve.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    disclosure_approve.add_argument("version_id", metavar="VERSION_ID", help="Version ID (UUID)")
-    disclosure_approve.add_argument("--recipient", required=True, help="The version's recipient")
-    disclosure_approve.add_argument("--purpose", required=True, help="The version's purpose")
-    disclosure_approve.add_argument("--digest", required=True, help="The version's digest (64 hex characters)")
+    disclosure_approve.add_argument(
+        "version_id", metavar="VERSION_ID", help="Version ID (UUID)"
+    )
+    disclosure_approve.add_argument(
+        "--recipient", required=True, help="The version's recipient"
+    )
+    disclosure_approve.add_argument(
+        "--purpose", required=True, help="The version's purpose"
+    )
+    disclosure_approve.add_argument(
+        "--digest", required=True, help="The version's digest (64 hex characters)"
+    )
     _add_idempotency_option(disclosure_approve)
     _add_auth_options(disclosure_approve)
     disclosure_approve.set_defaults(handler=_disclosure_approve)
@@ -2693,9 +3202,14 @@ def _add_case_update_commands(case_commands) -> None:
         "Needs disclosures:read",
     )
     disclosure_export.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    disclosure_export.add_argument("version_id", metavar="VERSION_ID", help="Version ID (UUID)")
     disclosure_export.add_argument(
-        "--out", metavar="FILE", default=None, help="Write the JSON to FILE instead of printing it"
+        "version_id", metavar="VERSION_ID", help="Version ID (UUID)"
+    )
+    disclosure_export.add_argument(
+        "--out",
+        metavar="FILE",
+        default=None,
+        help="Write the JSON to FILE instead of printing it",
     )
     _add_auth_options(disclosure_export, json_output=False)
     disclosure_export.set_defaults(handler=_disclosure_export)
@@ -2707,13 +3221,22 @@ def _add_case_update_commands(case_commands) -> None:
     )
     notice_commands = notice.add_subparsers(dest="notice_command", required=True)
     notice_record = notice_commands.add_parser(
-        "record", help="Record that you sent an approved version to a recipient. It starts as sent, with no receipt"
+        "record",
+        help="Record that you sent an approved version to a recipient. It starts as sent, with no receipt",
     )
     notice_record.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    notice_record.add_argument("version_id", metavar="VERSION_ID", help="Version ID (UUID) of an approved, current version")
-    notice_record.add_argument("--channel", required=True, choices=NOTICE_CHANNELS, help="How you sent it")
     notice_record.add_argument(
-        "--channel-other", metavar="TEXT", help="Describe the channel, up to 200 characters. Required with --channel other"
+        "version_id",
+        metavar="VERSION_ID",
+        help="Version ID (UUID) of an approved, current version",
+    )
+    notice_record.add_argument(
+        "--channel", required=True, choices=NOTICE_CHANNELS, help="How you sent it"
+    )
+    notice_record.add_argument(
+        "--channel-other",
+        metavar="TEXT",
+        help="Describe the channel, up to 200 characters. Required with --channel other",
     )
     notice_record.add_argument(
         "--recipient-ref",
@@ -2722,43 +3245,64 @@ def _add_case_update_commands(case_commands) -> None:
         help="Identifier of the recipient kept outside SAFE, up to 64 characters: letters, digits, '.', '_', ':' or '-'",
     )
     notice_record.add_argument(
-        "--sent-at", required=True, metavar="ISO8601", help="When you sent it, with a timezone, for example 2026-11-02T09:00:00Z"
+        "--sent-at",
+        required=True,
+        metavar="ISO8601",
+        help="When you sent it, with a timezone, for example 2026-11-02T09:00:00Z",
     )
     notice_record.add_argument(
         "--manual-fallback",
         action="store_true",
         help="Record on the manual path, because the approver was unavailable. Needs --fallback-reason",
     )
-    notice_record.add_argument("--fallback-reason", metavar="TEXT", help="Why the manual path is used, up to 500 characters")
     notice_record.add_argument(
-        "--repeat-reason", metavar="TEXT", help="Why a second notice to this recipient is needed, up to 500 characters"
+        "--fallback-reason",
+        metavar="TEXT",
+        help="Why the manual path is used, up to 500 characters",
+    )
+    notice_record.add_argument(
+        "--repeat-reason",
+        metavar="TEXT",
+        help="Why a second notice to this recipient is needed, up to 500 characters",
     )
     _add_idempotency_option(notice_record)
     _add_auth_options(notice_record)
     notice_record.set_defaults(handler=_notice_record)
     notice_list = notice_commands.add_parser(
-        "list", help="List the notices of a disclosure version, newest first, with their current state"
+        "list",
+        help="List the notices of a disclosure version, newest first, with their current state",
     )
     notice_list.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    notice_list.add_argument("version_id", metavar="VERSION_ID", help="Version ID (UUID)")
+    notice_list.add_argument(
+        "version_id", metavar="VERSION_ID", help="Version ID (UUID)"
+    )
     _add_auth_options(notice_list)
     notice_list.set_defaults(handler=_notice_list)
     notice_receipt = notice_commands.add_parser(
-        "receipt", help="Record the receipt from the recipient, or that no receipt is known and why"
+        "receipt",
+        help="Record the receipt from the recipient, or that no receipt is known and why",
     )
     notice_receipt.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    notice_receipt.add_argument("version_id", metavar="VERSION_ID", help="Version ID (UUID)")
-    notice_receipt.add_argument("notice_id", metavar="NOTICE_ID", help="Notice ID (UUID)")
+    notice_receipt.add_argument(
+        "version_id", metavar="VERSION_ID", help="Version ID (UUID)"
+    )
+    notice_receipt.add_argument(
+        "notice_id", metavar="NOTICE_ID", help="Notice ID (UUID)"
+    )
     receipt_outcome = notice_receipt.add_mutually_exclusive_group(required=True)
     receipt_outcome.add_argument(
-        "--received-at", metavar="ISO8601", help="The recipient's receipt, with its time and a timezone"
+        "--received-at",
+        metavar="ISO8601",
+        help="The recipient's receipt, with its time and a timezone",
     )
     receipt_outcome.add_argument(
         "--unknown",
         choices=NOTICE_UNKNOWN_REASONS,
         help="No receipt is known. A provider's acceptance is not a receipt: use provider_accepted_no_receipt",
     )
-    notice_receipt.add_argument("--reason", metavar="TEXT", help="A note, up to 500 characters")
+    notice_receipt.add_argument(
+        "--reason", metavar="TEXT", help="A note, up to 500 characters"
+    )
     _add_idempotency_option(notice_receipt)
     _add_auth_options(notice_receipt)
     notice_receipt.set_defaults(handler=_notice_receipt)
@@ -2766,18 +3310,37 @@ def _add_case_update_commands(case_commands) -> None:
         "follow-up", help="Mark a follow-up as required, or as done, with the reason"
     )
     notice_follow_up.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    notice_follow_up.add_argument("version_id", metavar="VERSION_ID", help="Version ID (UUID)")
-    notice_follow_up.add_argument("notice_id", metavar="NOTICE_ID", help="Notice ID (UUID)")
-    notice_follow_up.add_argument("--action", required=True, choices=NOTICE_FOLLOW_UP_ACTIONS, help="require or complete")
-    notice_follow_up.add_argument("--reason", required=True, metavar="TEXT", help="Up to 500 characters")
+    notice_follow_up.add_argument(
+        "version_id", metavar="VERSION_ID", help="Version ID (UUID)"
+    )
+    notice_follow_up.add_argument(
+        "notice_id", metavar="NOTICE_ID", help="Notice ID (UUID)"
+    )
+    notice_follow_up.add_argument(
+        "--action",
+        required=True,
+        choices=NOTICE_FOLLOW_UP_ACTIONS,
+        help="require or complete",
+    )
+    notice_follow_up.add_argument(
+        "--reason", required=True, metavar="TEXT", help="Up to 500 characters"
+    )
     _add_idempotency_option(notice_follow_up)
     _add_auth_options(notice_follow_up)
     notice_follow_up.set_defaults(handler=_notice_follow_up)
-    notice_cancel = notice_commands.add_parser("cancel", help="Cancel a notice with a reason. Not possible after a receipt")
+    notice_cancel = notice_commands.add_parser(
+        "cancel", help="Cancel a notice with a reason. Not possible after a receipt"
+    )
     notice_cancel.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    notice_cancel.add_argument("version_id", metavar="VERSION_ID", help="Version ID (UUID)")
-    notice_cancel.add_argument("notice_id", metavar="NOTICE_ID", help="Notice ID (UUID)")
-    notice_cancel.add_argument("--reason", required=True, metavar="TEXT", help="Up to 500 characters")
+    notice_cancel.add_argument(
+        "version_id", metavar="VERSION_ID", help="Version ID (UUID)"
+    )
+    notice_cancel.add_argument(
+        "notice_id", metavar="NOTICE_ID", help="Notice ID (UUID)"
+    )
+    notice_cancel.add_argument(
+        "--reason", required=True, metavar="TEXT", help="Up to 500 characters"
+    )
     _add_idempotency_option(notice_cancel)
     _add_auth_options(notice_cancel)
     notice_cancel.set_defaults(handler=_notice_cancel)
@@ -2788,7 +3351,8 @@ def _add_case_update_commands(case_commands) -> None:
     )
     review_commands = review.add_subparsers(dest="review_command", required=True)
     review_open = review_commands.add_parser(
-        "open", help="Open a review round with all eleven layers not set. You must be assigned to the case"
+        "open",
+        help="Open a review round with all eleven layers not set. You must be assigned to the case",
     )
     review_open.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     review_open.add_argument(
@@ -2799,29 +3363,47 @@ def _add_case_update_commands(case_commands) -> None:
     )
     _add_auth_options(review_open)
     review_open.set_defaults(handler=_review_open)
-    review_list = review_commands.add_parser("list", help="List the review rounds of one of your cases, with revisions")
+    review_list = review_commands.add_parser(
+        "list", help="List the review rounds of one of your cases, with revisions"
+    )
     review_list.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     _add_auth_options(review_list)
     review_list.set_defaults(handler=_review_list)
     review_record = review_commands.add_parser(
-        "record", help="Set the outcome of one layer of a review round. You must be assigned to the case"
+        "record",
+        help="Set the outcome of one layer of a review round. You must be assigned to the case",
     )
     review_record.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    review_record.add_argument("--layer", required=True, choices=REVIEW_LAYERS, help="Layer to set")
-    review_record.add_argument("--outcome", required=True, choices=REVIEW_OUTCOMES, help="Layer outcome")
     review_record.add_argument(
-        "--reason", help="Reason, up to 1000 characters. Required for every outcome except pass"
+        "--layer", required=True, choices=REVIEW_LAYERS, help="Layer to set"
     )
-    review_record.add_argument("--note", help="Same as --reason, kept for existing scripts")
     review_record.add_argument(
-        "--evidence", action="append", default=[], metavar="EVIDENCE_ID",
+        "--outcome", required=True, choices=REVIEW_OUTCOMES, help="Layer outcome"
+    )
+    review_record.add_argument(
+        "--reason",
+        help="Reason, up to 1000 characters. Required for every outcome except pass",
+    )
+    review_record.add_argument(
+        "--note", help="Same as --reason, kept for existing scripts"
+    )
+    review_record.add_argument(
+        "--evidence",
+        action="append",
+        default=[],
+        metavar="EVIDENCE_ID",
         help="Evidence item ID (UUID) of this case. Repeat for more than one. Required for a pass",
     )
     review_record.add_argument(
-        "--round", metavar="ROUND_ID", help="Review round ID (UUID). Default: the open round of the case"
+        "--round",
+        metavar="ROUND_ID",
+        help="Review round ID (UUID). Default: the open round of the case",
     )
     review_record.add_argument(
-        "--revision", type=int, required=True, help="Revision of the round you read with 'review list'"
+        "--revision",
+        type=int,
+        required=True,
+        help="Revision of the round you read with 'review list'",
     )
     _add_idempotency_option(review_record)
     _add_auth_options(review_record)
@@ -2831,16 +3413,22 @@ def _add_case_update_commands(case_commands) -> None:
         help="Declare, withdraw or correct your own conflict on a review round. A declared conflict stops you "
         "from setting its layers. You must be assigned to the case",
     )
-    review_conflict.add_argument("round_id", metavar="ROUND_ID", help="Review round ID (UUID)")
     review_conflict.add_argument(
-        "--kind", required=True, choices=("declared", "withdrawn"),
+        "round_id", metavar="ROUND_ID", help="Review round ID (UUID)"
+    )
+    review_conflict.add_argument(
+        "--kind",
+        required=True,
+        choices=("declared", "withdrawn"),
         help="declared states the conflict; withdrawn states that it no longer applies",
     )
     review_conflict.add_argument(
-        "--description", help="What the conflict is, up to 1000 characters. Required for declared"
+        "--description",
+        help="What the conflict is, up to 1000 characters. Required for declared",
     )
     review_conflict.add_argument(
-        "--supersedes", metavar="CONFLICT_ID",
+        "--supersedes",
+        metavar="CONFLICT_ID",
         help="The entry this one corrects: your current conflict entry on the round. Leave out when there is none",
     )
     review_conflict.add_argument(
@@ -2854,14 +3442,21 @@ def _add_case_update_commands(case_commands) -> None:
         "recuse",
         help="Withdraw from a review round and name the replacement reviewer. You must be assigned to the case",
     )
-    review_recuse.add_argument("round_id", metavar="ROUND_ID", help="Review round ID (UUID)")
     review_recuse.add_argument(
-        "--replacement", required=True, metavar="USER_ID",
+        "round_id", metavar="ROUND_ID", help="Review round ID (UUID)"
+    )
+    review_recuse.add_argument(
+        "--replacement",
+        required=True,
+        metavar="USER_ID",
         help="User ID (UUID) of the replacement: an active, assigned user with reviews:write and no declared conflict",
     )
-    review_recuse.add_argument("--reason", help="Why you withdraw, up to 1000 characters")
     review_recuse.add_argument(
-        "--supersedes", metavar="RECUSAL_ID",
+        "--reason", help="Why you withdraw, up to 1000 characters"
+    )
+    review_recuse.add_argument(
+        "--supersedes",
+        metavar="RECUSAL_ID",
         help="The recusal this one corrects: your current recusal on the round. Leave out for the first one",
     )
     review_recuse.add_argument(
@@ -2875,8 +3470,12 @@ def _add_case_update_commands(case_commands) -> None:
         "appeal",
         help="File an appeal against a review round. The system names the independent reviewer. No approval is needed",
     )
-    review_appeal.add_argument("round_id", metavar="ROUND_ID", help="Review round ID (UUID)")
-    review_appeal.add_argument("--grounds", required=True, help="Grounds of the appeal, up to 2000 characters")
+    review_appeal.add_argument(
+        "round_id", metavar="ROUND_ID", help="Review round ID (UUID)"
+    )
+    review_appeal.add_argument(
+        "--grounds", required=True, help="Grounds of the appeal, up to 2000 characters"
+    )
     review_appeal.add_argument(
         "--idempotency-key",
         metavar="KEY",
@@ -2885,8 +3484,12 @@ def _add_case_update_commands(case_commands) -> None:
     _add_auth_options(review_appeal)
     review_appeal.set_defaults(handler=_review_appeal)
 
-    classification = case_commands.add_parser("classification", help="Show and save the classification of a case")
-    classification_commands = classification.add_subparsers(dest="classification_command", required=True)
+    classification = case_commands.add_parser(
+        "classification", help="Show and save the classification of a case"
+    )
+    classification_commands = classification.add_subparsers(
+        dest="classification_command", required=True
+    )
     classification_set = classification_commands.add_parser(
         "set",
         help="Save the next classification version. Every field is replaced: a field you leave out is cleared",
@@ -2908,18 +3511,35 @@ def _add_case_update_commands(case_commands) -> None:
         + ", ".join(CLASSIFICATION_TRIGGERS)
         + ". Repeat for each trigger (up to five). none_applies cannot be combined with another value",
     )
-    classification_set.add_argument("--event-kind", choices=EVENT_KINDS, help="Event kind")
-    classification_set.add_argument("--classification-rationale", help="Rationale, up to 1000 characters")
-    classification_set.add_argument("--responsible-operator", help="Responsible operator, up to 1000 characters")
-    classification_set.add_argument("--affected-versions", help="Affected versions, up to 1000 characters")
-    classification_set.add_argument("--approved-scope", help="Approved scope, up to 1000 characters")
     classification_set.add_argument(
-        "--scope-permission-source", help="Source of the scope permission, up to 1000 characters"
+        "--event-kind", choices=EVENT_KINDS, help="Event kind"
     )
-    classification_set.add_argument("--containment", help="Containment, up to 1000 characters")
-    classification_set.add_argument("--evidence-gap-plan", help="Evidence gap plan, up to 1000 characters")
     classification_set.add_argument(
-        "--next-update-due-at", metavar="ISO8601", help="Next update due, with a timezone, for example 2026-11-02T09:00:00Z"
+        "--classification-rationale", help="Rationale, up to 1000 characters"
+    )
+    classification_set.add_argument(
+        "--responsible-operator", help="Responsible operator, up to 1000 characters"
+    )
+    classification_set.add_argument(
+        "--affected-versions", help="Affected versions, up to 1000 characters"
+    )
+    classification_set.add_argument(
+        "--approved-scope", help="Approved scope, up to 1000 characters"
+    )
+    classification_set.add_argument(
+        "--scope-permission-source",
+        help="Source of the scope permission, up to 1000 characters",
+    )
+    classification_set.add_argument(
+        "--containment", help="Containment, up to 1000 characters"
+    )
+    classification_set.add_argument(
+        "--evidence-gap-plan", help="Evidence gap plan, up to 1000 characters"
+    )
+    classification_set.add_argument(
+        "--next-update-due-at",
+        metavar="ISO8601",
+        help="Next update due, with a timezone, for example 2026-11-02T09:00:00Z",
     )
     _add_idempotency_option(classification_set)
     _add_auth_options(classification_set)
@@ -2927,29 +3547,50 @@ def _add_case_update_commands(case_commands) -> None:
     classification_show = classification_commands.add_parser(
         "show", help="Show the current classification of one of your cases"
     )
-    classification_show.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    classification_show.add_argument(
+        "case_id", metavar="CASE_ID", help="Case ID (UUID)"
+    )
     _add_auth_options(classification_show)
     classification_show.set_defaults(handler=_classification_show)
 
-    impact = case_commands.add_parser("impact", help="List and set the impact areas of a case")
+    impact = case_commands.add_parser(
+        "impact", help="List and set the impact areas of a case"
+    )
     impact_commands = impact.add_subparsers(dest="impact_command", required=True)
-    impact_list = impact_commands.add_parser("list", help="List the impact areas of one of your cases")
+    impact_list = impact_commands.add_parser(
+        "list", help="List the impact areas of one of your cases"
+    )
     impact_list.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     _add_auth_options(impact_list)
     impact_list.set_defaults(handler=_impact_list)
-    impact_set = impact_commands.add_parser("set", help="Set the severity and scope of one impact area")
+    impact_set = impact_commands.add_parser(
+        "set", help="Set the severity and scope of one impact area"
+    )
     impact_set.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    impact_set.add_argument("area", metavar="AREA", choices=IMPACT_AREAS, help="Impact area")
-    impact_set.add_argument("--severity", required=True, choices=IMPACT_SEVERITIES, help="Severity")
-    impact_set.add_argument("--scope", required=True, help="What is affected (required, up to 1000 characters)")
+    impact_set.add_argument(
+        "area", metavar="AREA", choices=IMPACT_AREAS, help="Impact area"
+    )
+    impact_set.add_argument(
+        "--severity", required=True, choices=IMPACT_SEVERITIES, help="Severity"
+    )
+    impact_set.add_argument(
+        "--scope",
+        required=True,
+        help="What is affected (required, up to 1000 characters)",
+    )
     _add_idempotency_option(impact_set)
     _add_auth_options(impact_set)
     impact_set.set_defaults(handler=_impact_set)
 
     # The risk commands are named "risk": "impact set" above already sets the severity of one impact area.
-    risk = case_commands.add_parser("risk", help="Show and set the impact values C, B and A of a case, and its risk score")
+    risk = case_commands.add_parser(
+        "risk",
+        help="Show and set the impact values C, B and A of a case, and its risk score",
+    )
     risk_commands = risk.add_subparsers(dest="risk_command", required=True)
-    risk_show = risk_commands.add_parser("show", help="Show the impact values and the risk score of one of your cases")
+    risk_show = risk_commands.add_parser(
+        "show", help="Show the impact values and the risk score of one of your cases"
+    )
     risk_show.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     _add_auth_options(risk_show)
     risk_show.set_defaults(handler=_risk_show)
@@ -2958,9 +3599,15 @@ def _add_case_update_commands(case_commands) -> None:
         help="Save the impact values as the next version. Every value is replaced: a value you leave out is cleared",
     )
     risk_set.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    risk_set.add_argument("--c", type=_impact_value, metavar="N", help="Confidentiality, 1 to 5")
-    risk_set.add_argument("--b", type=_impact_value, metavar="N", help="Integrity, 1 to 5")
-    risk_set.add_argument("--a", type=_impact_value, metavar="N", help="Availability, 1 to 5")
+    risk_set.add_argument(
+        "--c", type=_impact_value, metavar="N", help="Confidentiality, 1 to 5"
+    )
+    risk_set.add_argument(
+        "--b", type=_impact_value, metavar="N", help="Integrity, 1 to 5"
+    )
+    risk_set.add_argument(
+        "--a", type=_impact_value, metavar="N", help="Availability, 1 to 5"
+    )
     risk_set.add_argument(
         "--expected-version",
         required=True,
@@ -2982,80 +3629,144 @@ def _add_case_update_commands(case_commands) -> None:
         help="List, add and update the legal or contractual duties of a case. They are kept apart from deadlines",
     )
     legal_commands = legal.add_subparsers(dest="legal_duty_command", required=True)
-    legal_list = legal_commands.add_parser("list", help="List the legal duties of one of your cases")
+    legal_list = legal_commands.add_parser(
+        "list", help="List the legal duties of one of your cases"
+    )
     legal_list.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     _add_auth_options(legal_list)
     legal_list.set_defaults(handler=_legal_duty_list)
-    legal_add = legal_commands.add_parser("add", help="Add a legal or contractual duty to a case")
+    legal_add = legal_commands.add_parser(
+        "add", help="Add a legal or contractual duty to a case"
+    )
     legal_add.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    legal_add.add_argument("--kind", required=True, choices=LEGAL_DUTY_KINDS, help="Statutory or contractual")
-    legal_add.add_argument("--description", required=True, help="What the duty requires (required, up to 1000 characters)")
     legal_add.add_argument(
-        "--source-reference", required=True, help="The statute or contract clause that creates the duty (up to 500)"
+        "--kind",
+        required=True,
+        choices=LEGAL_DUTY_KINDS,
+        help="Statutory or contractual",
+    )
+    legal_add.add_argument(
+        "--description",
+        required=True,
+        help="What the duty requires (required, up to 1000 characters)",
+    )
+    legal_add.add_argument(
+        "--source-reference",
+        required=True,
+        help="The statute or contract clause that creates the duty (up to 500)",
     )
     legal_add.add_argument("--jurisdiction", help="Jurisdiction (up to 200 characters)")
     legal_add.add_argument(
-        "--due-at", required=True, metavar="ISO8601", help="When the duty falls due, with a timezone"
+        "--due-at",
+        required=True,
+        metavar="ISO8601",
+        help="When the duty falls due, with a timezone",
     )
     _add_idempotency_option(legal_add)
     _add_auth_options(legal_add)
     legal_add.set_defaults(handler=_legal_duty_add)
 
-    legal_update = legal_commands.add_parser("update", help="Change one or more fields of a legal duty")
+    legal_update = legal_commands.add_parser(
+        "update", help="Change one or more fields of a legal duty"
+    )
     legal_update.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     legal_update.add_argument("duty_id", metavar="DUTY_ID", help="Legal duty ID (UUID)")
-    legal_update.add_argument("--description", help="What the duty requires (up to 1000 characters)")
-    legal_update.add_argument("--source-reference", help="The statute or contract clause (up to 500 characters)")
-    legal_update.add_argument("--jurisdiction", help="Jurisdiction. An empty string clears it")
-    legal_update.add_argument("--due-at", metavar="ISO8601", help="When the duty falls due, with a timezone")
-    legal_update.add_argument("--status", choices=LEGAL_DUTY_STATUSES, help="open or done")
+    legal_update.add_argument(
+        "--description", help="What the duty requires (up to 1000 characters)"
+    )
+    legal_update.add_argument(
+        "--source-reference",
+        help="The statute or contract clause (up to 500 characters)",
+    )
+    legal_update.add_argument(
+        "--jurisdiction", help="Jurisdiction. An empty string clears it"
+    )
+    legal_update.add_argument(
+        "--due-at", metavar="ISO8601", help="When the duty falls due, with a timezone"
+    )
+    legal_update.add_argument(
+        "--status", choices=LEGAL_DUTY_STATUSES, help="open or done"
+    )
     _add_auth_options(legal_update)
     legal_update.set_defaults(handler=_legal_duty_update)
 
     awareness = case_commands.add_parser(
-        "awareness", help="List and record the awareness events of a case. Recorded events are never changed"
+        "awareness",
+        help="List and record the awareness events of a case. Recorded events are never changed",
     )
-    awareness_commands = awareness.add_subparsers(dest="awareness_command", required=True)
-    awareness_list = awareness_commands.add_parser("list", help="List the awareness events of one of your cases")
+    awareness_commands = awareness.add_subparsers(
+        dest="awareness_command", required=True
+    )
+    awareness_list = awareness_commands.add_parser(
+        "list", help="List the awareness events of one of your cases"
+    )
     awareness_list.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     _add_auth_options(awareness_list)
     awareness_list.set_defaults(handler=_awareness_list)
-    awareness_add = awareness_commands.add_parser("add", help="Record an awareness event of a case")
+    awareness_add = awareness_commands.add_parser(
+        "add", help="Record an awareness event of a case"
+    )
     awareness_add.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     awareness_add.add_argument(
-        "--awareness-kind", required=True, choices=AWARENESS_KINDS, help="How the organization became aware"
+        "--awareness-kind",
+        required=True,
+        choices=AWARENESS_KINDS,
+        help="How the organization became aware",
     )
     awareness_add.add_argument(
-        "--event-kind", required=True, choices=EVENT_KINDS, help="Incident, near miss or blocked attempt"
+        "--event-kind",
+        required=True,
+        choices=EVENT_KINDS,
+        help="Incident, near miss or blocked attempt",
     )
     awareness_add.add_argument(
-        "--occurred-at", required=True, metavar="ISO8601", help="When the event occurred, with a timezone"
+        "--occurred-at",
+        required=True,
+        metavar="ISO8601",
+        help="When the event occurred, with a timezone",
     )
-    awareness_add.add_argument("--basis", required=True, help="Basis for the event (required, up to 1000 characters)")
+    awareness_add.add_argument(
+        "--basis",
+        required=True,
+        help="Basis for the event (required, up to 1000 characters)",
+    )
     _add_idempotency_option(awareness_add)
     _add_auth_options(awareness_add)
     awareness_add.set_defaults(handler=_awareness_add)
 
 
 def _add_case_report_commands(case_commands) -> None:
-    report = case_commands.add_parser("report", help="Show the preliminary report of a case. Needs cases:read_all")
+    report = case_commands.add_parser(
+        "report", help="Show the preliminary report of a case. Needs cases:read_all"
+    )
     report_commands = report.add_subparsers(dest="report_command", required=True)
-    report_show = report_commands.add_parser("show", help="Show the preliminary report of one case")
+    report_show = report_commands.add_parser(
+        "show", help="Show the preliminary report of one case"
+    )
     report_show.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     _add_auth_options(report_show)
     report_show.set_defaults(handler=_report_show)
 
     weekly = case_commands.add_parser(
-        "weekly", help="List and show the weekly machine-readable updates of a case, made while a significant risk is open"
+        "weekly",
+        help="List and show the weekly machine-readable updates of a case, made while a significant risk is open",
     )
     weekly_commands = weekly.add_subparsers(dest="weekly_command", required=True)
-    weekly_list = weekly_commands.add_parser("list", help="List the weekly updates of one of your cases, oldest first")
+    weekly_list = weekly_commands.add_parser(
+        "list", help="List the weekly updates of one of your cases, oldest first"
+    )
     weekly_list.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     _add_auth_options(weekly_list)
     weekly_list.set_defaults(handler=_weekly_list)
-    weekly_show = weekly_commands.add_parser("show", help="Show one weekly update of one of your cases")
+    weekly_show = weekly_commands.add_parser(
+        "show", help="Show one weekly update of one of your cases"
+    )
     weekly_show.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    weekly_show.add_argument("update_id", metavar="UPDATE_ID", help="Weekly update ID (UUID), as listed by 'case weekly list'")
+    weekly_show.add_argument(
+        "update_id",
+        metavar="UPDATE_ID",
+        help="Weekly update ID (UUID), as listed by 'case weekly list'",
+    )
     _add_auth_options(weekly_show)
     weekly_show.set_defaults(handler=_weekly_show)
 
@@ -3082,7 +3793,10 @@ CATALOG_WRITE_MESSAGES = {
     404: "catalog entry not found",
     409: "the catalog could not record this change",
 }
-CATALOG_READ_MESSAGES = {403: "your role does not hold catalog:read", 404: "catalog entry not found"}
+CATALOG_READ_MESSAGES = {
+    403: "your role does not hold catalog:read",
+    404: "catalog entry not found",
+}
 # The API answers a missing item and an item the TLP rule hides with the same 404. The CLI shows the same text.
 EVIDENCE_READ_MESSAGES = {
     403: "your role does not hold the permission to read evidence",
@@ -3136,7 +3850,9 @@ def _catalog_refusal(error: RequestFailed, *, entry_id: str | None) -> RequestFa
     return _refusal_text(error)
 
 
-def _catalog_text(value: str | None, option: str, limit: int, *, required: bool = True) -> str | None:
+def _catalog_text(
+    value: str | None, option: str, limit: int, *, required: bool = True
+) -> str | None:
     """Text of a catalog field: stripped, not empty, and within the API limit."""
     text = (value or "").strip()
     if not text:
@@ -3150,7 +3866,9 @@ def _catalog_text(value: str | None, option: str, limit: int, *, required: bool 
 
 def _expected_version_arg(value: int) -> int:
     if value < 1:
-        raise UsageError("--expected-version must be 1 or more. Read it with: catalog show ENTRY_ID")
+        raise UsageError(
+            "--expected-version must be 1 or more. Read it with: catalog show ENTRY_ID"
+        )
     return value
 
 
@@ -3226,7 +3944,14 @@ def _catalog_list(base_url: str, args: argparse.Namespace) -> None:
         query["cursor"] = args.cursor
 
     def action(base: str, token: str) -> None:
-        raw = _call(base, "GET", "/api/v1/catalog/entries", token=token, query=query, messages=CATALOG_READ_MESSAGES)
+        raw = _call(
+            base,
+            "GET",
+            "/api/v1/catalog/entries",
+            token=token,
+            query=query,
+            messages=CATALOG_READ_MESSAGES,
+        )
         if args.json:
             _print_json(raw)
             return
@@ -3235,10 +3960,20 @@ def _catalog_list(base_url: str, args: argparse.Namespace) -> None:
             print("No catalog entries yet.")
         else:
             rows = [("ID", "STATUS", "VERSION", "TITLE")]
-            rows += [(item["id"], item["status"], str(item["version"]), item["current"]["title"]) for item in page["items"]]
+            rows += [
+                (
+                    item["id"],
+                    item["status"],
+                    str(item["version"]),
+                    item["current"]["title"],
+                )
+                for item in page["items"]
+            ]
             _print_table(rows)
         if page["next_cursor"]:
-            print(f"More entries: run the command again with --cursor {page['next_cursor']}")
+            print(
+                f"More entries: run the command again with --cursor {page['next_cursor']}"
+            )
 
     _with_session(base_url, args, action)
 
@@ -3247,7 +3982,13 @@ def _catalog_show(base_url: str, args: argparse.Namespace) -> None:
     entry_id = _uuid_arg(args.entry_id, "ENTRY_ID")
 
     def action(base: str, token: str) -> None:
-        raw = _call(base, "GET", CATALOG_ENTRY_PATH.format(entry_id=entry_id), token=token, messages=CATALOG_READ_MESSAGES)
+        raw = _call(
+            base,
+            "GET",
+            CATALOG_ENTRY_PATH.format(entry_id=entry_id),
+            token=token,
+            messages=CATALOG_READ_MESSAGES,
+        )
         if args.json:
             _print_json(raw)
         else:
@@ -3256,14 +3997,27 @@ def _catalog_show(base_url: str, args: argparse.Namespace) -> None:
     _with_session(base_url, args, action)
 
 
-def _catalog_write(base_url: str, args: argparse.Namespace, *, path: str, payload: dict, heading: str, entry_id: str | None) -> None:
+def _catalog_write(
+    base_url: str,
+    args: argparse.Namespace,
+    *,
+    path: str,
+    payload: dict,
+    heading: str,
+    entry_id: str | None,
+) -> None:
     """One catalog write with an Idempotency-Key. A refused write saves nothing and says why."""
     key = args.idempotency_key or str(uuid.uuid4())
 
     def action(base: str, token: str) -> None:
         try:
             raw = _call(
-                base, "POST", path, token=token, payload=payload, messages=CATALOG_WRITE_MESSAGES,
+                base,
+                "POST",
+                path,
+                token=token,
+                payload=payload,
+                messages=CATALOG_WRITE_MESSAGES,
                 extra_headers={"Idempotency-Key": key},
             )
         except RequestFailed as error:
@@ -3281,14 +4035,23 @@ def _catalog_add(base_url: str, args: argparse.Namespace) -> None:
     payload = {
         "title": _catalog_text(args.title, "--title", CATALOG_TITLE_LIMIT),
         "body": _catalog_text(args.body, "--body", CATALOG_BODY_LIMIT),
-        "verification_run_id": _uuid_arg(args.verification_run, "--verification-run") if args.verification_run else None,
+        "verification_run_id": _uuid_arg(args.verification_run, "--verification-run")
+        if args.verification_run
+        else None,
         "restricted_reference": _catalog_text(
-            args.restricted_reference, "--restricted-reference", CATALOG_REFERENCE_LIMIT, required=False
+            args.restricted_reference,
+            "--restricted-reference",
+            CATALOG_REFERENCE_LIMIT,
+            required=False,
         ),
     }
     _catalog_write(
-        base_url, args, path="/api/v1/catalog/entries", payload=payload,
-        heading="Catalog entry created.", entry_id=None,
+        base_url,
+        args,
+        path="/api/v1/catalog/entries",
+        payload=payload,
+        heading="Catalog entry created.",
+        entry_id=None,
     )
 
 
@@ -3298,9 +4061,14 @@ def _entry_version_payload(args: argparse.Namespace) -> dict:
         "expected_version": _expected_version_arg(args.expected_version),
         "title": _catalog_text(args.title, "--title", CATALOG_TITLE_LIMIT),
         "body": _catalog_text(args.body, "--body", CATALOG_BODY_LIMIT),
-        "verification_run_id": _uuid_arg(args.verification_run, "--verification-run") if args.verification_run else None,
+        "verification_run_id": _uuid_arg(args.verification_run, "--verification-run")
+        if args.verification_run
+        else None,
         "restricted_reference": _catalog_text(
-            args.restricted_reference, "--restricted-reference", CATALOG_REFERENCE_LIMIT, required=False
+            args.restricted_reference,
+            "--restricted-reference",
+            CATALOG_REFERENCE_LIMIT,
+            required=False,
         ),
     }
 
@@ -3308,8 +4076,12 @@ def _entry_version_payload(args: argparse.Namespace) -> dict:
 def _catalog_version(base_url: str, args: argparse.Namespace) -> None:
     entry_id = _uuid_arg(args.entry_id, "ENTRY_ID")
     _catalog_write(
-        base_url, args, path=f"/api/v1/catalog/entries/{entry_id}/versions", payload=_entry_version_payload(args),
-        heading="Version saved.", entry_id=entry_id,
+        base_url,
+        args,
+        path=f"/api/v1/catalog/entries/{entry_id}/versions",
+        payload=_entry_version_payload(args),
+        heading="Version saved.",
+        entry_id=entry_id,
     )
 
 
@@ -3318,29 +4090,43 @@ def _catalog_correct(base_url: str, args: argparse.Namespace) -> None:
     payload = _entry_version_payload(args)
     payload["reason"] = _catalog_text(args.reason, "--reason", CATALOG_REASON_LIMIT)
     _catalog_write(
-        base_url, args, path=f"/api/v1/catalog/entries/{entry_id}/corrections", payload=payload,
-        heading="Correction saved.", entry_id=entry_id,
+        base_url,
+        args,
+        path=f"/api/v1/catalog/entries/{entry_id}/corrections",
+        payload=payload,
+        heading="Correction saved.",
+        entry_id=entry_id,
     )
 
 
-def _catalog_reason_change(base_url: str, args: argparse.Namespace, suffix: str, heading: str) -> None:
+def _catalog_reason_change(
+    base_url: str, args: argparse.Namespace, suffix: str, heading: str
+) -> None:
     entry_id = _uuid_arg(args.entry_id, "ENTRY_ID")
     payload = {
         "expected_version": _expected_version_arg(args.expected_version),
         "reason": _catalog_text(args.reason, "--reason", CATALOG_REASON_LIMIT),
     }
     _catalog_write(
-        base_url, args, path=f"/api/v1/catalog/entries/{entry_id}/{suffix}", payload=payload,
-        heading=heading, entry_id=entry_id,
+        base_url,
+        args,
+        path=f"/api/v1/catalog/entries/{entry_id}/{suffix}",
+        payload=payload,
+        heading=heading,
+        entry_id=entry_id,
     )
 
 
 def _catalog_dispute(base_url: str, args: argparse.Namespace) -> None:
-    _catalog_reason_change(base_url, args, "disputes", "Dispute recorded. The entry content is unchanged.")
+    _catalog_reason_change(
+        base_url, args, "disputes", "Dispute recorded. The entry content is unchanged."
+    )
 
 
 def _catalog_withdraw(base_url: str, args: argparse.Namespace) -> None:
-    _catalog_reason_change(base_url, args, "withdrawals", "Entry withdrawn. Its history is kept.")
+    _catalog_reason_change(
+        base_url, args, "withdrawals", "Entry withdrawn. Its history is kept."
+    )
 
 
 def _catalog_supersede(base_url: str, args: argparse.Namespace) -> None:
@@ -3348,11 +4134,17 @@ def _catalog_supersede(base_url: str, args: argparse.Namespace) -> None:
     payload = {
         "expected_version": _expected_version_arg(args.expected_version),
         "replacement_entry_id": _uuid_arg(args.replacement, "--replacement"),
-        "reason": _catalog_text(args.reason, "--reason", CATALOG_REASON_LIMIT, required=False),
+        "reason": _catalog_text(
+            args.reason, "--reason", CATALOG_REASON_LIMIT, required=False
+        ),
     }
     _catalog_write(
-        base_url, args, path=f"/api/v1/catalog/entries/{entry_id}/supersessions", payload=payload,
-        heading="Entry superseded. Its history is kept.", entry_id=entry_id,
+        base_url,
+        args,
+        path=f"/api/v1/catalog/entries/{entry_id}/supersessions",
+        payload=payload,
+        heading="Entry superseded. Its history is kept.",
+        entry_id=entry_id,
     )
 
 
@@ -3369,11 +4161,21 @@ def _catalog_verify(base_url: str, args: argparse.Namespace) -> None:
     run_payload = {
         "subject": _catalog_text(args.subject, "--subject", CATALOG_FIELD_LIMIT),
         "scope": _catalog_text(args.scope, "--scope", CATALOG_FIELD_LIMIT),
-        "assumptions": _catalog_text(args.assumptions, "--assumptions", CATALOG_FIELD_LIMIT),
-        "evidence_path": _catalog_text(args.evidence_path, "--evidence-path", CATALOG_FIELD_LIMIT),
-        "failure_behavior": _catalog_text(args.failure_behavior, "--failure-behavior", CATALOG_FIELD_LIMIT),
-        "error_class": _catalog_text(args.error_class, "--error-class", CATALOG_FIELD_LIMIT),
-        "uncertainty": _catalog_text(args.uncertainty, "--uncertainty", CATALOG_FIELD_LIMIT),
+        "assumptions": _catalog_text(
+            args.assumptions, "--assumptions", CATALOG_FIELD_LIMIT
+        ),
+        "evidence_path": _catalog_text(
+            args.evidence_path, "--evidence-path", CATALOG_FIELD_LIMIT
+        ),
+        "failure_behavior": _catalog_text(
+            args.failure_behavior, "--failure-behavior", CATALOG_FIELD_LIMIT
+        ),
+        "error_class": _catalog_text(
+            args.error_class, "--error-class", CATALOG_FIELD_LIMIT
+        ),
+        "uncertainty": _catalog_text(
+            args.uncertainty, "--uncertainty", CATALOG_FIELD_LIMIT
+        ),
         "method": _catalog_text(args.method, "--method", CATALOG_FIELD_LIMIT),
         "result": args.result,
     }
@@ -3383,7 +4185,13 @@ def _catalog_verify(base_url: str, args: argparse.Namespace) -> None:
 
     def action(base: str, token: str) -> None:
         entry = _json_object(
-            _call(base, "GET", CATALOG_ENTRY_PATH.format(entry_id=entry_id), token=token, messages=CATALOG_READ_MESSAGES)
+            _call(
+                base,
+                "GET",
+                CATALOG_ENTRY_PATH.format(entry_id=entry_id),
+                token=token,
+                messages=CATALOG_READ_MESSAGES,
+            )
         )
         if entry["status"] in CATALOG_CLOSED_STATUSES:
             raise RequestFailed(
@@ -3426,7 +4234,9 @@ def _catalog_verify(base_url: str, args: argparse.Namespace) -> None:
             return
         changed = _json_object(raw)
         print(f"Verification run {run['id']} recorded: {run['result']}.")
-        print(f"The entry is now at version {changed['version']}, and this check is attached to it.")
+        print(
+            f"The entry is now at version {changed['version']}, and this check is attached to it."
+        )
         if changed["current"]["verified"]:
             print("The entry is verified.")
         else:
@@ -3444,7 +4254,12 @@ def _catalog_recommendation_list(base_url: str, args: argparse.Namespace) -> Non
 
     def action(base: str, token: str) -> None:
         raw = _call(
-            base, "GET", "/api/v1/catalog/recommendations", token=token, query=query, messages=CATALOG_READ_MESSAGES
+            base,
+            "GET",
+            "/api/v1/catalog/recommendations",
+            token=token,
+            query=query,
+            messages=CATALOG_READ_MESSAGES,
         )
         if args.json:
             _print_json(raw)
@@ -3455,11 +4270,19 @@ def _catalog_recommendation_list(base_url: str, args: argparse.Namespace) -> Non
         else:
             rows = [("ID", "RESPONSIBLE", "DUE (UTC)", "FAILURE OR SYSTEM")]
             rows += [
-                (item["id"], item["responsible"], item["due_at"], item["failure_or_system"]) for item in page["items"]
+                (
+                    item["id"],
+                    item["responsible"],
+                    item["due_at"],
+                    item["failure_or_system"],
+                )
+                for item in page["items"]
             ]
             _print_table(rows)
         if page["next_cursor"]:
-            print(f"More recommendations: run the command again with --cursor {page['next_cursor']}")
+            print(
+                f"More recommendations: run the command again with --cursor {page['next_cursor']}"
+            )
 
     _with_session(base_url, args, action)
 
@@ -3467,32 +4290,52 @@ def _catalog_recommendation_list(base_url: str, args: argparse.Namespace) -> Non
 def _catalog_recommendation_add(base_url: str, args: argparse.Namespace) -> None:
     due = _parse_timestamp(args.due_at, "--due-at", not_in_future=False)
     payload = {
-        "failure_or_system": _catalog_text(args.failure_or_system, "--failure-or-system", CATALOG_FIELD_LIMIT),
+        "failure_or_system": _catalog_text(
+            args.failure_or_system, "--failure-or-system", CATALOG_FIELD_LIMIT
+        ),
         "required_defence_outcome": _catalog_text(
-            args.required_defence_outcome, "--required-defence-outcome", CATALOG_FIELD_LIMIT
+            args.required_defence_outcome,
+            "--required-defence-outcome",
+            CATALOG_FIELD_LIMIT,
         ),
-        "minimum_control": _catalog_text(args.minimum_control, "--minimum-control", CATALOG_FIELD_LIMIT),
+        "minimum_control": _catalog_text(
+            args.minimum_control, "--minimum-control", CATALOG_FIELD_LIMIT
+        ),
         "control_alternative": _catalog_text(
-            args.control_alternative, "--control-alternative", CATALOG_FIELD_LIMIT, required=False
+            args.control_alternative,
+            "--control-alternative",
+            CATALOG_FIELD_LIMIT,
+            required=False,
         ),
-        "responsible": _catalog_text(args.responsible, "--responsible", CATALOG_FIELD_LIMIT),
+        "responsible": _catalog_text(
+            args.responsible, "--responsible", CATALOG_FIELD_LIMIT
+        ),
         "due_at": due.isoformat(),
-        "evidence_to_keep": _catalog_text(args.evidence_to_keep, "--evidence-to-keep", CATALOG_FIELD_LIMIT),
+        "evidence_to_keep": _catalog_text(
+            args.evidence_to_keep, "--evidence-to-keep", CATALOG_FIELD_LIMIT
+        ),
     }
     key = args.idempotency_key or str(uuid.uuid4())
 
     def action(base: str, token: str) -> None:
         try:
             raw = _call(
-                base, "POST", "/api/v1/catalog/recommendations", token=token, payload=payload,
-                messages=CATALOG_WRITE_MESSAGES, extra_headers={"Idempotency-Key": key},
+                base,
+                "POST",
+                "/api/v1/catalog/recommendations",
+                token=token,
+                payload=payload,
+                messages=CATALOG_WRITE_MESSAGES,
+                extra_headers={"Idempotency-Key": key},
             )
         except RequestFailed as error:
             raise _catalog_refusal(error, entry_id=None) from None
         if args.json:
             _print_json(raw)
         else:
-            print("Recommendation saved. A recommendation is a suggestion until a passing verification run is recorded.")
+            print(
+                "Recommendation saved. A recommendation is a suggestion until a passing verification run is recorded."
+            )
             _print_recommendation(_json_object(raw))
 
     _with_session(base_url, args, action)
@@ -3512,10 +4355,16 @@ def _print_redaction(derivation: dict) -> None:
     _print_field("Redaction ID", derivation["redaction_id"])
     _print_field("TLP label", derived["tlp_label"] or "none")
     manifest = derivation["manifest"]
-    _print_field("Lines", f"{manifest['removed_lines']} removed of {manifest['lines_total']}")
+    _print_field(
+        "Lines", f"{manifest['removed_lines']} removed of {manifest['lines_total']}"
+    )
     print("  Removed ranges:")
     for entry in manifest["removed"]:
-        span = f"{entry['from_line']}" if entry["from_line"] == entry["to_line"] else f"{entry['from_line']}-{entry['to_line']}"
+        span = (
+            f"{entry['from_line']}"
+            if entry["from_line"] == entry["to_line"]
+            else f"{entry['from_line']}-{entry['to_line']}"
+        )
         print(f"    lines {span} ({entry['lines']}): {entry['reason']}")
     claims = derivation["claim_assessments"]
     if not claims:
@@ -3523,20 +4372,26 @@ def _print_redaction(derivation: dict) -> None:
         return
     print("  Claim assessments:")
     for claim in claims:
-        print(f"    {claim['layer']} in round {claim['round_id']}: {claim['outcome']}. {claim['reason']}")
+        print(
+            f"    {claim['layer']} in round {claim['round_id']}: {claim['outcome']}. {claim['reason']}"
+        )
 
 
 def _parse_removed(text: str) -> dict:
     match = REMOVE_PATTERN.fullmatch(text.strip())
     if match is None:
-        raise UsageError("--remove must look like FROM-TO:REASON, for example 3-5:contains an account number")
+        raise UsageError(
+            "--remove must look like FROM-TO:REASON, for example 3-5:contains an account number"
+        )
     from_line = int(match.group(1))
     to_line = int(match.group(2) or match.group(1))
     if from_line < 1 or to_line < from_line:
         raise UsageError("--remove needs line numbers from 1, with FROM not after TO")
     reason = match.group(3).strip()
     if not reason or len(reason) > REDACTION_REASON_LIMIT:
-        raise UsageError(f"the reason of a removed range must be 1 to {REDACTION_REASON_LIMIT} characters and not only spaces")
+        raise UsageError(
+            f"the reason of a removed range must be 1 to {REDACTION_REASON_LIMIT} characters and not only spaces"
+        )
     return {"from_line": from_line, "to_line": to_line, "reason": reason}
 
 
@@ -3544,7 +4399,13 @@ def _evidence_show(base_url: str, args: argparse.Namespace) -> None:
     evidence_id = _uuid_arg(args.evidence_id, "EVIDENCE_ID")
 
     def action(base: str, token: str) -> None:
-        raw = _call(base, "GET", f"/api/v1/evidence/{evidence_id}", token=token, messages=EVIDENCE_READ_MESSAGES)
+        raw = _call(
+            base,
+            "GET",
+            f"/api/v1/evidence/{evidence_id}",
+            token=token,
+            messages=EVIDENCE_READ_MESSAGES,
+        )
         if args.json:
             _print_json(raw)
         else:
@@ -3558,7 +4419,11 @@ def _evidence_derivatives(base_url: str, args: argparse.Namespace) -> None:
 
     def action(base: str, token: str) -> None:
         raw = _call(
-            base, "GET", f"/api/v1/evidence/{evidence_id}/derivatives", token=token, messages=EVIDENCE_READ_MESSAGES
+            base,
+            "GET",
+            f"/api/v1/evidence/{evidence_id}/derivatives",
+            token=token,
+            messages=EVIDENCE_READ_MESSAGES,
         )
         if args.json:
             _print_json(raw)
@@ -3568,7 +4433,15 @@ def _evidence_derivatives(base_url: str, args: argparse.Namespace) -> None:
             print("No redacted copies of this evidence are visible to your account.")
             return
         rows = [("ID", "STATUS", "TLP LABEL", "FILE")]
-        rows += [(item["id"], item["status"], item["tlp_label"] or "-", item["original_filename"]) for item in items]
+        rows += [
+            (
+                item["id"],
+                item["status"],
+                item["tlp_label"] or "-",
+                item["original_filename"],
+            )
+            for item in items
+        ]
         _print_table(rows)
 
     _with_session(base_url, args, action)
@@ -3580,7 +4453,10 @@ def _evidence_redact(base_url: str, args: argparse.Namespace) -> None:
         raise UsageError("at least one --remove FROM-TO:REASON is needed")
     if len(args.removed) > REDACTION_MAX_RANGES:
         raise UsageError(f"at most {REDACTION_MAX_RANGES} removed ranges are allowed")
-    payload = {"removed": [_parse_removed(text) for text in args.removed], "tlp_label": args.tlp}
+    payload = {
+        "removed": [_parse_removed(text) for text in args.removed],
+        "tlp_label": args.tlp,
+    }
     key = args.idempotency_key or str(uuid.uuid4())
 
     def action(base: str, token: str) -> None:
@@ -3609,7 +4485,13 @@ def _evidence_show_redaction(base_url: str, args: argparse.Namespace) -> None:
     evidence_id = _uuid_arg(args.evidence_id, "EVIDENCE_ID")
 
     def action(base: str, token: str) -> None:
-        raw = _call(base, "GET", f"/api/v1/evidence/{evidence_id}/redaction", token=token, messages=EVIDENCE_READ_MESSAGES)
+        raw = _call(
+            base,
+            "GET",
+            f"/api/v1/evidence/{evidence_id}/redaction",
+            token=token,
+            messages=EVIDENCE_READ_MESSAGES,
+        )
         if args.json:
             _print_json(raw)
         else:
@@ -3619,33 +4501,59 @@ def _evidence_show_redaction(base_url: str, args: argparse.Namespace) -> None:
 
 
 def _add_catalog_commands(subcommands) -> None:
-    catalog = subcommands.add_parser("catalog", help="List, show, change and verify the catalog of defences")
+    catalog = subcommands.add_parser(
+        "catalog", help="List, show, change and verify the catalog of defences"
+    )
     catalog_commands = catalog.add_subparsers(dest="catalog_command", required=True)
 
     catalog_export = catalog_commands.add_parser(
         "export", help="Export the public catalog as versioned JSON. Needs catalog:read"
     )
     catalog_export.add_argument(
-        "--out", metavar="FILE", default=None, help="Write the JSON to FILE instead of printing it"
+        "--out",
+        metavar="FILE",
+        default=None,
+        help="Write the JSON to FILE instead of printing it",
     )
     _add_auth_options(catalog_export, json_output=False)
     catalog_export.set_defaults(handler=_catalog_export)
 
-    listing = catalog_commands.add_parser("list", help="List the catalog entries, with their status and version")
-    listing.add_argument("--limit", type=int, default=DEFAULT_PAGE_SIZE, help="Entries per page (1 to 200)")
-    listing.add_argument("--cursor", help="Cursor printed by an earlier list, to read the next page")
+    listing = catalog_commands.add_parser(
+        "list", help="List the catalog entries, with their status and version"
+    )
+    listing.add_argument(
+        "--limit",
+        type=int,
+        default=DEFAULT_PAGE_SIZE,
+        help="Entries per page (1 to 200)",
+    )
+    listing.add_argument(
+        "--cursor", help="Cursor printed by an earlier list, to read the next page"
+    )
     _add_auth_options(listing)
     listing.set_defaults(handler=_catalog_list)
 
-    show = catalog_commands.add_parser("show", help="Show a catalog entry, its versions and its verification history")
-    show.add_argument("entry_id", metavar="ENTRY_ID", help="Catalog entry ID (UUID), as listed by 'catalog list'")
+    show = catalog_commands.add_parser(
+        "show", help="Show a catalog entry, its versions and its verification history"
+    )
+    show.add_argument(
+        "entry_id",
+        metavar="ENTRY_ID",
+        help="Catalog entry ID (UUID), as listed by 'catalog list'",
+    )
     _add_auth_options(show)
     show.set_defaults(handler=_catalog_show)
 
     def content_options(command) -> None:
-        command.add_argument("--title", required=True, help="Title, 1 to 200 characters")
+        command.add_argument(
+            "--title", required=True, help="Title, 1 to 200 characters"
+        )
         command.add_argument("--body", required=True, help="Body, 1 to 4000 characters")
-        command.add_argument("--verification-run", metavar="RUN_ID", help="Verification run to attach (UUID)")
+        command.add_argument(
+            "--verification-run",
+            metavar="RUN_ID",
+            help="Verification run to attach (UUID)",
+        )
         command.add_argument(
             "--restricted-reference",
             metavar="REFERENCE",
@@ -3658,41 +4566,89 @@ def _add_catalog_commands(subcommands) -> None:
     _add_auth_options(added)
     added.set_defaults(handler=_catalog_add)
 
-    version = catalog_commands.add_parser("version", help="Save a new version of an entry. The old version is kept")
+    version = catalog_commands.add_parser(
+        "version", help="Save a new version of an entry. The old version is kept"
+    )
     version.add_argument("entry_id", metavar="ENTRY_ID", help="Catalog entry ID (UUID)")
-    version.add_argument("--expected-version", type=int, required=True, help="The version you read with 'catalog show'")
+    version.add_argument(
+        "--expected-version",
+        type=int,
+        required=True,
+        help="The version you read with 'catalog show'",
+    )
     content_options(version)
     _add_idempotency_option(version)
     _add_auth_options(version)
     version.set_defaults(handler=_catalog_version)
 
-    correct = catalog_commands.add_parser("correct", help="Correct the content of an entry, with a reason")
+    correct = catalog_commands.add_parser(
+        "correct", help="Correct the content of an entry, with a reason"
+    )
     correct.add_argument("entry_id", metavar="ENTRY_ID", help="Catalog entry ID (UUID)")
-    correct.add_argument("--expected-version", type=int, required=True, help="The version you read with 'catalog show'")
-    correct.add_argument("--reason", required=True, help="Why the content is corrected, 1 to 1000 characters")
+    correct.add_argument(
+        "--expected-version",
+        type=int,
+        required=True,
+        help="The version you read with 'catalog show'",
+    )
+    correct.add_argument(
+        "--reason",
+        required=True,
+        help="Why the content is corrected, 1 to 1000 characters",
+    )
     content_options(correct)
     _add_idempotency_option(correct)
     _add_auth_options(correct)
     correct.set_defaults(handler=_catalog_correct)
 
     for name, handler, text in (
-        ("dispute", _catalog_dispute, "Record a dispute of an entry. The content does not change"),
-        ("withdraw", _catalog_withdraw, "Withdraw an entry. Its history is kept and it accepts no further changes"),
+        (
+            "dispute",
+            _catalog_dispute,
+            "Record a dispute of an entry. The content does not change",
+        ),
+        (
+            "withdraw",
+            _catalog_withdraw,
+            "Withdraw an entry. Its history is kept and it accepts no further changes",
+        ),
     ):
         command = catalog_commands.add_parser(name, help=text)
-        command.add_argument("entry_id", metavar="ENTRY_ID", help="Catalog entry ID (UUID)")
-        command.add_argument("--expected-version", type=int, required=True, help="The version you read with 'catalog show'")
-        command.add_argument("--reason", required=True, help="Reason, 1 to 1000 characters")
+        command.add_argument(
+            "entry_id", metavar="ENTRY_ID", help="Catalog entry ID (UUID)"
+        )
+        command.add_argument(
+            "--expected-version",
+            type=int,
+            required=True,
+            help="The version you read with 'catalog show'",
+        )
+        command.add_argument(
+            "--reason", required=True, help="Reason, 1 to 1000 characters"
+        )
         _add_idempotency_option(command)
         _add_auth_options(command)
         command.set_defaults(handler=handler)
 
     supersede = catalog_commands.add_parser(
-        "supersede", help="Replace an entry with another open entry. The old entry is kept and closed"
+        "supersede",
+        help="Replace an entry with another open entry. The old entry is kept and closed",
     )
-    supersede.add_argument("entry_id", metavar="ENTRY_ID", help="Entry to supersede (UUID)")
-    supersede.add_argument("--expected-version", type=int, required=True, help="The version you read with 'catalog show'")
-    supersede.add_argument("--replacement", metavar="ENTRY_ID", required=True, help="The open entry that replaces it (UUID)")
+    supersede.add_argument(
+        "entry_id", metavar="ENTRY_ID", help="Entry to supersede (UUID)"
+    )
+    supersede.add_argument(
+        "--expected-version",
+        type=int,
+        required=True,
+        help="The version you read with 'catalog show'",
+    )
+    supersede.add_argument(
+        "--replacement",
+        metavar="ENTRY_ID",
+        required=True,
+        help="The open entry that replaces it (UUID)",
+    )
     supersede.add_argument("--reason", help="Optional reason, up to 1000 characters")
     _add_idempotency_option(supersede)
     _add_auth_options(supersede)
@@ -3703,9 +4659,21 @@ def _add_catalog_commands(subcommands) -> None:
         help="Record a verification run of a recommendation and attach it to an entry. Only a pass verifies the entry",
     )
     verify.add_argument("entry_id", metavar="ENTRY_ID", help="Catalog entry ID (UUID)")
-    verify.add_argument("--recommendation", metavar="RECOMMENDATION_ID", required=True, help="Recommendation ID (UUID)")
-    verify.add_argument("--expected-version", type=int, required=True, help="The version you read with 'catalog show'")
-    verify.add_argument("--result", required=True, choices=CATALOG_RESULTS, help="Result of the run")
+    verify.add_argument(
+        "--recommendation",
+        metavar="RECOMMENDATION_ID",
+        required=True,
+        help="Recommendation ID (UUID)",
+    )
+    verify.add_argument(
+        "--expected-version",
+        type=int,
+        required=True,
+        help="The version you read with 'catalog show'",
+    )
+    verify.add_argument(
+        "--result", required=True, choices=CATALOG_RESULTS, help="Result of the run"
+    )
     for option, text in (
         ("subject", "What was checked"),
         ("scope", "Scope of the check"),
@@ -3716,21 +4684,34 @@ def _add_catalog_commands(subcommands) -> None:
         ("uncertainty", "Remaining uncertainty"),
         ("method", "Method used"),
     ):
-        verify.add_argument(f"--{option}", required=True, help=f"{text}, 1 to 1000 characters")
+        verify.add_argument(
+            f"--{option}", required=True, help=f"{text}, 1 to 1000 characters"
+        )
     _add_idempotency_option(verify)
     _add_auth_options(verify)
     verify.set_defaults(handler=_catalog_verify)
 
-    recommendation = catalog_commands.add_parser("recommendation", help="List and add recommendations")
-    recommendation_commands = recommendation.add_subparsers(dest="recommendation_command", required=True)
-    recommendation_list = recommendation_commands.add_parser("list", help="List the recommendations, oldest first")
-    recommendation_list.add_argument("--limit", type=int, default=DEFAULT_PAGE_SIZE, help="Items per page (1 to 200)")
-    recommendation_list.add_argument("--cursor", help="Cursor printed by an earlier list, to read the next page")
+    recommendation = catalog_commands.add_parser(
+        "recommendation", help="List and add recommendations"
+    )
+    recommendation_commands = recommendation.add_subparsers(
+        dest="recommendation_command", required=True
+    )
+    recommendation_list = recommendation_commands.add_parser(
+        "list", help="List the recommendations, oldest first"
+    )
+    recommendation_list.add_argument(
+        "--limit", type=int, default=DEFAULT_PAGE_SIZE, help="Items per page (1 to 200)"
+    )
+    recommendation_list.add_argument(
+        "--cursor", help="Cursor printed by an earlier list, to read the next page"
+    )
     _add_auth_options(recommendation_list)
     recommendation_list.set_defaults(handler=_catalog_recommendation_list)
 
     recommendation_add = recommendation_commands.add_parser(
-        "add", help="Record a recommendation: a suggested defence. It has no result until a run is recorded"
+        "add",
+        help="Record a recommendation: a suggested defence. It has no result until a run is recorded",
     )
     for option, text in (
         ("failure-or-system", "The failure or system the recommendation is about"),
@@ -3739,24 +4720,35 @@ def _add_catalog_commands(subcommands) -> None:
         ("responsible", "Who is responsible"),
         ("evidence-to-keep", "The evidence to keep"),
     ):
-        recommendation_add.add_argument(f"--{option}", required=True, help=f"{text}, 1 to 1000 characters")
-    recommendation_add.add_argument("--control-alternative", help="An alternative control, up to 1000 characters")
-    recommendation_add.add_argument("--due-at", required=True, help="Due time, ISO 8601 with a timezone")
+        recommendation_add.add_argument(
+            f"--{option}", required=True, help=f"{text}, 1 to 1000 characters"
+        )
+    recommendation_add.add_argument(
+        "--control-alternative", help="An alternative control, up to 1000 characters"
+    )
+    recommendation_add.add_argument(
+        "--due-at", required=True, help="Due time, ISO 8601 with a timezone"
+    )
     _add_idempotency_option(recommendation_add)
     _add_auth_options(recommendation_add)
     recommendation_add.set_defaults(handler=_catalog_recommendation_add)
 
 
 def _add_evidence_commands(evidence_commands) -> None:
-    shown = evidence_commands.add_parser("show", help="Show one evidence item, with its TLP label")
+    shown = evidence_commands.add_parser(
+        "show", help="Show one evidence item, with its TLP label"
+    )
     shown.add_argument("evidence_id", metavar="EVIDENCE_ID", help="Evidence ID (UUID)")
     _add_auth_options(shown)
     shown.set_defaults(handler=_evidence_show)
 
     derivatives = evidence_commands.add_parser(
-        "derivatives", help="List the redacted copies of an evidence item that your account may see"
+        "derivatives",
+        help="List the redacted copies of an evidence item that your account may see",
     )
-    derivatives.add_argument("evidence_id", metavar="EVIDENCE_ID", help="Original evidence ID (UUID)")
+    derivatives.add_argument(
+        "evidence_id", metavar="EVIDENCE_ID", help="Original evidence ID (UUID)"
+    )
     _add_auth_options(derivatives)
     derivatives.set_defaults(handler=_evidence_derivatives)
 
@@ -3764,7 +4756,11 @@ def _add_evidence_commands(evidence_commands) -> None:
         "redact",
         help="Make a redacted copy of a text evidence item. The original is unchanged; the copy gets its own ID and manifest",
     )
-    redact.add_argument("evidence_id", metavar="EVIDENCE_ID", help="Original evidence ID (UUID), text/plain only")
+    redact.add_argument(
+        "evidence_id",
+        metavar="EVIDENCE_ID",
+        help="Original evidence ID (UUID), text/plain only",
+    )
     redact.add_argument(
         "--remove",
         dest="removed",
@@ -3774,7 +4770,9 @@ def _add_evidence_commands(evidence_commands) -> None:
         help="Lines to remove, 1-based and inclusive, with the reason. Repeat for each range, up to 50",
     )
     redact.add_argument(
-        "--tlp", required=True, choices=TLP_LABELS,
+        "--tlp",
+        required=True,
+        choices=TLP_LABELS,
         help="TLP label of the copy. It must be at least as restrictive as the original's label",
     )
     _add_idempotency_option(redact)
@@ -3782,9 +4780,12 @@ def _add_evidence_commands(evidence_commands) -> None:
     redact.set_defaults(handler=_evidence_redact)
 
     show_redaction = evidence_commands.add_parser(
-        "show-redaction", help="Show the manifest and the claim assessments of a redacted copy"
+        "show-redaction",
+        help="Show the manifest and the claim assessments of a redacted copy",
     )
-    show_redaction.add_argument("evidence_id", metavar="EVIDENCE_ID", help="Redacted copy's evidence ID (UUID)")
+    show_redaction.add_argument(
+        "evidence_id", metavar="EVIDENCE_ID", help="Redacted copy's evidence ID (UUID)"
+    )
     _add_auth_options(show_redaction)
     show_redaction.set_defaults(handler=_evidence_show_redaction)
 

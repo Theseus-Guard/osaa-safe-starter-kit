@@ -29,7 +29,14 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 from safe_kit import cases, disclosure, external_notices
 from safe_kit.auth import permissions_of, require_any_permission, require_permission
@@ -40,9 +47,15 @@ from safe_kit.users import User
 
 NOTICES_ROUTE = "/api/v1/cases/{case_id}/disclosures/{version_id}/notices"
 NOTICE_ROUTE = "/api/v1/cases/{case_id}/disclosures/{version_id}/notices/{notice_id}"
-RECEIPT_ROUTE = "/api/v1/cases/{case_id}/disclosures/{version_id}/notices/{notice_id}/receipt"
-FOLLOW_UP_ROUTE = "/api/v1/cases/{case_id}/disclosures/{version_id}/notices/{notice_id}/follow-up"
-CANCEL_ROUTE = "/api/v1/cases/{case_id}/disclosures/{version_id}/notices/{notice_id}/cancel"
+RECEIPT_ROUTE = (
+    "/api/v1/cases/{case_id}/disclosures/{version_id}/notices/{notice_id}/receipt"
+)
+FOLLOW_UP_ROUTE = (
+    "/api/v1/cases/{case_id}/disclosures/{version_id}/notices/{notice_id}/follow-up"
+)
+CANCEL_ROUTE = (
+    "/api/v1/cases/{case_id}/disclosures/{version_id}/notices/{notice_id}/cancel"
+)
 DEFAULT_PAGE = 50
 MAX_PAGE = 200
 
@@ -52,11 +65,17 @@ notice_router = APIRouter(tags=["disclosure"])
 
 Reason = Annotated[
     str,
-    StringConstraints(strip_whitespace=True, min_length=1, max_length=external_notices.REASON_LIMIT),
+    StringConstraints(
+        strip_whitespace=True, min_length=1, max_length=external_notices.REASON_LIMIT
+    ),
 ]
 ChannelOther = Annotated[
     str,
-    StringConstraints(strip_whitespace=True, min_length=1, max_length=external_notices.CHANNEL_OTHER_LIMIT),
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=external_notices.CHANNEL_OTHER_LIMIT,
+    ),
 ]
 
 
@@ -81,9 +100,13 @@ class NoticeCreate(_Strict):
     @model_validator(mode="after")
     def fields_agree(self) -> "NoticeCreate":
         if (self.channel == "other") != (self.channel_other is not None):
-            raise ValueError("channel_other is required for channel other, and only then")
+            raise ValueError(
+                "channel_other is required for channel other, and only then"
+            )
         if self.manual_fallback != (self.fallback_reason is not None):
-            raise ValueError("fallback_reason is required with manual_fallback, and only then")
+            raise ValueError(
+                "fallback_reason is required with manual_fallback, and only then"
+            )
         return self
 
 
@@ -91,17 +114,23 @@ class ReceiptRequest(_Strict):
     # received: the recipient's receipt, with its time. unknown: no receipt is known, with the reason.
     outcome: Literal["received", "unknown"]
     received_at: AwareDatetime | None = None
-    reason_code: Literal["provider_accepted_no_receipt", "timeout", "no_answer"] | None = None
+    reason_code: (
+        Literal["provider_accepted_no_receipt", "timeout", "no_answer"] | None
+    ) = None
     reason: Reason | None = None
 
     @model_validator(mode="after")
     def outcome_fields_agree(self) -> "ReceiptRequest":
         if self.outcome == "received":
             if self.received_at is None or self.reason_code is not None:
-                raise ValueError("a received receipt needs received_at and no reason_code")
+                raise ValueError(
+                    "a received receipt needs received_at and no reason_code"
+                )
         else:
             if self.reason_code is None or self.received_at is not None:
-                raise ValueError("an unknown receipt needs reason_code and no received_at")
+                raise ValueError(
+                    "an unknown receipt needs reason_code and no received_at"
+                )
         return self
 
 
@@ -188,13 +217,18 @@ def _settle(result: Result) -> Any:
     if outcome is Outcome.REPLAY:
         assert result.stored is not None
         # The same request again: the first answer, with its status and body. Nothing was written.
-        return JSONResponse(status_code=result.stored.status_code, content=result.stored.body)
+        return JSONResponse(
+            status_code=result.stored.status_code, content=result.stored.body
+        )
     if outcome is Outcome.KEY_REUSED:
-        raise HTTPException(status_code=409, detail={"status": "idempotency_key_reused"})
+        raise HTTPException(
+            status_code=409, detail={"status": "idempotency_key_reused"}
+        )
     if outcome is Outcome.STATE_CONFLICT:
         # The current state is the only detail given: the caller may read the notice anyway.
         raise HTTPException(
-            status_code=409, detail={"status": "state_conflict", "current_state": result.value}
+            status_code=409,
+            detail={"status": "state_conflict", "current_state": result.value},
         )
     if outcome in _REFUSALS:
         status_code, detail = _REFUSALS[outcome]
@@ -203,7 +237,9 @@ def _settle(result: Result) -> Any:
     return _view(result.value)
 
 
-def _visible_version(case_id: uuid.UUID, version_id: uuid.UUID, scope: CaseScope) -> None:
+def _visible_version(
+    case_id: uuid.UUID, version_id: uuid.UUID, scope: CaseScope
+) -> None:
     """Read checks: the case must be visible, and the version must belong to it. Both answer 404 when they fail."""
     if not cases.is_visible(str(case_id), scope):
         raise HTTPException(status_code=404, detail="case not found")
@@ -224,7 +260,9 @@ def record_external_notice(
 ) -> Any:
     if not body.manual_fallback and "disclosures:approve" not in permissions_of(actor):
         # Only the approver records on the normal path. Anyone else needs the manual path and its reason.
-        raise HTTPException(status_code=403, detail={"status": "manual_fallback_required"})
+        raise HTTPException(
+            status_code=403, detail={"status": "manual_fallback_required"}
+        )
     path = NOTICES_ROUTE.format(case_id=case_id, version_id=version_id)
     scope_key = key_scope(
         actor.id,
@@ -289,7 +327,9 @@ def record_external_notice_receipt(
     actor: User = Depends(require_any_permission(*WRITE_PERMISSIONS)),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> Any:
-    path = RECEIPT_ROUTE.format(case_id=case_id, version_id=version_id, notice_id=notice_id)
+    path = RECEIPT_ROUTE.format(
+        case_id=case_id, version_id=version_id, notice_id=notice_id
+    )
     scope_key = key_scope(
         actor.id,
         "POST",
@@ -300,7 +340,9 @@ def record_external_notice_receipt(
     )
     if body.outcome == "received":
         assert body.received_at is not None
-        change = external_notices.Change(state="receipt_received", received_at=body.received_at, reason=body.reason)
+        change = external_notices.Change(
+            state="receipt_received", received_at=body.received_at, reason=body.reason
+        )
     else:
         change = external_notices.Change(
             state="receipt_unknown", reason_code=body.reason_code, reason=body.reason
@@ -326,7 +368,9 @@ def record_external_notice_follow_up(
     actor: User = Depends(require_any_permission(*WRITE_PERMISSIONS)),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> Any:
-    path = FOLLOW_UP_ROUTE.format(case_id=case_id, version_id=version_id, notice_id=notice_id)
+    path = FOLLOW_UP_ROUTE.format(
+        case_id=case_id, version_id=version_id, notice_id=notice_id
+    )
     scope_key = key_scope(
         actor.id,
         "POST",
@@ -357,7 +401,9 @@ def cancel_external_notice(
     actor: User = Depends(require_any_permission(*WRITE_PERMISSIONS)),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> Any:
-    path = CANCEL_ROUTE.format(case_id=case_id, version_id=version_id, notice_id=notice_id)
+    path = CANCEL_ROUTE.format(
+        case_id=case_id, version_id=version_id, notice_id=notice_id
+    )
     scope_key = key_scope(
         actor.id,
         "POST",

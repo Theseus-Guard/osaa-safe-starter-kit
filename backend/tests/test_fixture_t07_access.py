@@ -45,13 +45,30 @@ from test_case_access import (  # fixtures and helpers from the case access test
 )
 from test_evidence import evidence_world, multipart
 from test_evidence import request_as as evidence_request_as
-from test_evidence_lifecycle import PDF, provider  # the sample PDF and the local key provider
+from test_evidence_lifecycle import (
+    PDF,
+    provider,
+)  # the sample PDF and the local key provider
 from error_body import without_request_id
 
 # Roles that the default seed gives no evidence:read, and no evidence:write, and no cases:submit.
 ROLES_WITHOUT_EVIDENCE_READ = ("reporter", "admin", "auditor", "disclosure_approver")
-ROLES_WITHOUT_EVIDENCE_WRITE = ("reporter", "triager", "reviewer", "admin", "auditor", "disclosure_approver")
-ROLES_WITHOUT_CASE_SUBMIT = ("triager", "investigator", "reviewer", "admin", "auditor", "disclosure_approver")
+ROLES_WITHOUT_EVIDENCE_WRITE = (
+    "reporter",
+    "triager",
+    "reviewer",
+    "admin",
+    "auditor",
+    "disclosure_approver",
+)
+ROLES_WITHOUT_CASE_SUBMIT = (
+    "triager",
+    "investigator",
+    "reviewer",
+    "admin",
+    "auditor",
+    "disclosure_approver",
+)
 EVIDENCE_READ_URLS = (
     "/api/v1/cases/{}/evidence",
     "/api/v1/evidence/{}/download",
@@ -72,12 +89,16 @@ def refuse(*args, **kwargs):
 
 
 def test_a_reporter_sees_only_the_cases_it_created():
-    scope = CaseScope.from_permissions(REPORTER_ID, DEFAULT_ROLE_PERMISSIONS["reporter"])
+    scope = CaseScope.from_permissions(
+        REPORTER_ID, DEFAULT_ROLE_PERMISSIONS["reporter"]
+    )
     assert scope.read_all is False
     assert scope.visibility_sql() == ("(cases.created_by = %s)", (REPORTER_ID,))
 
 
-def test_a_reporter_list_and_search_run_inside_the_reporters_scope(client, caller, monkeypatch):
+def test_a_reporter_list_and_search_run_inside_the_reporters_scope(
+    client, caller, monkeypatch
+):
     seen = {}
 
     def fake_list(scope, limit, after=None, q=None, **kwargs):
@@ -91,12 +112,16 @@ def test_a_reporter_list_and_search_run_inside_the_reporters_scope(client, calle
 
     assert response.status_code == 200
     assert seen["q"] == "SAFE-2026"
-    assert seen["scope"] == CaseScope.from_permissions(REPORTER_ID, DEFAULT_ROLE_PERMISSIONS["reporter"])
+    assert seen["scope"] == CaseScope.from_permissions(
+        REPORTER_ID, DEFAULT_ROLE_PERMISSIONS["reporter"]
+    )
 
 
 @pytest.mark.parametrize("role", ROLES_WITHOUT_EVIDENCE_READ)
 @pytest.mark.parametrize("url_template", EVIDENCE_READ_URLS)
-def test_a_role_without_evidence_read_gets_403_on_list_download_and_custody(client, caller, monkeypatch, role, url_template):
+def test_a_role_without_evidence_read_gets_403_on_list_download_and_custody(
+    client, caller, monkeypatch, role, url_template
+):
     monkeypatch.setattr(evidence_api, "is_visible", refuse)
     monkeypatch.setattr(evidence, "find_stored", refuse)
     monkeypatch.setattr(evidence, "list_evidence", refuse)
@@ -112,12 +137,19 @@ def test_a_role_without_evidence_read_gets_403_on_list_download_and_custody(clie
 
 
 @pytest.mark.parametrize("role", ROLES_WITHOUT_CASE_SUBMIT)
-@pytest.mark.parametrize("url", ["/api/v1/reports", "/api/v1/cases", "/api/v1/cases/import"])
-def test_a_role_without_cases_submit_cannot_open_or_import_a_case(client, caller, monkeypatch, role, url):
+@pytest.mark.parametrize(
+    "url", ["/api/v1/reports", "/api/v1/cases", "/api/v1/cases/import"]
+)
+def test_a_role_without_cases_submit_cannot_open_or_import_a_case(
+    client, caller, monkeypatch, role, url
+):
     monkeypatch.setattr(api, "submit_report", refuse)
     monkeypatch.setattr(api, "create_case", refuse)
     as_role(caller, TRIAGER_ID, role)
-    body = {"title": "Intake attempt", "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat()}
+    body = {
+        "title": "Intake attempt",
+        "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
+    }
 
     response = client.post(url, json=body)
 
@@ -130,7 +162,11 @@ def test_a_role_without_evidence_write_cannot_upload(client, caller, monkeypatch
     as_role(caller, REPORTER_ID, role)
     body, content_type = multipart("scan.pdf", "application/pdf", PDF[:100])
 
-    response = client.post(f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={**idem(), "Content-Type": content_type})
+    response = client.post(
+        f"/api/v1/cases/{uuid.uuid4()}/evidence",
+        content=body,
+        headers={**idem(), "Content-Type": content_type},
+    )
 
     assert response.status_code == 403
 
@@ -139,7 +175,9 @@ def test_a_role_without_evidence_write_cannot_upload(client, caller, monkeypatch
 
 
 @requires_database
-def test_an_unassigned_investigator_gets_the_same_404_as_a_missing_case(db_client, people):
+def test_an_unassigned_investigator_gets_the_same_404_as_a_missing_case(
+    db_client, people
+):
     case_id = create_case_via_api(db_client, people["reporter"])
     investigator = db_client(people["investigator"])
     missing = str(uuid.uuid4())
@@ -153,23 +191,36 @@ def test_an_unassigned_investigator_gets_the_same_404_as_a_missing_case(db_clien
 @requires_database
 def test_a_reporter_search_does_not_reveal_another_reporters_case(db_client, people):
     own = create_case_via_api(db_client, people["reporter"])
-    reference = db_client(people["reporter"]).get(f"/api/v1/cases/{own}").json()["reference"]
+    reference = (
+        db_client(people["reporter"]).get(f"/api/v1/cases/{own}").json()["reference"]
+    )
 
     assert own in listed_ids(db_client, people["reporter"], reference)
     assert own not in listed_ids(db_client, people["other_reporter"], reference)
     assert own not in listed_ids(db_client, people["other_reporter"], own[:8])
-    assert db_client(people["other_reporter"]).get(f"/api/v1/cases/{own}").status_code == 404
+    assert (
+        db_client(people["other_reporter"]).get(f"/api/v1/cases/{own}").status_code
+        == 404
+    )
 
 
 @requires_database
-def test_an_unassigned_investigator_gets_the_same_404_for_evidence_as_for_a_missing_item(evidence_world):
+def test_an_unassigned_investigator_gets_the_same_404_for_evidence_as_for_a_missing_item(
+    evidence_world,
+):
     other = evidence_world["people"]["other_investigator"]
     case_id, evidence_id = evidence_world["case_id"], evidence_world["evidence_id"]
     missing_case, missing_item = str(uuid.uuid4()), str(uuid.uuid4())
     for hidden_url, absent_url in [
         (f"/api/v1/cases/{case_id}/evidence", f"/api/v1/cases/{missing_case}/evidence"),
-        (f"/api/v1/evidence/{evidence_id}/download", f"/api/v1/evidence/{missing_item}/download"),
-        (f"/api/v1/evidence/{evidence_id}/custody", f"/api/v1/evidence/{missing_item}/custody"),
+        (
+            f"/api/v1/evidence/{evidence_id}/download",
+            f"/api/v1/evidence/{missing_item}/download",
+        ),
+        (
+            f"/api/v1/evidence/{evidence_id}/custody",
+            f"/api/v1/evidence/{missing_item}/custody",
+        ),
     ]:
         hidden = evidence_request_as(other, "get", hidden_url)
         absent = evidence_request_as(other, "get", absent_url)

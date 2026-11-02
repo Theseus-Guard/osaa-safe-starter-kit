@@ -23,5 +23,9 @@ def connect() -> psycopg.Connection:
     port = int(_required("SAFE_DB_PORT"))
     dbname = _required("SAFE_DB_NAME")
     user = _required("SAFE_DB_USER")
-    password = Path(os.environ["SAFE_DB_PASSWORD_FILE"]).read_text(encoding="utf-8").strip()
-    return psycopg.connect(host=host, port=port, dbname=dbname, user=user, password=password)
+    password = (
+        Path(os.environ["SAFE_DB_PASSWORD_FILE"]).read_text(encoding="utf-8").strip()
+    )
+    return psycopg.connect(
+        host=host, port=port, dbname=dbname, user=user, password=password
+    )

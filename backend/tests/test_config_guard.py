@@ -45,7 +45,12 @@ def _apply(base: dict, changes: dict) -> dict:
 
 
 def demo_env(**changes) -> dict:
-    base = {"SAFE_MODE": "demo", "SAFE_BIND_HOST": "127.0.0.1", "SAFE_DATASET": "synthetic-demo", **DB_SETTINGS}
+    base = {
+        "SAFE_MODE": "demo",
+        "SAFE_BIND_HOST": "127.0.0.1",
+        "SAFE_DATASET": "synthetic-demo",
+        **DB_SETTINGS,
+    }
     return _apply(base, changes)
 
 
@@ -80,7 +85,9 @@ def test_production_accepts_an_empty_dataset_marker():
 
 
 def test_production_does_not_restrict_the_bind_host():
-    assert load_settings(production_env(SAFE_BIND_HOST="0.0.0.0")).bind_host == "0.0.0.0"
+    assert (
+        load_settings(production_env(SAFE_BIND_HOST="0.0.0.0")).bind_host == "0.0.0.0"
+    )
 
 
 def test_production_refuses_the_synthetic_demo_marker():
@@ -99,13 +106,18 @@ def test_demo_accepts_loopback_published_hosts(host):
     assert load_settings(demo_env(SAFE_BIND_HOST=host)).bind_host == host
 
 
-@pytest.mark.parametrize("host", ["0.0.0.0", "::", "10.0.0.5", "localhost", "LOCALHOST", "db", "example.com"])
+@pytest.mark.parametrize(
+    "host", ["0.0.0.0", "::", "10.0.0.5", "localhost", "LOCALHOST", "db", "example.com"]
+)
 def test_demo_refuses_a_published_host_that_is_not_loopback(host):
     with pytest.raises(ConfigError, match="published host address"):
         load_settings(demo_env(SAFE_BIND_HOST=host))
 
 
-@pytest.mark.parametrize("name", ["SAFE_ACCESS_TTL_MINUTES", "SAFE_REFRESH_TTL_MINUTES", "SAFE_SESSION_MAX_HOURS"])
+@pytest.mark.parametrize(
+    "name",
+    ["SAFE_ACCESS_TTL_MINUTES", "SAFE_REFRESH_TTL_MINUTES", "SAFE_SESSION_MAX_HOURS"],
+)
 def test_each_token_setting_is_required(name):
     with pytest.raises(ConfigError, match=name):
         load_settings(production_env(**{name: None}))
@@ -128,9 +140,18 @@ def test_session_hours_must_be_whole_numbers_in_range(value):
 
 
 def test_token_settings_are_read_into_the_settings():
-    settings = load_settings(production_env(SAFE_ACCESS_TTL_MINUTES="30", SAFE_REFRESH_TTL_MINUTES="90",
-                                            SAFE_SESSION_MAX_HOURS="8"))
-    assert (settings.access_ttl_minutes, settings.refresh_ttl_minutes, settings.session_max_hours) == (30, 90, 8)
+    settings = load_settings(
+        production_env(
+            SAFE_ACCESS_TTL_MINUTES="30",
+            SAFE_REFRESH_TTL_MINUTES="90",
+            SAFE_SESSION_MAX_HOURS="8",
+        )
+    )
+    assert (
+        settings.access_ttl_minutes,
+        settings.refresh_ttl_minutes,
+        settings.session_max_hours,
+    ) == (30, 90, 8)
 
 
 @pytest.mark.parametrize("value", ["0", "31", "-1", "1.5", "five", "525600"])
@@ -143,7 +164,9 @@ def test_retention_years_must_be_a_whole_number_from_1_to_30(value):
 
 @pytest.mark.parametrize("value", ["1", "5", "30"])
 def test_retention_years_accepts_the_bounds_and_values_in_between(value):
-    assert load_settings(production_env(SAFE_RETENTION_YEARS=value)).retention_years == int(value)
+    assert load_settings(
+        production_env(SAFE_RETENTION_YEARS=value)
+    ).retention_years == int(value)
 
 
 @pytest.mark.parametrize("value", [None, "", "   "])
@@ -161,10 +184,12 @@ def test_retention_years_is_read_into_the_settings():
 @pytest.mark.parametrize("service", ["api", "worker"])
 def test_compose_sets_the_retention_period_for_api_and_worker(service):
     # The guard runs in both processes; the value is provisional until legal review (decision D-09).
-    compose = (Path(__file__).resolve().parents[2] / "compose.yaml").read_text(encoding="utf-8")
+    compose = (Path(__file__).resolve().parents[2] / "compose.yaml").read_text(
+        encoding="utf-8"
+    )
     lines = compose.split(f"\n  {service}:\n", 1)[1].split("\n")
     environment = []
-    for line in lines[lines.index("    environment:") + 1:]:
+    for line in lines[lines.index("    environment:") + 1 :]:
         if line and not line.startswith("      "):
             break
         environment.append(line)
@@ -175,10 +200,12 @@ def test_compose_sets_the_retention_period_for_api_and_worker(service):
 def test_compose_sets_the_token_settings_for_api_and_worker(service):
     # The guard runs in both processes, so both services carry the settings; the values are the ones that were the
     # defaults before, so the demo behaves as it did.
-    compose = (Path(__file__).resolve().parents[2] / "compose.yaml").read_text(encoding="utf-8")
+    compose = (Path(__file__).resolve().parents[2] / "compose.yaml").read_text(
+        encoding="utf-8"
+    )
     lines = compose.split(f"\n  {service}:\n", 1)[1].split("\n")
     environment = []
-    for line in lines[lines.index("    environment:") + 1:]:
+    for line in lines[lines.index("    environment:") + 1 :]:
         if line and not line.startswith("      "):
             break
         environment.append(line)
@@ -191,14 +218,18 @@ def test_compose_sets_the_token_settings_for_api_and_worker(service):
 def test_compose_does_not_publish_the_api():
     # The gateway is the only entry point. The API is attached to backend, which is internal, so a published port
     # would not be reachable anyway; test_demo_egress.py checks the published ports of the whole file.
-    compose = (Path(__file__).resolve().parents[2] / "compose.yaml").read_text(encoding="utf-8")
+    compose = (Path(__file__).resolve().parents[2] / "compose.yaml").read_text(
+        encoding="utf-8"
+    )
     api_block = compose.split("\n  api:\n", 1)[1].split("\n  worker:\n", 1)[0]
 
     assert "    ports:" not in api_block
 
 
 def test_compose_demo_api_binds_the_published_address_to_loopback():
-    compose = (Path(__file__).resolve().parents[2] / "compose.yaml").read_text(encoding="utf-8")
+    compose = (Path(__file__).resolve().parents[2] / "compose.yaml").read_text(
+        encoding="utf-8"
+    )
     api_block = compose.split("\n  api:\n", 1)[1].split("\n  worker:\n", 1)[0]
 
     assert "SAFE_BIND_HOST: 127.0.0.1" in api_block
@@ -207,7 +238,9 @@ def test_compose_demo_api_binds_the_published_address_to_loopback():
 
 def test_compose_api_trusts_only_the_gateway_address_on_a_fixed_backend_subnet():
     # The API sees the gateway as its peer on backend (the gateway's edge address is only used by the host side).
-    compose = (Path(__file__).resolve().parents[2] / "compose.yaml").read_text(encoding="utf-8")
+    compose = (Path(__file__).resolve().parents[2] / "compose.yaml").read_text(
+        encoding="utf-8"
+    )
     api_block = compose.split("\n  api:\n", 1)[1].split("\n  worker:\n", 1)[0]
     gateway_block = compose.split("\n  gateway:\n", 1)[1].split("\n  cli:\n", 1)[0]
 
@@ -222,7 +255,9 @@ def test_compose_api_trusts_only_the_gateway_address_on_a_fixed_backend_subnet()
 
 
 def test_nginx_overwrites_x_forwarded_for_with_the_direct_peer():
-    nginx = (Path(__file__).resolve().parents[2] / "gateway" / "nginx.conf").read_text(encoding="utf-8")
+    nginx = (Path(__file__).resolve().parents[2] / "gateway" / "nginx.conf").read_text(
+        encoding="utf-8"
+    )
 
     assert nginx.count("proxy_set_header X-Forwarded-For $remote_addr;") == 2
     assert "$proxy_add_x_forwarded_for" not in nginx
@@ -231,11 +266,18 @@ def test_nginx_overwrites_x_forwarded_for_with_the_direct_peer():
 
 def test_trusted_proxies_are_optional_and_allowed_in_production():
     assert load_settings(demo_env()).trusted_proxies == ()
-    settings = load_settings(production_env(SAFE_TRUSTED_PROXIES="172.28.0.10, 10.0.0.0/8"))
-    assert [str(network) for network in settings.trusted_proxies] == ["172.28.0.10/32", "10.0.0.0/8"]
+    settings = load_settings(
+        production_env(SAFE_TRUSTED_PROXIES="172.28.0.10, 10.0.0.0/8")
+    )
+    assert [str(network) for network in settings.trusted_proxies] == [
+        "172.28.0.10/32",
+        "10.0.0.0/8",
+    ]
 
 
-@pytest.mark.parametrize("value", ["172.28.0.10/24", "172.28.0.10,,10.0.0.1", "not-an-address", "0.0.0.0/0"])
+@pytest.mark.parametrize(
+    "value", ["172.28.0.10/24", "172.28.0.10,,10.0.0.1", "not-an-address", "0.0.0.0/0"]
+)
 def test_malformed_trusted_proxies_stop_the_process_without_echoing_the_value(value):
     with pytest.raises(ConfigError, match="SAFE_TRUSTED_PROXIES") as refused:
         load_settings(demo_env(SAFE_TRUSTED_PROXIES=value + SECRET))
@@ -277,7 +319,9 @@ def test_each_database_setting_is_required(name):
         load_settings(demo_env(**{name: None}))
 
 
-@pytest.mark.parametrize("name", ["SAFE_DB_HOST", "SAFE_DB_NAME", "SAFE_DB_USER", "SAFE_DB_PASSWORD_FILE"])
+@pytest.mark.parametrize(
+    "name", ["SAFE_DB_HOST", "SAFE_DB_NAME", "SAFE_DB_USER", "SAFE_DB_PASSWORD_FILE"]
+)
 def test_empty_database_setting_is_refused(name):
     with pytest.raises(ConfigError, match=name):
         load_settings(production_env(**{name: "   "}))
@@ -308,10 +352,14 @@ def test_error_messages_never_echo_a_value(env):
 
 def test_guard_does_not_read_the_password_file():
     # The path may point at nothing: the guard checks that the setting is present, never the file it names.
-    assert load_settings(demo_env(SAFE_DB_PASSWORD_FILE="/nonexistent/path/to/password")).db_password_file
+    assert load_settings(
+        demo_env(SAFE_DB_PASSWORD_FILE="/nonexistent/path/to/password")
+    ).db_password_file
 
 
-def test_connect_refuses_a_missing_setting_instead_of_connecting_to_a_default(monkeypatch, tmp_path):
+def test_connect_refuses_a_missing_setting_instead_of_connecting_to_a_default(
+    monkeypatch, tmp_path
+):
     password_file = tmp_path / "password.txt"
     password_file.write_text(SECRET, encoding="utf-8")
     for name, value in DB_SETTINGS.items():
@@ -384,7 +432,11 @@ def test_worker_process_refuses_to_start_without_a_valid_environment():
 
 def test_worker_process_refuses_a_missing_retention_period():
     # Every other required setting is present, so the only refusal is the retention period. Nothing connects.
-    env = {"PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(SOURCE_DIR), **demo_env(SAFE_RETENTION_YEARS=None)}
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "PYTHONPATH": str(SOURCE_DIR),
+        **demo_env(SAFE_RETENTION_YEARS=None),
+    }
     result = subprocess.run(
         [sys.executable, "-m", "safe_kit.worker"],
         env=env,

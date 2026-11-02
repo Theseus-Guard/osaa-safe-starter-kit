@@ -93,7 +93,9 @@ def _contact_window_open(conn, case_id: str) -> bool:
     return row is not None and bool(row[0])
 
 
-def read_reporter_contact(case_id: str, scope: CaseScope) -> tuple[ContactOutcome, str | None]:
+def read_reporter_contact(
+    case_id: str, scope: CaseScope
+) -> tuple[ContactOutcome, str | None]:
     """The contact the reporter gave for an active case, and an audit row for the read.
 
     The visibility check, the window check, and the audit row share one transaction, so a read is never logged without
@@ -111,10 +113,15 @@ def read_reporter_contact(case_id: str, scope: CaseScope) -> tuple[ContactOutcom
             return ContactOutcome.NO_REPORTER, None
         if not _contact_window_open(conn, case_id):
             return ContactOutcome.WINDOW_CLOSED, None
-        audit.record(conn, REPORTER_CONTACT_READ, "case", case_id, actor_id=scope.user_id)
+        audit.record(
+            conn, REPORTER_CONTACT_READ, "case", case_id, actor_id=scope.user_id
+        )
     return ContactOutcome.OK, row[0]
 
 
 def hide_reporter(entries: Sequence[HistoryEntry]) -> list[HistoryEntry]:
     """Blank the actor of each case-creation entry. The action, time, and details stay."""
-    return [replace(entry, actor_id=None) if entry.action == audit.CASE_CREATE else entry for entry in entries]
+    return [
+        replace(entry, actor_id=None) if entry.action == audit.CASE_CREATE else entry
+        for entry in entries
+    ]

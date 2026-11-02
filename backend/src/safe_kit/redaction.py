@@ -34,7 +34,14 @@ from safe_kit.db import connect
 from safe_kit.evidence_crypto import seal, sha256_hex
 from safe_kit.evidence_keys import KeyProvider
 from safe_kit.evidence_storage import EvidenceStorage
-from safe_kit.idempotency import KeyLookup, KeyScope, StoredResponse, lock_scope, lookup, store
+from safe_kit.idempotency import (
+    KeyLookup,
+    KeyScope,
+    StoredResponse,
+    lock_scope,
+    lookup,
+    store,
+)
 
 REPLACEMENT = "[REDACTED]"
 MAX_REMOVED_RANGES = 50
@@ -84,7 +91,9 @@ class Derivation:
 class Outcome(Enum):
     CREATED = "created"
     REPLAY = "replay"  # the same key and fingerprint: the stored response is returned
-    KEY_REUSED = "key_reused"  # the same key with another request: refused, nothing is returned
+    KEY_REUSED = (
+        "key_reused"  # the same key with another request: refused, nothing is returned
+    )
 
 
 @dataclass(frozen=True)
@@ -94,7 +103,9 @@ class Result:
     stored: StoredResponse | None = None
 
 
-def redact_text(text: str, removed: Sequence[RemovedRange]) -> tuple[str, list[dict[str, Any]], int]:
+def redact_text(
+    text: str, removed: Sequence[RemovedRange]
+) -> tuple[str, list[dict[str, Any]], int]:
     """Replace each removed line with REPLACEMENT. Returns the redacted text, the manifest entries, and the line count.
 
     Line numbers are 1-based and count the lines of the text as the reader sees them. A final newline ends the last line
@@ -107,7 +118,11 @@ def redact_text(text: str, removed: Sequence[RemovedRange]) -> tuple[str, list[d
     entries: list[dict[str, Any]] = []
     previous_end = 0
     for item in sorted(removed, key=lambda r: r.from_line):
-        if item.to_line < item.from_line or item.to_line > len(lines) or item.from_line <= previous_end:
+        if (
+            item.to_line < item.from_line
+            or item.to_line > len(lines)
+            or item.from_line <= previous_end
+        ):
             raise RedactionRefused("invalid_removal")
         previous_end = item.to_line
         for number in range(item.from_line, item.to_line + 1):
@@ -157,8 +172,16 @@ def _insert_pending_derived(
             RETURNING id::text
             """,
             (
-                original.case_id, actor_id, name, REDACTABLE_MEDIA_TYPE, size_bytes, storage_key,
-                key_id, wrapped_data_key, nonce, label,
+                original.case_id,
+                actor_id,
+                name,
+                REDACTABLE_MEDIA_TYPE,
+                size_bytes,
+                storage_key,
+                key_id,
+                wrapped_data_key,
+                nonce,
+                label,
             ),
         ).fetchone()
     return row[0]
@@ -205,7 +228,9 @@ def _finalize(
     if row is None:
         return None
     derived = evidence._to_item(row)
-    evidence._custody(conn, derived_id, actor_id, evidence.UPLOADED, {"redacted_from": original.id})
+    evidence._custody(
+        conn, derived_id, actor_id, evidence.UPLOADED, {"redacted_from": original.id}
+    )
     redaction_id = conn.execute(
         """
         INSERT INTO evidence_redactions (original_evidence_id, derived_evidence_id, case_id, actor_id, manifest)
@@ -215,10 +240,16 @@ def _finalize(
         (original.id, derived_id, original.case_id, actor_id, Jsonb(removed_manifest)),
     ).fetchone()[0]
     evidence._custody(
-        conn, original.id, actor_id, evidence.REDACTED, {"derived_evidence_id": derived_id, "redaction_id": redaction_id}
+        conn,
+        original.id,
+        actor_id,
+        evidence.REDACTED,
+        {"derived_evidence_id": derived_id, "redaction_id": redaction_id},
     )
     claims: list[ClaimAssessment] = []
-    for layer_id, round_id, layer in _claims_citing(conn, original.case_id, original.id):
+    for layer_id, round_id, layer in _claims_citing(
+        conn, original.case_id, original.id
+    ):
         conn.execute(
             """
             INSERT INTO evidence_claim_assessments
@@ -227,7 +258,11 @@ def _finalize(
             """,
             (redaction_id, derived_id, layer_id, CLAIM_REASON),
         )
-        claims.append(ClaimAssessment(layer_id, round_id, layer, "insufficient_evidence", CLAIM_REASON))
+        claims.append(
+            ClaimAssessment(
+                layer_id, round_id, layer, "insufficient_evidence", CLAIM_REASON
+            )
+        )
     audit.record(
         conn,
         audit.EVIDENCE_REDACTED,
@@ -249,7 +284,9 @@ def _finalize(
         claims=claims,
     )
     if idempotency is not None and render is not None:
-        store(conn, idempotency, StoredResponse(status_code=201, body=render(derivation)))
+        store(
+            conn, idempotency, StoredResponse(status_code=201, body=render(derivation))
+        )
     return derivation
 
 
@@ -302,8 +339,16 @@ def create_derivative(
     storage_key = str(uuid.uuid4())
     sealed = seal(redacted, storage_key, provider)
     derived_id = _insert_pending_derived(
-        original, actor_id, name, len(redacted), storage_key, sealed.key_id,
-        sealed.wrapped_data_key, sealed.nonce, label, scope,
+        original,
+        actor_id,
+        name,
+        len(redacted),
+        storage_key,
+        sealed.key_id,
+        sealed.wrapped_data_key,
+        sealed.nonce,
+        label,
+        scope,
     )
     plaintext_digest = sha256_hex(redacted)
     ciphertext_digest = sha256_hex(sealed.ciphertext)
@@ -352,8 +397,14 @@ def create_derivative(
             failure_reason = "case_not_visible"
         else:
             derivation = _finalize(
-                conn, original, derived_id, actor_id, manifest, (plaintext_digest, ciphertext_digest),
-                render, idempotency,
+                conn,
+                original,
+                derived_id,
+                actor_id,
+                manifest,
+                (plaintext_digest, ciphertext_digest),
+                render,
+                idempotency,
             )
             if derivation is None:
                 raise RedactionRefused("expired")
@@ -365,7 +416,9 @@ def create_derivative(
     raise RedactionRefused("not_found")
 
 
-def list_derivatives(original_id: str, recipient: tlp.Recipient) -> list[evidence.EvidenceItem]:
+def list_derivatives(
+    original_id: str, recipient: tlp.Recipient
+) -> list[evidence.EvidenceItem]:
     """The derived items of an original that the caller may see under the TLP rule, oldest first.
 
     Derived items the rule hides are left out, as list_evidence leaves them out of a case page. The caller checks the

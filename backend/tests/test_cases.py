@@ -53,7 +53,10 @@ def test_calendar_takes_the_timezone_and_keeps_the_provisional_version():
 
 def test_deadline_tasks_come_from_deadlines_for():
     t0 = datetime(2026, 11, 6, 9, 0, tzinfo=ZoneInfo("Europe/Istanbul"))  # Friday
-    tasks = {task.kind: task for task in deadline_tasks_for(t0, calendar_for("Europe/Istanbul"))}
+    tasks = {
+        task.kind: task
+        for task in deadline_tasks_for(t0, calendar_for("Europe/Istanbul"))
+    }
     assert set(tasks) == {
         "affected_customers",
         "preliminary_safe_report",
@@ -63,29 +66,44 @@ def test_deadline_tasks_come_from_deadlines_for():
     }
     assert tasks["affected_customers"].due_at == t0 + timedelta(hours=72)
     # Four business days from Friday 09:00 local is Thursday 09:00 local.
-    assert tasks["preliminary_safe_report"].due_at == datetime(2026, 11, 12, 6, 0, tzinfo=UTC)
+    assert tasks["preliminary_safe_report"].due_at == datetime(
+        2026, 11, 12, 6, 0, tzinfo=UTC
+    )
     # The conditional 14-day advisory starts not applicable, with a reason. The other tasks start open.
     assert tasks["broader_advisory"].status == "not_applicable"
-    assert tasks["broader_advisory"].not_applicable_reason == BROADER_ADVISORY_CONDITION_REASON
+    assert (
+        tasks["broader_advisory"].not_applicable_reason
+        == BROADER_ADVISORY_CONDITION_REASON
+    )
     assert {kind for kind, task in tasks.items() if task.status == "open"} == {
         "affected_customers",
         "preliminary_safe_report",
         "preliminary_public_report",
         "remediation_status",
     }
-    assert all(task.not_applicable_reason is None for kind, task in tasks.items() if kind != "broader_advisory")
+    assert all(
+        task.not_applicable_reason is None
+        for kind, task in tasks.items()
+        if kind != "broader_advisory"
+    )
 
 
 def test_weekly_update_is_not_created_with_the_case():
     t0 = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
-    assert "weekly_update" not in {task.kind for task in deadline_tasks_for(t0, calendar_for("Europe/Istanbul"))}
+    assert "weekly_update" not in {
+        task.kind for task in deadline_tasks_for(t0, calendar_for("Europe/Istanbul"))
+    }
 
 
 @pytest.fixture
 def caller(monkeypatch):
     state = {"user": make_user(REPORTER_ID, "reporter")}
     api.app.dependency_overrides[auth.current_user] = lambda: state["user"]
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()))
+    monkeypatch.setattr(
+        auth,
+        "permissions_for_role",
+        lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()),
+    )
     yield state
     api.app.dependency_overrides.clear()
 
@@ -113,7 +131,9 @@ def store(monkeypatch):
             calendar_timezone="Europe/Istanbul",
             created_at=datetime(2026, 11, 1, tzinfo=UTC),
             created_by=created_by,
-            deadlines=deadline_tasks_for(awareness_time, calendar_for("Europe/Istanbul")),
+            deadlines=deadline_tasks_for(
+                awareness_time, calendar_for("Europe/Istanbul")
+            ),
             updated_at=datetime(2026, 11, 1, tzinfo=UTC),
         )
         state["created"].append((title, awareness_time, created_by))
@@ -131,20 +151,34 @@ def store(monkeypatch):
         # The same rules as the SQL: q is a case-insensitive part of the reference, or the start of the ID.
         if status is not None and case.status != status:
             return False
-        if q and q.lower() not in case.reference.lower() and not case.id.startswith(q.lower()):
+        if (
+            q
+            and q.lower() not in case.reference.lower()
+            and not case.id.startswith(q.lower())
+        ):
             return False
         return True
 
-    def fake_list(scope, limit, after=None, q=None, status=None, include_evidence=False):
-        state["list_calls"].append({"q": q, "status": status, "include_evidence": include_evidence})
+    def fake_list(
+        scope, limit, after=None, q=None, status=None, include_evidence=False
+    ):
+        state["list_calls"].append(
+            {"q": q, "status": status, "include_evidence": include_evidence}
+        )
         # Newest first, then id ascending, as the SQL orders them. after is the position of the previous page's last row.
         mine = sorted(
-            (case for case in state["cases"].values() if visible(case, scope) and matches(case, q, status)),
+            (
+                case
+                for case in state["cases"].values()
+                if visible(case, scope) and matches(case, q, status)
+            ),
             key=lambda case: case.id,
         )
         mine.sort(key=lambda case: case.created_at, reverse=True)
         if after is not None:
-            position = next(index for index, case in enumerate(mine) if case.id == after[1])
+            position = next(
+                index for index, case in enumerate(mine) if case.id == after[1]
+            )
             mine = mine[position + 1 :]
         return mine[:limit]
 
@@ -155,7 +189,10 @@ def store(monkeypatch):
 
 
 def valid_body(**overrides):
-    body = {"title": "Suspected token leak", "awareness_time": "2026-10-30T09:00:00+03:00"}
+    body = {
+        "title": "Suspected token leak",
+        "awareness_time": "2026-10-30T09:00:00+03:00",
+    }
     body.update(overrides)
     return body
 
@@ -167,32 +204,69 @@ def test_reporter_submits_a_case_and_gets_its_deadlines(client, store):
     assert body["reference"] == "SAFE-2026-000001"
     assert body["calendar_version"] == "provisional-1"
     assert body["status"] == "open"
-    assert {task["kind"] for task in body["deadlines"]} >= {"affected_customers", "remediation_status"}
-    assert store["created"][0][2] == REPORTER_ID  # created_by is the caller, never a body field
+    assert {task["kind"] for task in body["deadlines"]} >= {
+        "affected_customers",
+        "remediation_status",
+    }
+    assert (
+        store["created"][0][2] == REPORTER_ID
+    )  # created_by is the caller, never a body field
 
 
 def test_title_is_stripped_and_blank_titles_are_rejected(client, store):
-    assert client.post("/api/v1/cases", json=valid_body(title="  Leak  "), headers=idem()).json()["title"] == "Leak"
-    assert client.post("/api/v1/cases", json=valid_body(title="   "), headers=idem()).status_code == 400
-    assert client.post("/api/v1/cases", json=valid_body(title=""), headers=idem()).status_code == 400
-    assert client.post("/api/v1/cases", json=valid_body(title="x" * 201), headers=idem()).status_code == 400
+    assert (
+        client.post(
+            "/api/v1/cases", json=valid_body(title="  Leak  "), headers=idem()
+        ).json()["title"]
+        == "Leak"
+    )
+    assert (
+        client.post(
+            "/api/v1/cases", json=valid_body(title="   "), headers=idem()
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/v1/cases", json=valid_body(title=""), headers=idem()
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/v1/cases", json=valid_body(title="x" * 201), headers=idem()
+        ).status_code
+        == 400
+    )
 
 
 def test_naive_awareness_time_is_rejected(client, store):
-    response = client.post("/api/v1/cases", json=valid_body(awareness_time="2026-10-30T09:00:00"), headers=idem())
+    response = client.post(
+        "/api/v1/cases",
+        json=valid_body(awareness_time="2026-10-30T09:00:00"),
+        headers=idem(),
+    )
     assert response.status_code == 400
     assert store["created"] == []
 
 
 def test_future_awareness_time_is_rejected(client, store):
     future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
-    assert client.post("/api/v1/cases", json=valid_body(awareness_time=future), headers=idem()).status_code == 400
+    assert (
+        client.post(
+            "/api/v1/cases", json=valid_body(awareness_time=future), headers=idem()
+        ).status_code
+        == 400
+    )
     assert store["created"] == []
 
 
 def test_admin_has_no_case_permissions(client, caller, store):
     caller["user"] = make_user(ADMIN_ID, "admin")
-    assert client.post("/api/v1/cases", json=valid_body(), headers=idem()).status_code == 403
+    assert (
+        client.post("/api/v1/cases", json=valid_body(), headers=idem()).status_code
+        == 403
+    )
     assert client.get("/api/v1/cases").status_code == 403
     assert client.get(f"/api/v1/cases/{CASE_ID}").status_code == 403
 
@@ -240,7 +314,9 @@ def set_fields(store, case_id, **fields):
 
 
 def test_list_filters_by_status(client, store):
-    first = client.post("/api/v1/cases", json=valid_body(title="First"), headers=idem()).json()["id"]
+    first = client.post(
+        "/api/v1/cases", json=valid_body(title="First"), headers=idem()
+    ).json()["id"]
     client.post("/api/v1/cases", json=valid_body(title="Second"), headers=idem())
     set_fields(store, first, status="closed")
 
@@ -259,19 +335,35 @@ def test_list_refuses_an_unknown_status_with_422(client, store, value):
 
 
 def test_status_combines_with_search_and_paging(client, store):
-    ids = [client.post("/api/v1/cases", json=valid_body(title=title), headers=idem()).json()["id"] for title in ("Alpha", "Beta", "Gamma", "Delta")]
+    ids = [
+        client.post(
+            "/api/v1/cases", json=valid_body(title=title), headers=idem()
+        ).json()["id"]
+        for title in ("Alpha", "Beta", "Gamma", "Delta")
+    ]
     set_fields(store, ids[0], status="closed")
     set_fields(store, ids[2], status="closed")
 
     only_beta = client.get("/api/v1/cases?status=open&q=SAFE-2026-000002").json()
     assert [item["title"] for item in only_beta["items"]] == ["Beta"]
     # Beta is open but Alpha is the one with reference 000001: the status and the search must both hold.
-    assert client.get("/api/v1/cases?status=closed&q=SAFE-2026-000002").json()["items"] == []
-    first_page = client.get("/api/v1/cases?status=open&q=SAFE-2026-00000&limit=1").json()
+    assert (
+        client.get("/api/v1/cases?status=closed&q=SAFE-2026-000002").json()["items"]
+        == []
+    )
+    first_page = client.get(
+        "/api/v1/cases?status=open&q=SAFE-2026-00000&limit=1"
+    ).json()
     assert len(first_page["items"]) == 1
     assert first_page["next_cursor"] is not None
     second_page = client.get(
-        "/api/v1/cases", params={"status": "open", "q": "SAFE-2026-00000", "limit": 1, "cursor": first_page["next_cursor"]}
+        "/api/v1/cases",
+        params={
+            "status": "open",
+            "q": "SAFE-2026-00000",
+            "limit": 1,
+            "cursor": first_page["next_cursor"],
+        },
     ).json()
     assert len(second_page["items"]) == 1
     assert second_page["items"][0]["id"] != first_page["items"][0]["id"]
@@ -279,7 +371,9 @@ def test_status_combines_with_search_and_paging(client, store):
 
 
 def test_list_items_carry_the_next_deadline_and_the_last_update(client, store):
-    case_id = client.post("/api/v1/cases", json=valid_body(), headers=idem()).json()["id"]
+    case_id = client.post("/api/v1/cases", json=valid_body(), headers=idem()).json()[
+        "id"
+    ]
     set_fields(
         store,
         case_id,
@@ -292,7 +386,9 @@ def test_list_items_carry_the_next_deadline_and_the_last_update(client, store):
 
 
 def test_list_item_has_a_null_next_deadline_when_no_task_is_open(client, store):
-    case_id = client.post("/api/v1/cases", json=valid_body(), headers=idem()).json()["id"]
+    case_id = client.post("/api/v1/cases", json=valid_body(), headers=idem()).json()[
+        "id"
+    ]
     set_fields(store, case_id, next_deadline=None, updated_at=None)
     item = client.get("/api/v1/cases").json()["items"][0]
     assert item["next_deadline"] is None
@@ -319,10 +415,16 @@ def test_list_items_keep_their_fields_and_add_only_the_two_new_ones(client, stor
     }
 
 
-def test_list_does_not_leak_a_case_the_caller_cannot_see_or_its_deadline(client, caller, store):
+def test_list_does_not_leak_a_case_the_caller_cannot_see_or_its_deadline(
+    client, caller, store
+):
     caller["user"] = make_user(OTHER_ID, "reporter")
-    other_case = client.post("/api/v1/cases", json=valid_body(title="Not yours"), headers=idem()).json()["id"]
-    set_fields(store, other_case, next_deadline=datetime(2026, 12, 24, 9, 0, tzinfo=UTC))
+    other_case = client.post(
+        "/api/v1/cases", json=valid_body(title="Not yours"), headers=idem()
+    ).json()["id"]
+    set_fields(
+        store, other_case, next_deadline=datetime(2026, 12, 24, 9, 0, tzinfo=UTC)
+    )
     caller["user"] = make_user(REPORTER_ID, "reporter")
 
     response = client.get("/api/v1/cases?status=open")
@@ -331,18 +433,32 @@ def test_list_does_not_leak_a_case_the_caller_cannot_see_or_its_deadline(client,
     assert "2026-12-24" not in response.text
 
 
-def test_list_passes_the_status_and_the_evidence_right_to_the_query(client, caller, store):
+def test_list_passes_the_status_and_the_evidence_right_to_the_query(
+    client, caller, store
+):
     client.get("/api/v1/cases?status=open")
-    assert store["list_calls"][-1] == {"q": None, "status": "open", "include_evidence": False}
+    assert store["list_calls"][-1] == {
+        "q": None,
+        "status": "open",
+        "include_evidence": False,
+    }
 
     caller["user"] = make_user(OTHER_ID, "investigator")  # holds evidence:read
     client.get("/api/v1/cases")
-    assert store["list_calls"][-1] == {"q": None, "status": None, "include_evidence": True}
+    assert store["list_calls"][-1] == {
+        "q": None,
+        "status": None,
+        "include_evidence": True,
+    }
 
 
-def test_case_records_the_system_timezone_in_effect_and_computes_deadlines_in_it(timezone_db):
+def test_case_records_the_system_timezone_in_effect_and_computes_deadlines_in_it(
+    timezone_db,
+):
     timezone_db.seed_timezone("Pacific/Auckland", datetime(2026, 10, 1, tzinfo=UTC))
-    t0 = datetime(2026, 11, 5, 20, 0, tzinfo=UTC)  # Friday 09:00 in Auckland (NZDT, UTC+13)
+    t0 = datetime(
+        2026, 11, 5, 20, 0, tzinfo=UTC
+    )  # Friday 09:00 in Auckland (NZDT, UTC+13)
 
     case = create_case("Auckland case", t0, created_by=REPORTER_ID)
 
@@ -350,7 +466,9 @@ def test_case_records_the_system_timezone_in_effect_and_computes_deadlines_in_it
     assert timezone_db.case_rows[0][8] == "Pacific/Auckland"
     tasks = {task.kind: task for task in case.deadlines}
     # Four business days from Friday 09:00 local is Thursday 09:00 local, which is 20:00 UTC on the Wednesday.
-    assert tasks["preliminary_safe_report"].due_at == datetime(2026, 11, 11, 20, 0, tzinfo=UTC)
+    assert tasks["preliminary_safe_report"].due_at == datetime(
+        2026, 11, 11, 20, 0, tzinfo=UTC
+    )
     audit = timezone_db.audit_rows[-1]
     assert audit["action"] == "case.create"
     assert audit["details"] == {
@@ -362,7 +480,11 @@ def test_case_records_the_system_timezone_in_effect_and_computes_deadlines_in_it
 
 def test_later_timezone_change_does_not_move_an_existing_case(timezone_db):
     timezone_db.seed_timezone("Europe/Istanbul", datetime(2026, 10, 1, tzinfo=UTC))
-    case = create_case("Before the change", datetime(2026, 11, 1, 6, 0, tzinfo=UTC), created_by=REPORTER_ID)
+    case = create_case(
+        "Before the change",
+        datetime(2026, 11, 1, 6, 0, tzinfo=UTC),
+        created_by=REPORTER_ID,
+    )
     timezone_db.seed_timezone("Pacific/Auckland", datetime(2026, 11, 2, tzinfo=UTC))
 
     assert timezone_db.case_rows[-1][8] == "Europe/Istanbul"
@@ -371,7 +493,11 @@ def test_later_timezone_change_does_not_move_an_existing_case(timezone_db):
 
 def test_case_cannot_be_created_before_the_system_timezone_is_set(timezone_db):
     with pytest.raises(TimezoneNotConfigured):
-        create_case("No timezone", datetime(2026, 11, 1, 6, 0, tzinfo=UTC), created_by=REPORTER_ID)
+        create_case(
+            "No timezone",
+            datetime(2026, 11, 1, 6, 0, tzinfo=UTC),
+            created_by=REPORTER_ID,
+        )
     assert timezone_db.case_rows == []
 
 

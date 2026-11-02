@@ -45,7 +45,9 @@ def export_url(world_data, version_id: str) -> str:
 
 
 def export_as(world_data, who: str, version_id: str):
-    return request_as(world_data["people"][who], "get", export_url(world_data, version_id))
+    return request_as(
+        world_data["people"][who], "get", export_url(world_data, version_id)
+    )
 
 
 def schema_errors(document) -> list[str]:
@@ -105,10 +107,19 @@ def test_the_original_markers_are_real_so_the_negative_checks_are_not_vacuous(dw
 
 
 @requires_database
-def test_an_approved_version_exports_a_document_that_matches_the_schema_and_the_example(dworld):
+def test_an_approved_version_exports_a_document_that_matches_the_schema_and_the_example(
+    dworld,
+):
     view, derived = first_version(dworld)
     assert (
-        approve(dworld, "approver", view["id"], view["recipient"], view["purpose"], view["digest"]).status_code
+        approve(
+            dworld,
+            "approver",
+            view["id"],
+            view["recipient"],
+            view["purpose"],
+            view["digest"],
+        ).status_code
         == 201
     )
     response = export_as(dworld, "triager", view["id"])
@@ -124,14 +135,23 @@ def test_an_approved_version_exports_a_document_that_matches_the_schema_and_the_
     assert body_view["version"] == body_view["latest_version"] == 1
     assert body_view["digest"] == view["digest"] == body_view["approval"]["digest"]
     assert [entry["evidence_id"] for entry in body_view["items"]] == [derived]
-    assert body_view["manifest"]["items"][0]["removed"] == [{"from_line": 3, "to_line": 3, "lines": 1}]
+    assert body_view["manifest"]["items"][0]["removed"] == [
+        {"from_line": 3, "to_line": 3, "lines": 1}
+    ]
 
 
 @requires_database
 def test_the_export_holds_no_original_content_file_name_checksum_or_reason(dworld):
     view, derived = first_version(dworld)
     assert (
-        approve(dworld, "approver", view["id"], view["recipient"], view["purpose"], view["digest"]).status_code
+        approve(
+            dworld,
+            "approver",
+            view["id"],
+            view["recipient"],
+            view["purpose"],
+            view["digest"],
+        ).status_code
         == 201
     )
     response = export_as(dworld, "triager", view["id"])
@@ -148,13 +168,25 @@ def test_the_export_holds_no_original_content_file_name_checksum_or_reason(dworl
 def test_a_superseded_version_is_exported_with_the_history_status(dworld):
     first, derived = first_version(dworld)
     assert (
-        approve(dworld, "approver", first["id"], first["recipient"], first["purpose"], first["digest"]).status_code
+        approve(
+            dworld,
+            "approver",
+            first["id"],
+            first["recipient"],
+            first["purpose"],
+            first["digest"],
+        ).status_code
         == 201
     )
     changed = create(
         dworld,
         "triager",
-        body([derived], package_id=first["package_id"], expected_version=1, purpose="Changed after the approval"),
+        body(
+            [derived],
+            package_id=first["package_id"],
+            expected_version=1,
+            purpose="Changed after the approval",
+        ),
     )
     assert changed.status_code == 201, changed.text
 
@@ -188,7 +220,14 @@ def test_an_unapproved_version_is_refused_and_no_document_is_returned(dworld):
 def test_the_export_is_identical_across_two_calls(dworld):
     view, _ = first_version(dworld)
     assert (
-        approve(dworld, "approver", view["id"], view["recipient"], view["purpose"], view["digest"]).status_code
+        approve(
+            dworld,
+            "approver",
+            view["id"],
+            view["recipient"],
+            view["purpose"],
+            view["digest"],
+        ).status_code
         == 201
     )
     first = export_as(dworld, "triager", view["id"])
@@ -202,10 +241,19 @@ def test_the_export_is_identical_across_two_calls(dworld):
 def test_the_export_needs_a_login_and_the_read_permission(dworld):
     view, _ = first_version(dworld)
     assert (
-        approve(dworld, "approver", view["id"], view["recipient"], view["purpose"], view["digest"]).status_code
+        approve(
+            dworld,
+            "approver",
+            view["id"],
+            view["recipient"],
+            view["purpose"],
+            view["digest"],
+        ).status_code
         == 201
     )
-    api.app.dependency_overrides.pop(auth.current_user, None)  # no caller: the real login check runs
+    api.app.dependency_overrides.pop(
+        auth.current_user, None
+    )  # no caller: the real login check runs
     anonymous = TestClient(api.app).get(export_url(dworld, view["id"]))
     assert anonymous.status_code == 401
 
@@ -217,14 +265,23 @@ def test_the_export_needs_a_login_and_the_read_permission(dworld):
 def test_a_case_the_caller_cannot_see_answers_as_a_missing_case(dworld, monkeypatch):
     view, _ = first_version(dworld)
     assert (
-        approve(dworld, "approver", view["id"], view["recipient"], view["purpose"], view["digest"]).status_code
+        approve(
+            dworld,
+            "approver",
+            view["id"],
+            view["recipient"],
+            view["purpose"],
+            view["digest"],
+        ).status_code
         == 201
     )
     # The approver reads every case (cases:read_all), so the stranger is a reviewer that is not assigned to this case.
     stranger = db_user("reviewer")
     grant(monkeypatch, "reviewer", "disclosures:read")
     hidden = request_as(stranger, "get", export_url(dworld, view["id"]))
-    missing_case = request_as(stranger, "get", f"/api/v1/cases/{uuid.uuid4()}/disclosures/{view['id']}/export")
+    missing_case = request_as(
+        stranger, "get", f"/api/v1/cases/{uuid.uuid4()}/disclosures/{view['id']}/export"
+    )
     assert hidden.status_code == missing_case.status_code == 404
     assert hidden.json()["detail"] == missing_case.json()["detail"] == "case not found"
 
@@ -237,7 +294,14 @@ def test_a_case_the_caller_cannot_see_answers_as_a_missing_case(dworld, monkeypa
 def test_each_export_writes_one_audit_row_with_identifiers_and_no_content(dworld):
     view, _ = first_version(dworld)
     assert (
-        approve(dworld, "approver", view["id"], view["recipient"], view["purpose"], view["digest"]).status_code
+        approve(
+            dworld,
+            "approver",
+            view["id"],
+            view["recipient"],
+            view["purpose"],
+            view["digest"],
+        ).status_code
         == 201
     )
     assert export_as(dworld, "triager", view["id"]).status_code == 200
@@ -248,8 +312,18 @@ def test_each_export_writes_one_audit_row_with_identifiers_and_no_content(dworld
     triager_id = dworld["people"]["triager"]
     for actor_id, details in rows:
         assert actor_id == triager_id
-        assert json.loads(details).keys() == {"case_id", "package_id", "version", "digest", "status", "schema_version"}
-        assert "Member CERT" not in details and "Rapid alert on the affected gateway" not in details
+        assert json.loads(details).keys() == {
+            "case_id",
+            "package_id",
+            "version",
+            "digest",
+            "status",
+            "schema_version",
+        }
+        assert (
+            "Member CERT" not in details
+            and "Rapid alert on the affected gateway" not in details
+        )
         for marker in original_markers(dworld):
             assert marker not in details, marker
 
@@ -263,10 +337,19 @@ def test_a_withheld_item_is_only_a_placeholder_in_the_export(dworld):
     view = created.json()
     red_sha = view["evidence"][0]["sha256_plaintext"]
     assert (
-        approve(dworld, "approver", view["id"], view["recipient"], view["purpose"], view["digest"]).status_code
+        approve(
+            dworld,
+            "approver",
+            view["id"],
+            view["recipient"],
+            view["purpose"],
+            view["digest"],
+        ).status_code
         == 201
     )
-    unassign(dworld["case_id"], dworld["people"]["triager"])  # the triager keeps the case, not the RED item
+    unassign(
+        dworld["case_id"], dworld["people"]["triager"]
+    )  # the triager keeps the case, not the RED item
 
     response = export_as(dworld, "triager", view["id"])
     assert response.status_code == 200, response.text

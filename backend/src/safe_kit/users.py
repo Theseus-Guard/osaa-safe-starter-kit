@@ -34,7 +34,9 @@ ROLES = frozenset(
 )
 
 # Generic names that are easy to guess and would make the admin account a target.
-RESERVED_USERNAMES = frozenset({"admin", "administrator", "root", "superuser", "sysadmin", "system", "operator"})
+RESERVED_USERNAMES = frozenset(
+    {"admin", "administrator", "root", "superuser", "sysadmin", "system", "operator"}
+)
 USERNAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{2,63}$")
 
 
@@ -47,7 +49,9 @@ def validate_username(username: str) -> None:
     if username.lower() in RESERVED_USERNAMES:
         raise InvalidUsername("username is reserved")
     if not USERNAME_PATTERN.fullmatch(username):
-        raise InvalidUsername("username must be 3-64 characters: lowercase letters, digits, '.', '_' or '-'")
+        raise InvalidUsername(
+            "username must be 3-64 characters: lowercase letters, digits, '.', '_' or '-'"
+        )
 
 
 # Profile rules. The database checks the same limits (migration 0016) as a backstop.
@@ -135,7 +139,9 @@ class User:
     # True when the account must change its password: a forced change, or a password older than PASSWORD_MAX_AGE.
     must_change_password: bool
     created_at: datetime
-    password_changed_at: datetime = dataclasses.field(default_factory=lambda: datetime.now(UTC))
+    password_changed_at: datetime = dataclasses.field(
+        default_factory=lambda: datetime.now(UTC)
+    )
     # The first admin created by the bootstrap. It can never be disabled, deleted, or demoted.
     is_protected: bool = False
     first_name: str | None = None
@@ -182,7 +188,9 @@ def _record_password(conn, user_id: str, password_hash: str, temporary: bool) ->
     )
 
 
-def create_user(username: str, password: str, role: str, actor_id: str | None = None) -> str:
+def create_user(
+    username: str, password: str, role: str, actor_id: str | None = None
+) -> str:
     """Create an account with a temporary password. The user must change it at first login."""
     validate_username(username)
     if role not in ROLES:
@@ -195,7 +203,14 @@ def create_user(username: str, password: str, role: str, actor_id: str | None = 
             (username, password_hash, role),
         ).fetchone()
         _record_password(conn, row[0], password_hash, temporary=True)
-        audit.record(conn, audit.USER_CREATE, "user", row[0], actor_id=actor_id, details={"role": role})
+        audit.record(
+            conn,
+            audit.USER_CREATE,
+            "user",
+            row[0],
+            actor_id=actor_id,
+            details={"role": role},
+        )
     return row[0]
 
 
@@ -242,7 +257,14 @@ def create_user_with_profile(
                 raise EmailAlreadyInUse from error
             raise
         _record_password(conn, row[0], password_hash, temporary=True)
-        audit.record(conn, audit.USER_CREATE, "user", row[0], actor_id=actor_id, details={"role": role})
+        audit.record(
+            conn,
+            audit.USER_CREATE,
+            "user",
+            row[0],
+            actor_id=actor_id,
+            details={"role": role},
+        )
     return row[0]
 
 
@@ -257,7 +279,9 @@ ADMIN_SET_LOCK_KEY = 0x5AFE0003
 
 def admin_exists() -> bool:
     with connect() as conn:
-        row = conn.execute("SELECT EXISTS (SELECT 1 FROM users WHERE role = 'admin' AND NOT is_deleted)").fetchone()
+        row = conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM users WHERE role = 'admin' AND NOT is_deleted)"
+        ).fetchone()
     return row[0]
 
 
@@ -269,7 +293,9 @@ def bootstrap_admin(username: str, password: str, email: str | None) -> str:
     password_hash = hash_password(password)
     with connect() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (BOOTSTRAP_LOCK_KEY,))
-        if conn.execute("SELECT EXISTS (SELECT 1 FROM users WHERE role = 'admin' AND NOT is_deleted)").fetchone()[0]:
+        if conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM users WHERE role = 'admin' AND NOT is_deleted)"
+        ).fetchone()[0]:
             raise AdminAlreadyExists
         try:
             row = conn.execute(
@@ -284,7 +310,11 @@ def bootstrap_admin(username: str, password: str, email: str | None) -> str:
         _record_password(conn, row[0], password_hash, temporary=True)
         # No actor: the first admin is created by the operator at the command line.
         audit.record(
-            conn, audit.USER_CREATE, "user", row[0], details={"role": "admin", "bootstrap": True}
+            conn,
+            audit.USER_CREATE,
+            "user",
+            row[0],
+            details={"role": "admin", "bootstrap": True},
         )
     return row[0]
 
@@ -349,7 +379,12 @@ def _set_password(
     return True
 
 
-def reset_password(user_id: str, temporary_password: str, actor_id: str | None = None, source: str = "api") -> bool:
+def reset_password(
+    user_id: str,
+    temporary_password: str,
+    actor_id: str | None = None,
+    source: str = "api",
+) -> bool:
     """Admin or operator reset. The user must choose a new password at next login.
 
     actor_id is None and source is "cli" when the operator resets a password from the container.
@@ -424,11 +459,21 @@ def update_user(
             changes["role"] = {"from": current_role, "to": new_role}
         if new_active != current_active:
             changes["is_active"] = {"from": current_active, "to": new_active}
-        conn.execute("UPDATE users SET role = %s, is_active = %s WHERE id = %s", (new_role, new_active, user_id))
+        conn.execute(
+            "UPDATE users SET role = %s, is_active = %s WHERE id = %s",
+            (new_role, new_active, user_id),
+        )
         if not new_active:
             _end_sessions(conn, user_id)
         if changes:
-            audit.record(conn, audit.USER_UPDATE, "user", user_id, actor_id=actor_id, details={"changes": changes})
+            audit.record(
+                conn,
+                audit.USER_UPDATE,
+                "user",
+                user_id,
+                actor_id=actor_id,
+                details={"changes": changes},
+            )
     return UpdateOutcome.OK
 
 
@@ -458,7 +503,12 @@ def soft_delete_user(user_id: str, actor_id: str | None = None) -> UpdateOutcome
         )
         _end_sessions(conn, user_id)
         audit.record(
-            conn, audit.USER_DELETE, "user", user_id, actor_id=actor_id, details={"role": current_role}
+            conn,
+            audit.USER_DELETE,
+            "user",
+            user_id,
+            actor_id=actor_id,
+            details={"role": current_role},
         )
     return UpdateOutcome.OK
 
@@ -496,7 +546,9 @@ def find_user_by_id(user_id: str) -> User | None:
     return _to_user(row) if row else None
 
 
-def update_profile(user_id: str, changes: Mapping[str, str | None], actor_id: str | None = None) -> User | None:
+def update_profile(
+    user_id: str, changes: Mapping[str, str | None], actor_id: str | None = None
+) -> User | None:
     """Apply profile changes that were already normalized by normalize_profile.
 
     Only the fields whose value actually changes are written, and the audit row lists their names. It never
@@ -511,9 +563,15 @@ def update_profile(user_id: str, changes: Mapping[str, str | None], actor_id: st
         if current is None:
             return None
         current_values = dict(zip(PROFILE_FIELDS, current, strict=True))
-        changed = [field for field in PROFILE_FIELDS if field in changes and changes[field] != current_values[field]]
+        changed = [
+            field
+            for field in PROFILE_FIELDS
+            if field in changes and changes[field] != current_values[field]
+        ]
         if changed:
-            assignments = sql.SQL(", ").join(sql.SQL("{} = %s").format(sql.Identifier(field)) for field in changed)
+            assignments = sql.SQL(", ").join(
+                sql.SQL("{} = %s").format(sql.Identifier(field)) for field in changed
+            )
             try:
                 conn.execute(
                     sql.SQL("UPDATE users SET {} WHERE id = %s").format(assignments),
@@ -524,7 +582,14 @@ def update_profile(user_id: str, changes: Mapping[str, str | None], actor_id: st
                     raise EmailAlreadyInUse from error
                 raise
             audit.record(
-                conn, audit.USER_PROFILE_UPDATE, "user", user_id, actor_id=actor_id, details={"fields": changed}
+                conn,
+                audit.USER_PROFILE_UPDATE,
+                "user",
+                user_id,
+                actor_id=actor_id,
+                details={"fields": changed},
             )
-        row = conn.execute(f"SELECT {_COLUMNS} FROM users WHERE id = %s", (user_id,)).fetchone()
+        row = conn.execute(
+            f"SELECT {_COLUMNS} FROM users WHERE id = %s", (user_id,)
+        ).fetchone()
     return _to_user(row)

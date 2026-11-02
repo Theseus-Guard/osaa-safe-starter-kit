@@ -118,13 +118,19 @@ def store(conn, scope: KeyScope, response: StoredResponse) -> None:
 def checked_key(value: str | None) -> str:
     """The Idempotency-Key header of a side-effect request: required, and 1 to 128 visible ASCII characters."""
     if value is None:
-        raise HTTPException(status_code=400, detail={"status": "idempotency_key_required"})
+        raise HTTPException(
+            status_code=400, detail={"status": "idempotency_key_required"}
+        )
     if not valid_key(value):
-        raise HTTPException(status_code=400, detail={"status": "idempotency_key_invalid"})
+        raise HTTPException(
+            status_code=400, detail={"status": "idempotency_key_invalid"}
+        )
     return value
 
 
-def key_scope(principal_id: str, method: str, route: str, key: str, path: str, body: Any) -> KeyScope:
+def key_scope(
+    principal_id: str, method: str, route: str, key: str, path: str, body: Any
+) -> KeyScope:
     """The scope of one request. The route is the template, the fingerprint covers the concrete path and the body."""
     return KeyScope(
         principal_id=principal_id,

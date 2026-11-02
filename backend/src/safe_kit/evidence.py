@@ -97,7 +97,12 @@ class StoreVerificationFailed(StorageError):
 # Verification reasons that mean the stored object is not what was written. An item with one of these moves to failed.
 # storage_read_failed and key_unavailable are availability problems: they are recorded in custody only.
 INTEGRITY_FAILURE_REASONS = frozenset(
-    {"object_missing", "decryption_failed", "ciphertext_checksum_mismatch", "plaintext_checksum_mismatch"}
+    {
+        "object_missing",
+        "decryption_failed",
+        "ciphertext_checksum_mismatch",
+        "plaintext_checksum_mismatch",
+    }
 )
 
 
@@ -177,7 +182,9 @@ def check_media_type(declared: str | None, data: bytes) -> str:
     media_type = declared.split(";", 1)[0].strip().lower()
     checker = ALLOWED_MEDIA_TYPES.get(media_type)
     if checker is None or not checker(data):
-        raise UnsupportedMediaType("media type is not allowed or does not match the content")
+        raise UnsupportedMediaType(
+            "media type is not allowed or does not match the content"
+        )
     return media_type
 
 
@@ -243,7 +250,9 @@ def _to_item(row: tuple) -> EvidenceItem:
     )
 
 
-def _custody(conn, evidence_id: str, actor_id: str | None, action: str, details: dict[str, Any]) -> None:
+def _custody(
+    conn, evidence_id: str, actor_id: str | None, action: str, details: dict[str, Any]
+) -> None:
     conn.execute(
         "INSERT INTO custody_events (evidence_id, actor_id, action, details) VALUES (%s, %s, %s, %s)",
         (evidence_id, actor_id, action, Jsonb(details)),
@@ -278,8 +287,17 @@ def create_evidence(
     storage_key = str(uuid.uuid4())
     sealed = seal(data, storage_key, provider)
     evidence_id = _insert_pending(
-        case_id, uploader_id, name, media_type, len(data), storage_key, sealed.key_id,
-        sealed.wrapped_data_key, sealed.nonce, scope, idempotency=idempotency,
+        case_id,
+        uploader_id,
+        name,
+        media_type,
+        len(data),
+        storage_key,
+        sealed.key_id,
+        sealed.wrapped_data_key,
+        sealed.nonce,
+        scope,
+        idempotency=idempotency,
     )
     try:
         storage.put(storage_key, sealed.ciphertext)
@@ -308,7 +326,12 @@ def create_evidence(
         raise StoreVerificationFailed(failure.reason) from None
     try:
         return _mark_available(
-            evidence_id, uploader_id, plaintext_digest, ciphertext_digest, idempotency=idempotency, render=render
+            evidence_id,
+            uploader_id,
+            plaintext_digest,
+            ciphertext_digest,
+            idempotency=idempotency,
+            render=render,
         )
     except (Replayed, KeyReused):
         _mark_failed(evidence_id, uploader_id, "duplicate_request")
@@ -342,7 +365,17 @@ def _insert_pending(
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending')
             RETURNING id::text
             """,
-            (case_id, uploader_id, name, media_type, size_bytes, storage_key, key_id, wrapped_data_key, nonce),
+            (
+                case_id,
+                uploader_id,
+                name,
+                media_type,
+                size_bytes,
+                storage_key,
+                key_id,
+                wrapped_data_key,
+                nonce,
+            ),
         ).fetchone()
     return row[0]
 
@@ -428,7 +461,9 @@ def find_stored(evidence_id: str, scope: CaseScope) -> StoredEvidence | None:
     )
 
 
-def read_original(stored: StoredEvidence, storage: EvidenceStorage, provider: KeyProvider) -> bytes:
+def read_original(
+    stored: StoredEvidence, storage: EvidenceStorage, provider: KeyProvider
+) -> bytes:
     """Return the verified plaintext. Raises VerificationFailed with a reason; no partial content is returned."""
     try:
         ciphertext = storage.get(stored.storage_key)
@@ -440,7 +475,12 @@ def read_original(stored: StoredEvidence, storage: EvidenceStorage, provider: Ke
         raise VerificationFailed("ciphertext_checksum_mismatch")
     try:
         plaintext = open_sealed(
-            ciphertext, stored.nonce, stored.wrapped_data_key, stored.key_id, stored.storage_key, provider,
+            ciphertext,
+            stored.nonce,
+            stored.wrapped_data_key,
+            stored.key_id,
+            stored.storage_key,
+            provider,
         )
     except IntegrityError as error:
         raise VerificationFailed(error.reason) from None
@@ -526,7 +566,12 @@ def custody_events(evidence_id: str) -> list[CustodyEvent]:
         ).fetchall()
     return [
         CustodyEvent(
-            id=row[0], evidence_id=row[1], actor_id=row[2], action=row[3], details=row[4], created_at=row[5],
+            id=row[0],
+            evidence_id=row[1],
+            actor_id=row[2],
+            action=row[3],
+            details=row[4],
+            created_at=row[5],
         )
         for row in rows
     ]

@@ -29,7 +29,9 @@ from test_fixture_t15_workflow_parity_db import FIXED_LOGIN, act_as
 from test_fixture_t15a_evidence_states import empty_case, set_status
 
 # Words that would read as a clean result. None may appear in an answer about an empty or unavailable state.
-CLEAN_RESULT_WORDS = re.compile(r"\b(pass|passed|clean|compliant|compliance|verified|no findings)\b", re.IGNORECASE)
+CLEAN_RESULT_WORDS = re.compile(
+    r"\b(pass|passed|clean|compliant|compliance|verified|no findings)\b", re.IGNORECASE
+)
 
 
 def cli_as_root(monkeypatch, capsys, who_id: str, *argv: str) -> tuple[int, str, str]:
@@ -40,14 +42,28 @@ def cli_as_root(monkeypatch, capsys, who_id: str, *argv: str) -> tuple[int, str,
 
 
 @requires_database
-def test_an_empty_case_is_listed_as_no_evidence_and_never_as_a_result(evidence_world, monkeypatch, capsys):
+def test_an_empty_case_is_listed_as_no_evidence_and_never_as_a_result(
+    evidence_world, monkeypatch, capsys
+):
     people = evidence_world["people"]
     case_id = empty_case(people)
-    api_list = request_as(people["investigator"], "get", f"/api/v1/cases/{case_id}/evidence")
+    api_list = request_as(
+        people["investigator"], "get", f"/api/v1/cases/{case_id}/evidence"
+    )
     assert api_list.status_code == 200
 
-    as_json = cli_as_root(monkeypatch, capsys, people["investigator"], "evidence", "list",case_id, "--json")
-    as_text = cli_as_root(monkeypatch, capsys, people["investigator"], "evidence", "list",case_id)
+    as_json = cli_as_root(
+        monkeypatch,
+        capsys,
+        people["investigator"],
+        "evidence",
+        "list",
+        case_id,
+        "--json",
+    )
+    as_text = cli_as_root(
+        monkeypatch, capsys, people["investigator"], "evidence", "list", case_id
+    )
 
     assert as_json[0] == 0 and as_json[2] == ""
     # The CLI asks for its own default page size, so the page size is compared by its content, not the whole body.
@@ -61,17 +77,33 @@ def test_an_empty_case_is_listed_as_no_evidence_and_never_as_a_result(evidence_w
 
 @requires_database
 @pytest.mark.parametrize("status", ["failed", "pending"])
-def test_an_unavailable_item_is_listed_with_its_own_status_in_both_clients(evidence_world, monkeypatch, capsys, status):
+def test_an_unavailable_item_is_listed_with_its_own_status_in_both_clients(
+    evidence_world, monkeypatch, capsys, status
+):
     people = evidence_world["people"]
     case_id, evidence_id = evidence_world["case_id"], evidence_world["evidence_id"]
     set_status(evidence_id, status)
 
-    api_list = request_as(people["investigator"], "get", f"/api/v1/cases/{case_id}/evidence")
-    api_item = next(item for item in api_list.json()["items"] if item["id"] == evidence_id)
-    code, out, err = cli_as_root(monkeypatch, capsys, people["investigator"], "evidence", "list",case_id, "--json")
+    api_list = request_as(
+        people["investigator"], "get", f"/api/v1/cases/{case_id}/evidence"
+    )
+    api_item = next(
+        item for item in api_list.json()["items"] if item["id"] == evidence_id
+    )
+    code, out, err = cli_as_root(
+        monkeypatch,
+        capsys,
+        people["investigator"],
+        "evidence",
+        "list",
+        case_id,
+        "--json",
+    )
 
     assert code == 0 and err == ""
-    cli_item = next(item for item in json.loads(out)["items"] if item["id"] == evidence_id)
+    cli_item = next(
+        item for item in json.loads(out)["items"] if item["id"] == evidence_id
+    )
     assert cli_item["status"] == api_item["status"] == status
 
 
@@ -84,7 +116,9 @@ def test_a_hidden_item_and_a_missing_item_give_the_same_cli_answer_that_is_not_t
     set_status(evidence_id, "failed")
 
     hidden = cli_as_root(monkeypatch, capsys, other, "evidence", "show", evidence_id)
-    missing = cli_as_root(monkeypatch, capsys, other, "evidence", "show", str(uuid.uuid4()))
+    missing = cli_as_root(
+        monkeypatch, capsys, other, "evidence", "show", str(uuid.uuid4())
+    )
 
     assert hidden == missing
     assert hidden[0] == 1 and hidden[1] == ""
@@ -93,12 +127,16 @@ def test_a_hidden_item_and_a_missing_item_give_the_same_cli_answer_that_is_not_t
 
 
 @requires_database
-def test_a_hidden_case_and_a_missing_case_give_the_same_cli_answer_for_its_evidence(evidence_world, monkeypatch, capsys):
+def test_a_hidden_case_and_a_missing_case_give_the_same_cli_answer_for_its_evidence(
+    evidence_world, monkeypatch, capsys
+):
     other = evidence_world["people"]["other_investigator"]
     case_id = evidence_world["case_id"]
 
-    hidden = cli_as_root(monkeypatch, capsys, other, "evidence", "list",case_id)
-    missing = cli_as_root(monkeypatch, capsys, other, "evidence", "list",str(uuid.uuid4()))
+    hidden = cli_as_root(monkeypatch, capsys, other, "evidence", "list", case_id)
+    missing = cli_as_root(
+        monkeypatch, capsys, other, "evidence", "list", str(uuid.uuid4())
+    )
 
     assert hidden == missing
     assert hidden[0] == 1 and hidden[1] == ""
@@ -106,7 +144,9 @@ def test_a_hidden_case_and_a_missing_case_give_the_same_cli_answer_for_its_evide
 
 
 @requires_database
-def test_an_account_with_no_cases_gets_a_neutral_empty_list_in_both_clients(monkeypatch, capsys):
+def test_an_account_with_no_cases_gets_a_neutral_empty_list_in_both_clients(
+    monkeypatch, capsys
+):
     reporter = db_user("reporter")
     api_list = request_as(reporter, "get", "/api/v1/cases?limit=20")
     assert api_list.status_code == 200

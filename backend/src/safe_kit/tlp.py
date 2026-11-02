@@ -63,7 +63,14 @@ def recipient_for(user: User) -> Recipient:
     return Recipient(user_id=user.id, organisation=not external, external=external)
 
 
-def permits(label: str | None, *, named: bool, organisation: bool, external: bool, approved: bool) -> bool:
+def permits(
+    label: str | None,
+    *,
+    named: bool,
+    organisation: bool,
+    external: bool,
+    approved: bool,
+) -> bool:
     """The TLP rule as a function of the audience categories. None (no label) is always permitted."""
     if label is None or label == GREEN:
         return True
@@ -85,9 +92,7 @@ def at_least_as_restrictive(label: str, original: str | None) -> bool:
     return RESTRICTIVENESS[label] >= RESTRICTIVENESS[original]
 
 
-_NAMED = (
-    "EXISTS (SELECT 1 FROM case_assignments ta WHERE ta.case_id = e.case_id AND ta.user_id = %s AND NOT ta.is_deleted)"
-)
+_NAMED = "EXISTS (SELECT 1 FROM case_assignments ta WHERE ta.case_id = e.case_id AND ta.user_id = %s AND NOT ta.is_deleted)"
 _APPROVED = "EXISTS (SELECT 1 FROM evidence_release_approvals ra WHERE ra.evidence_id = e.id AND NOT ra.is_deleted)"
 
 
@@ -104,8 +109,11 @@ def visibility_sql(recipient: Recipient) -> tuple[str, tuple[object, ...]]:
     uid = recipient.user_id
     params: tuple[object, ...] = (
         uid,  # RED
-        uid, recipient.organisation,  # AMBER+STRICT
-        uid, recipient.organisation, recipient.external,  # AMBER
+        uid,
+        recipient.organisation,  # AMBER+STRICT
+        uid,
+        recipient.organisation,
+        recipient.external,  # AMBER
     )
     return sql, params
 
@@ -126,7 +134,8 @@ def item_permitted(stored: "StoredEvidence", recipient: Recipient) -> bool:
 def is_release_approved_on(conn, evidence_id: str) -> bool:
     """The release check on the caller's connection, so it shares the caller's transaction."""
     row = conn.execute(
-        "SELECT 1 FROM evidence_release_approvals WHERE evidence_id = %s AND NOT is_deleted", (evidence_id,)
+        "SELECT 1 FROM evidence_release_approvals WHERE evidence_id = %s AND NOT is_deleted",
+        (evidence_id,),
     ).fetchone()
     return row is not None
 
@@ -139,7 +148,8 @@ def is_release_approved(evidence_id: str) -> bool:
 def record_release_approval_on(conn, evidence_id: str, approved_by: str) -> None:
     """Record the release approval on the caller's connection. Refused for any label but CLEAR (see record_release_approval)."""
     row = conn.execute(
-        "SELECT tlp_label FROM evidence_items WHERE id = %s AND NOT is_deleted", (evidence_id,)
+        "SELECT tlp_label FROM evidence_items WHERE id = %s AND NOT is_deleted",
+        (evidence_id,),
     ).fetchone()
     if row is None or row[0] != CLEAR:
         raise ReleaseNotApproved()

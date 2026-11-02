@@ -59,7 +59,13 @@ def _required(env: Mapping[str, str], name: str) -> str:
     return value
 
 
-def required_int(env: Mapping[str, str], name: str, *, minimum: int | None = 1, maximum: int | None = None) -> int:
+def required_int(
+    env: Mapping[str, str],
+    name: str,
+    *,
+    minimum: int | None = 1,
+    maximum: int | None = None,
+) -> int:
     """A required whole number. Missing, empty, or not a whole number is refused; so is a value outside the bounds.
 
     minimum=None skips the lower bound. security.py uses that: the startup guard has already checked the range, and
@@ -70,8 +76,14 @@ def required_int(env: Mapping[str, str], name: str, *, minimum: int | None = 1, 
         value = int(raw)
     except ValueError:
         raise ConfigError(f"{name} must be a whole number") from None
-    if (minimum is not None and value < minimum) or (maximum is not None and value > maximum):
-        bounds = f"from {minimum} to {maximum}" if maximum is not None else f"of at least {minimum}"
+    if (minimum is not None and value < minimum) or (
+        maximum is not None and value > maximum
+    ):
+        bounds = (
+            f"from {minimum} to {maximum}"
+            if maximum is not None
+            else f"of at least {minimum}"
+        )
         raise ConfigError(f"{name} must be a whole number {bounds}")
     return value
 
@@ -88,7 +100,12 @@ def retention_years(env: Mapping[str, str]) -> int:
 
     The value is provisional until legal review. The privacy inventory shows it; nothing is deleted by it.
     """
-    return required_int(env, "SAFE_RETENTION_YEARS", minimum=MIN_RETENTION_YEARS, maximum=MAX_RETENTION_YEARS)
+    return required_int(
+        env,
+        "SAFE_RETENTION_YEARS",
+        minimum=MIN_RETENTION_YEARS,
+        maximum=MAX_RETENTION_YEARS,
+    )
 
 
 def trusted_proxies(env: Mapping[str, str]) -> tuple[TrustedNetwork, ...]:
@@ -109,7 +126,9 @@ def trusted_proxies(env: Mapping[str, str]) -> tuple[TrustedNetwork, ...]:
                 "SAFE_TRUSTED_PROXIES must be a comma-separated list of IP addresses or CIDR ranges"
             ) from None
         if network.prefixlen == 0:
-            raise ConfigError("SAFE_TRUSTED_PROXIES must list the proxy addresses, not a range that covers every address")
+            raise ConfigError(
+                "SAFE_TRUSTED_PROXIES must list the proxy addresses, not a range that covers every address"
+            )
         networks.append(network)
     return tuple(networks)
 
@@ -119,7 +138,9 @@ def load_settings(env: Mapping[str, str]) -> Settings:
     # SAFE_MODE is compared exactly: no trimming and no case folding, so a typo never selects a mode by accident.
     mode = env.get("SAFE_MODE")
     if mode not in (MODE_DEMO, MODE_PRODUCTION):
-        raise ConfigError("SAFE_MODE is required and must be exactly 'demo' or 'production'")
+        raise ConfigError(
+            "SAFE_MODE is required and must be exactly 'demo' or 'production'"
+        )
 
     bind_host = _value(env, "SAFE_BIND_HOST") or None
     dataset = _value(env, "SAFE_DATASET") or None
@@ -129,9 +150,13 @@ def load_settings(env: Mapping[str, str]) -> Settings:
             raise ConfigError("SAFE_BIND_HOST is required in demo mode")
         # SAFE_BIND_HOST is the published host address of the demo, not the address the process listens on.
         if bind_host not in LOOPBACK_HOSTS:
-            raise ConfigError("SAFE_BIND_HOST is the published host address; in demo mode it must be 127.0.0.1 or ::1")
+            raise ConfigError(
+                "SAFE_BIND_HOST is the published host address; in demo mode it must be 127.0.0.1 or ::1"
+            )
         if dataset != SYNTHETIC_DEMO_DATASET:
-            raise ConfigError(f"SAFE_DATASET must be set to '{SYNTHETIC_DEMO_DATASET}' in demo mode")
+            raise ConfigError(
+                f"SAFE_DATASET must be set to '{SYNTHETIC_DEMO_DATASET}' in demo mode"
+            )
     elif dataset is not None:
         raise ConfigError("SAFE_DATASET must be unset or empty in production mode")
 
@@ -144,9 +169,15 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         db_name=_required(env, "SAFE_DB_NAME"),
         db_user=_required(env, "SAFE_DB_USER"),
         db_password_file=_required(env, "SAFE_DB_PASSWORD_FILE"),
-        access_ttl_minutes=required_int(env, "SAFE_ACCESS_TTL_MINUTES", maximum=MAX_TTL_MINUTES),
-        refresh_ttl_minutes=required_int(env, "SAFE_REFRESH_TTL_MINUTES", maximum=MAX_TTL_MINUTES),
-        session_max_hours=required_int(env, "SAFE_SESSION_MAX_HOURS", maximum=MAX_SESSION_HOURS),
+        access_ttl_minutes=required_int(
+            env, "SAFE_ACCESS_TTL_MINUTES", maximum=MAX_TTL_MINUTES
+        ),
+        refresh_ttl_minutes=required_int(
+            env, "SAFE_REFRESH_TTL_MINUTES", maximum=MAX_TTL_MINUTES
+        ),
+        session_max_hours=required_int(
+            env, "SAFE_SESSION_MAX_HOURS", maximum=MAX_SESSION_HOURS
+        ),
         retention_years=retention_years(env),
         trusted_proxies=trusted_proxies(env),
     )

@@ -41,9 +41,16 @@ def test_expired_token_is_refused_on_a_case_endpoint(client, store, monkeypatch)
 
 def test_revoked_token_is_refused_on_a_case_endpoint_after_logout(client, store):
     tokens = login_tokens(client, "alice")
-    assert client.get("/api/v1/auth/me", headers=bearer_header(tokens["access_token"])).status_code == 200
+    assert (
+        client.get(
+            "/api/v1/auth/me", headers=bearer_header(tokens["access_token"])
+        ).status_code
+        == 200
+    )
 
-    logout = client.post("/api/v1/auth/logout", headers=bearer_header(tokens["access_token"]))
+    logout = client.post(
+        "/api/v1/auth/logout", headers=bearer_header(tokens["access_token"])
+    )
     assert logout.status_code == 204
 
     response = client.get(CASES_URL, headers=bearer_header(tokens["access_token"]))
@@ -55,11 +62,17 @@ def test_token_for_a_disabled_account_is_refused_on_a_case_endpoint(client, stor
     tokens = login_tokens(client, "alice")
     store.users[ALICE] = replace(store.users[ALICE], is_active=False)
 
-    assert client.get(CASES_URL, headers=bearer_header(tokens["access_token"])).status_code == 401
+    assert (
+        client.get(CASES_URL, headers=bearer_header(tokens["access_token"])).status_code
+        == 401
+    )
 
 
 def test_wrong_password_never_yields_a_token_for_a_case_endpoint(client, store):
-    response = client.post("/api/v1/auth/token", json={"username": "alice", "password": "wrong-" + uuid.uuid4().hex})
+    response = client.post(
+        "/api/v1/auth/token",
+        json={"username": "alice", "password": "wrong-" + uuid.uuid4().hex},
+    )
 
     assert response.status_code == 401
     assert "access_token" not in response.json()

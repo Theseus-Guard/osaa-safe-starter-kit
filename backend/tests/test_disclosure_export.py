@@ -38,7 +38,10 @@ def load(path: Path) -> dict:
 
 
 def errors_of(document) -> list[str]:
-    return [error.message for error in Draft202012Validator(load(SCHEMA)).iter_errors(document)]
+    return [
+        error.message
+        for error in Draft202012Validator(load(SCHEMA)).iter_errors(document)
+    ]
 
 
 def approved(*, is_latest: bool = True, **changes) -> Version:
@@ -73,7 +76,9 @@ def test_an_approved_version_exports_a_document_that_matches_the_schema():
     assert errors_of(document) == []
     body = document["disclosure_export"]
     assert document["disclosure_export_schema_version"] == "0.1.0"
-    assert body["status"] == "approved" and body["latest_version"] == body["version"] == 1
+    assert (
+        body["status"] == "approved" and body["latest_version"] == body["version"] == 1
+    )
     assert body["approval"] == {
         "id": APPROVAL_ID,
         "approved_by": APPROVER,
@@ -155,10 +160,23 @@ def test_the_export_is_the_same_document_for_two_calls():
 def test_the_schema_refuses_a_file_name_an_export_time_or_an_original_checksum():
     document = export_of(approved(items=[item(ITEM_ONE)]), visible=[True])
     cases = [
-        ("file name on an item", lambda d: d["disclosure_export"]["items"][0].update(file_name="notes.txt")),
+        (
+            "file name on an item",
+            lambda d: d["disclosure_export"]["items"][0].update(file_name="notes.txt"),
+        ),
         ("export time", lambda d: d.update(exported_at="2026-11-02T10:00:00+00:00")),
-        ("original checksum in the manifest", lambda d: d["disclosure_export"]["manifest"]["items"][0].update(source_sha256="d" * 64)),
-        ("evidence ID on a withheld placeholder", lambda d: d["disclosure_export"]["items"].append({"withheld": True, "evidence_id": ITEM_TWO})),
+        (
+            "original checksum in the manifest",
+            lambda d: d["disclosure_export"]["manifest"]["items"][0].update(
+                source_sha256="d" * 64
+            ),
+        ),
+        (
+            "evidence ID on a withheld placeholder",
+            lambda d: d["disclosure_export"]["items"].append(
+                {"withheld": True, "evidence_id": ITEM_TWO}
+            ),
+        ),
         ("unknown status", lambda d: d["disclosure_export"].update(status="draft")),
     ]
     for label, change in cases:
@@ -173,8 +191,12 @@ def test_the_example_has_the_same_fields_as_a_live_export():
 
     assert set(example) == set(live)
     assert set(example["disclosure_export"]) == set(live["disclosure_export"])
-    assert set(example["disclosure_export"]["approval"]) == set(live["disclosure_export"]["approval"])
-    assert set(example["disclosure_export"]["template"]) == set(live["disclosure_export"]["template"])
+    assert set(example["disclosure_export"]["approval"]) == set(
+        live["disclosure_export"]["approval"]
+    )
+    assert set(example["disclosure_export"]["template"]) == set(
+        live["disclosure_export"]["template"]
+    )
     assert set(example["disclosure_export"]["manifest"]["items"][0]) == set(
         live["disclosure_export"]["manifest"]["items"][0]
     )
@@ -186,7 +208,10 @@ def test_every_template_exports_with_its_own_sections(template):
 
     assert errors_of(document) == []
     assert document["disclosure_export"]["template"]["key"] == template
-    assert document["disclosure_export"]["template"]["title"] == disclosure.TEMPLATES[template].title
+    assert (
+        document["disclosure_export"]["template"]["title"]
+        == disclosure.TEMPLATES[template].title
+    )
 
 
 def test_the_case_and_package_are_named_by_id_only():

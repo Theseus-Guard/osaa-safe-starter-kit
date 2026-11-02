@@ -83,7 +83,9 @@ def current_timezone_name() -> str | None:
     return setting.timezone if setting else None
 
 
-def decide(stored: str | None, current: str | None, timezone: str, confirm: bool) -> ChangeOutcome:
+def decide(
+    stored: str | None, current: str | None, timezone: str, confirm: bool
+) -> ChangeOutcome:
     """The rules for a change request, given the stored timezone and what the client last saw."""
     if current != stored:
         return ChangeOutcome.STALE
@@ -123,7 +125,11 @@ def change_timezone(
         "system_timezone",
         row[0],
         actor_id=actor_id,
-        details={"from": stored, "to": timezone, "effective_from": new.effective_from.isoformat()},
+        details={
+            "from": stored,
+            "to": timezone,
+            "effective_from": new.effective_from.isoformat(),
+        },
     )
     return outcome, new
 

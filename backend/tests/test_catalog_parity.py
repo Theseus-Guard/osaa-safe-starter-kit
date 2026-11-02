@@ -59,7 +59,9 @@ def caller(monkeypatch):
     state = {"user": make_user("auditor")}
     api.app.dependency_overrides[auth.current_user] = lambda: state["user"]
     monkeypatch.setattr(
-        auth, "permissions_for_role", lambda role: ROLE_PERMISSIONS.get(role, frozenset())
+        auth,
+        "permissions_for_role",
+        lambda role: ROLE_PERMISSIONS.get(role, frozenset()),
     )
     yield state
     api.app.dependency_overrides.clear()
@@ -70,7 +72,9 @@ def client(caller):
     return TestClient(api.app)
 
 
-def test_anonymous_and_unpermitted_callers_are_refused_before_the_read(monkeypatch, caller):
+def test_anonymous_and_unpermitted_callers_are_refused_before_the_read(
+    monkeypatch, caller
+):
     def fail(*args, **kwargs):
         raise AssertionError("the recommendation list must not run for this request")
 
@@ -86,7 +90,9 @@ def test_anonymous_and_unpermitted_callers_are_refused_before_the_read(monkeypat
 def test_a_read_only_role_lists_recommendations(monkeypatch, client, caller):
     caller["user"] = make_user("auditor")
     monkeypatch.setattr(
-        catalog_api, "list_recommendations", lambda limit, cursor: ([recommendation()], "next-token")
+        catalog_api,
+        "list_recommendations",
+        lambda limit, cursor: ([recommendation()], "next-token"),
     )
     response = client.get(RECOMMENDATIONS)
     assert response.status_code == 200
@@ -96,9 +102,13 @@ def test_a_read_only_role_lists_recommendations(monkeypatch, client, caller):
     assert body["items"][0]["responsible"] == "platform owner"
 
 
-def test_a_recommendation_in_the_list_carries_no_result_or_verified_flag(monkeypatch, client):
+def test_a_recommendation_in_the_list_carries_no_result_or_verified_flag(
+    monkeypatch, client
+):
     monkeypatch.setattr(
-        catalog_api, "list_recommendations", lambda limit, cursor: ([recommendation()], None)
+        catalog_api,
+        "list_recommendations",
+        lambda limit, cursor: ([recommendation()], None),
     )
     item = client.get(RECOMMENDATIONS).json()["items"][0]
     assert "result" not in item

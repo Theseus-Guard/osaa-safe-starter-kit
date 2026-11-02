@@ -71,7 +71,12 @@ from safe_kit.cases import (
     update_deadline,
 )
 from safe_kit.client_address import resolve_client_address
-from safe_kit.config_guard import is_demo, load_settings, retention_years, trusted_proxies
+from safe_kit.config_guard import (
+    is_demo,
+    load_settings,
+    retention_years,
+    trusted_proxies,
+)
 from safe_kit.db import connect
 from safe_kit.pagination import decode_cursor, encode_cursor
 from safe_kit.demo_auth import (
@@ -107,7 +112,12 @@ from safe_kit.rbac import (
     set_role_permissions,
 )
 from safe_kit.idempotency import KeyReused, Replayed, checked_key, key_scope
-from safe_kit.reporter_channel import ContactOutcome, hide_reporter, read_reporter_contact, submit_report
+from safe_kit.reporter_channel import (
+    ContactOutcome,
+    hide_reporter,
+    read_reporter_contact,
+    submit_report,
+)
 from safe_kit.revisions import etag_for, if_match_revision
 from safe_kit.security import (
     MIN_PASSWORD_LENGTH,
@@ -148,6 +158,7 @@ from safe_kit.users import (
     soft_delete_user,
     update_user,
 )
+
 
 @asynccontextmanager
 async def _startup_guard(_app: FastAPI) -> AsyncIterator[None]:
@@ -201,7 +212,7 @@ _MESSAGE_BY_STATUS = {
 ERROR_MESSAGES = {
     "precondition_required": "This change must say which version it changes. Send If-Match with the ETag you read.",
     "precondition_failed": "The record was changed by someone else. Reload it, then retry with its new ETag.",
-    "invalid_if_match": "If-Match must be the ETag of the record, a quoted whole number such as \"2\".",
+    "invalid_if_match": 'If-Match must be the ETag of the record, a quoted whole number such as "2".',
     "validation_failed": "A field in the request is missing, has the wrong type, or is out of range.",
     "unknown_field": "The request contains a field that is not allowed.",
     "revision_conflict": "The record was changed by another request. Reload it and retry.",
@@ -211,7 +222,9 @@ ERROR_MESSAGES = {
 }
 # A status string in "detail" can name a code under another name. "unavailable" is the readiness status.
 _CODE_ALIASES = {"unavailable": "temporarily_unavailable"}
-_RETRYABLE_CODES = frozenset({"temporarily_unavailable", "rate_limited", "idempotency_request_in_progress"})
+_RETRYABLE_CODES = frozenset(
+    {"temporarily_unavailable", "rate_limited", "idempotency_request_in_progress"}
+)
 
 
 def _request_id(request: Request) -> str:
@@ -237,7 +250,9 @@ def _error_response(
     code = code or _error_code(status, detail)
     error: dict[str, Any] = {
         "code": code,
-        "message": ERROR_MESSAGES.get(code, _MESSAGE_BY_STATUS.get(status, "The request could not be completed.")),
+        "message": ERROR_MESSAGES.get(
+            code, _MESSAGE_BY_STATUS.get(status, "The request could not be completed.")
+        ),
         "request_id": request_id,
         "retryable": code in _RETRYABLE_CODES,
     }
@@ -253,7 +268,9 @@ def _error_response(
 
 @app.exception_handler(StarletteHTTPException)
 def _http_error(request: Request, error: StarletteHTTPException) -> JSONResponse:
-    return _error_response(error.status_code, error.detail, _request_id(request), headers=error.headers)
+    return _error_response(
+        error.status_code, error.detail, _request_id(request), headers=error.headers
+    )
 
 
 @app.exception_handler(Replayed)
@@ -265,7 +282,9 @@ def _replayed_request(request: Request, error: Replayed) -> JSONResponse:
 @app.exception_handler(KeyReused)
 def _reused_key(request: Request, error: KeyReused) -> JSONResponse:
     """The key came with another request. Nothing of the stored request is returned."""
-    return _error_response(409, {"status": "idempotency_key_reused"}, _request_id(request))
+    return _error_response(
+        409, {"status": "idempotency_key_reused"}, _request_id(request)
+    )
 
 
 @app.exception_handler(Exception)
@@ -317,8 +336,19 @@ class _BodyLimitMiddleware:
             await self.app(scope, receive, send)
             return
         request_id = scope["state"]["request_id"]
-        declared = next((value.decode("latin-1") for name, value in scope["headers"] if name == b"content-length"), None)
-        if declared is not None and declared.isdigit() and int(declared) > JSON_BODY_LIMIT_BYTES:
+        declared = next(
+            (
+                value.decode("latin-1")
+                for name, value in scope["headers"]
+                if name == b"content-length"
+            ),
+            None,
+        )
+        if (
+            declared is not None
+            and declared.isdigit()
+            and int(declared) > JSON_BODY_LIMIT_BYTES
+        ):
             response = _error_response(413, {"status": "payload_too_large"}, request_id)
             await response(scope, receive, send)
             return
@@ -330,14 +360,19 @@ class _BodyLimitMiddleware:
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
                 if received > JSON_BODY_LIMIT_BYTES:
-                    raise HTTPException(status_code=413, detail={"status": "payload_too_large"})
+                    raise HTTPException(
+                        status_code=413, detail={"status": "payload_too_large"}
+                    )
             return message
 
         await self.app(scope, limited_receive, send)
 
 
 def _body_limit_exempt(scope: Scope) -> bool:
-    return any(scope["method"] == method and pattern.fullmatch(scope["path"]) for method, pattern in _BODY_LIMIT_EXEMPT)
+    return any(
+        scope["method"] == method and pattern.fullmatch(scope["path"])
+        for method, pattern in _BODY_LIMIT_EXEMPT
+    )
 
 
 # Added inner first: the request ID middleware is outside the body limit, so a 413 carries the request ID too.
@@ -362,15 +397,28 @@ def _error_path(loc: tuple[Any, ...]) -> str:
 
 
 @app.exception_handler(RequestValidationError)
-async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+async def validation_error_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
     # FastAPI echoes the rejected value in "input". For a password field that would send the password back, so it is dropped.
     raw = exc.errors()
-    errors = [{key: value for key, value in error.items() if key != "input"} for error in raw]
+    errors = [
+        {key: value for key, value in error.items() if key != "input"} for error in raw
+    ]
     fields = [
-        {"path": _error_path(error["loc"]), "problem": "unknown_field" if error["type"] == "extra_forbidden" else error["type"]}
+        {
+            "path": _error_path(error["loc"]),
+            "problem": "unknown_field"
+            if error["type"] == "extra_forbidden"
+            else error["type"],
+        }
         for error in raw
     ]
-    code = "unknown_field" if any(error["type"] == "extra_forbidden" for error in raw) else "validation_failed"
+    code = (
+        "unknown_field"
+        if any(error["type"] == "extra_forbidden" for error in raw)
+        else "validation_failed"
+    )
     return _error_response(400, errors, _request_id(request), code=code, fields=fields)
 
 
@@ -511,7 +559,9 @@ def _client_ip(request: Request) -> str:
     # The one place that decides the client address for demo sign-in and the login rate limits.
     # X-Forwarded-For counts only when the socket peer is a trusted proxy (client_address.py).
     peer = request.client.host if request.client else None
-    return resolve_client_address(peer, request.headers.get("x-forwarded-for"), trusted_proxies(os.environ))
+    return resolve_client_address(
+        peer, request.headers.get("x-forwarded-for"), trusted_proxies(os.environ)
+    )
 
 
 def _issue_tokens(user: User, refresh_token: str) -> TokenResponse:
@@ -588,7 +638,9 @@ def login(body: LoginRequest, request: Request, response: Response) -> TokenResp
             reason = "account_inactive"
         else:
             reason = "wrong_password"
-        record_login_failure(user.id if user else None, reason, body.username, _client_ip(request))
+        record_login_failure(
+            user.id if user else None, reason, body.username, _client_ip(request)
+        )
         raise INVALID_CREDENTIALS
     # Until the system timezone is set, only administrators may sign in: they are the ones who set it.
     if user.role != SETUP_ROLE and current_timezone_name() is None:
@@ -596,7 +648,9 @@ def login(body: LoginRequest, request: Request, response: Response) -> TokenResp
     clear_rate_limit(f"login:user:{body.username}")
     tokens = _issue_tokens(user, open_session(user.id))
     # A new session gets a new CSRF value. The browser keeps the cookies; a CLI client uses the body.
-    set_session_cookies(response, tokens.access_token, tokens.refresh_token, new_csrf_token())
+    set_session_cookies(
+        response, tokens.access_token, tokens.refresh_token, new_csrf_token()
+    )
     return tokens
 
 
@@ -617,7 +671,9 @@ class DemoSignInRequest(BaseModel):
     credential: str = Field(min_length=1, max_length=256)
 
 
-DEMO_SIGN_IN_REFUSED = HTTPException(status_code=403, detail="demo sign-in is not available")
+DEMO_SIGN_IN_REFUSED = HTTPException(
+    status_code=403, detail="demo sign-in is not available"
+)
 
 
 @app.get("/api/v1/demo/status", response_model=DemoStatus)
@@ -625,11 +681,18 @@ def demo_status() -> DemoStatus:
     """True only in demo mode with the synthetic dataset. The UI shows the demo banner and the role picker when it is true."""
     if not is_demo(os.environ):
         return DemoStatus(demo=False)
-    return DemoStatus(demo=True, users=[DemoUser(username=r.username, name=r.name, role=r.role) for r in DEMO_ROLES])
+    return DemoStatus(
+        demo=True,
+        users=[
+            DemoUser(username=r.username, name=r.name, role=r.role) for r in DEMO_ROLES
+        ],
+    )
 
 
 @app.post("/api/v1/demo/sign-in", response_model=TokenResponse)
-def demo_sign_in(body: DemoSignInRequest, request: Request, response: Response) -> TokenResponse:
+def demo_sign_in(
+    body: DemoSignInRequest, request: Request, response: Response
+) -> TokenResponse:
     """Signs in one demo role with its own per-install demo credential (safe_kit.demo_auth).
 
     Refused (403) outside demo mode and for a caller that is not on loopback. A wrong username, a username outside the
@@ -648,7 +711,9 @@ def demo_sign_in(body: DemoSignInRequest, request: Request, response: Response) 
         )
     user = find_user(body.username) if body.username in DEMO_USERNAMES else None
     # The password verifier runs even when there is no user, so the timing does not show which check failed.
-    password_ok = verify_password(demo_credential_hash(user.id) if user else None, body.credential)
+    password_ok = verify_password(
+        demo_credential_hash(user.id) if user else None, body.credential
+    )
     if user is None or not user.is_active or not password_ok:
         if user is None:
             reason = "unknown_user"
@@ -660,12 +725,16 @@ def demo_sign_in(body: DemoSignInRequest, request: Request, response: Response) 
         raise INVALID_CREDENTIALS
     clear_rate_limit(f"demo:client:{client}")
     tokens = _issue_tokens(user, open_session(user.id))
-    set_session_cookies(response, tokens.access_token, tokens.refresh_token, new_csrf_token())
+    set_session_cookies(
+        response, tokens.access_token, tokens.refresh_token, new_csrf_token()
+    )
     return tokens
 
 
 @app.post("/api/v1/auth/refresh", response_model=TokenResponse)
-def refresh(request: Request, response: Response, body: RefreshRequest | None = None) -> TokenResponse:
+def refresh(
+    request: Request, response: Response, body: RefreshRequest | None = None
+) -> TokenResponse:
     # The browser sends no body: the refresh token comes from the safe_refresh cookie, and that request must carry the CSRF header.
     if body is not None:
         presented = body.refresh_token
@@ -739,7 +808,8 @@ def me(user: User = Depends(current_user_pending_change)) -> MeResponse:
         username=user.username,
         role=user.role,
         password_change_required=user.must_change_password,
-        timezone_setup_required=user.role == SETUP_ROLE and current_timezone_name() is None,
+        timezone_setup_required=user.role == SETUP_ROLE
+        and current_timezone_name() is None,
         permissions=sorted(permissions_of(user)),
         **profile_fields(user),
     )
@@ -747,7 +817,9 @@ def me(user: User = Depends(current_user_pending_change)) -> MeResponse:
 
 def _timezone_response(setting: TimezoneSetting | None) -> SystemTimezoneResponse:
     if setting is None:
-        return SystemTimezoneResponse(timezone=None, effective_from=None, utc_offset=None)
+        return SystemTimezoneResponse(
+            timezone=None, effective_from=None, utc_offset=None
+        )
     return SystemTimezoneResponse(
         timezone=setting.timezone,
         effective_from=setting.effective_from,
@@ -768,7 +840,9 @@ def admin_set_system_timezone(
     # The effective time is the database transaction time, set inside set_timezone. The client cannot supply it.
     outcome, setting = set_timezone(body.timezone, body.current, body.confirm, actor.id)
     if outcome is ChangeOutcome.STALE:
-        raise HTTPException(status_code=409, detail="timezone changed by someone else; reload")
+        raise HTTPException(
+            status_code=409, detail="timezone changed by someone else; reload"
+        )
     if outcome is ChangeOutcome.CONFIRMATION_REQUIRED:
         raise HTTPException(status_code=422, detail="confirmation required")
     return _timezone_response(setting)
@@ -831,14 +905,20 @@ def admin_update_user(
     # Admins cannot change their own role or status. This keeps a single admin mistake from locking
     # everyone out, and another active admin can always make the change.
     if str(user_id) == actor.id:
-        raise HTTPException(status_code=409, detail="cannot change your own role or status")
-    outcome = update_user(str(user_id), role=body.role, is_active=body.is_active, actor_id=actor.id)
+        raise HTTPException(
+            status_code=409, detail="cannot change your own role or status"
+        )
+    outcome = update_user(
+        str(user_id), role=body.role, is_active=body.is_active, actor_id=actor.id
+    )
     if outcome is UpdateOutcome.NOT_FOUND:
         raise HTTPException(status_code=404, detail="user not found")
     if outcome is UpdateOutcome.PROTECTED:
         raise HTTPException(status_code=409, detail=PROTECTED_DETAIL)
     if outcome is UpdateOutcome.LAST_ADMIN:
-        raise HTTPException(status_code=409, detail="the last active admin cannot be removed")
+        raise HTTPException(
+            status_code=409, detail="the last active admin cannot be removed"
+        )
     updated = find_user_by_id(str(user_id))
     assert updated is not None
     return _summary(updated)
@@ -852,14 +932,18 @@ def admin_delete_user(
     # Soft delete only: the row is kept, the user is disabled and loses its sessions.
     # Physical removal is done by a database administrator, never through the API.
     if str(user_id) == actor.id:
-        raise HTTPException(status_code=409, detail="cannot change your own role or status")
+        raise HTTPException(
+            status_code=409, detail="cannot change your own role or status"
+        )
     outcome = soft_delete_user(str(user_id), actor_id=actor.id)
     if outcome is UpdateOutcome.NOT_FOUND:
         raise HTTPException(status_code=404, detail="user not found")
     if outcome is UpdateOutcome.PROTECTED:
         raise HTTPException(status_code=409, detail=PROTECTED_DETAIL)
     if outcome is UpdateOutcome.LAST_ADMIN:
-        raise HTTPException(status_code=409, detail="the last active admin cannot be removed")
+        raise HTTPException(
+            status_code=409, detail="the last active admin cannot be removed"
+        )
     return Response(status_code=204)
 
 
@@ -883,7 +967,9 @@ def admin_reset_password(
 
 
 @app.get("/api/v1/rbac/roles", response_model=list[RoleSummary])
-def admin_list_roles(actor: User = Depends(require_permission("users:manage"))) -> list[RoleSummary]:
+def admin_list_roles(
+    actor: User = Depends(require_permission("users:manage")),
+) -> list[RoleSummary]:
     return [
         RoleSummary(role=role, permissions=permissions)
         for role, permissions in list_role_permissions().items()
@@ -891,8 +977,13 @@ def admin_list_roles(actor: User = Depends(require_permission("users:manage"))) 
 
 
 @app.get("/api/v1/rbac/permissions", response_model=list[PermissionSummary])
-def admin_list_permissions(actor: User = Depends(require_permission("users:manage"))) -> list[PermissionSummary]:
-    return [PermissionSummary(name=name, description=description) for name, description in list_catalog()]
+def admin_list_permissions(
+    actor: User = Depends(require_permission("users:manage")),
+) -> list[PermissionSummary]:
+    return [
+        PermissionSummary(name=name, description=description)
+        for name, description in list_catalog()
+    ]
 
 
 @app.put("/api/v1/rbac/roles/{role}/permissions", response_model=RoleSummary)
@@ -919,7 +1010,9 @@ def admin_set_role_permissions(
     if outcome is RoleOutcome.REPORTING_OWNER_FIXED:
         raise HTTPException(status_code=409, detail={"status": "reporting_owner_fixed"})
     if outcome is RoleOutcome.REPORTER_CONTACT_NOT_GRANTABLE:
-        raise HTTPException(status_code=409, detail={"status": "reporter_contact_not_grantable"})
+        raise HTTPException(
+            status_code=409, detail={"status": "reporter_contact_not_grantable"}
+        )
     return RoleSummary(role=role, permissions=list_role_permissions()[role])
 
 
@@ -1213,7 +1306,12 @@ def submit_case(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> CaseResponse:
     scope_key = key_scope(
-        actor.id, "POST", CASES_ROUTE, checked_key(idempotency_key), CASES_ROUTE, body.model_dump(mode="json")
+        actor.id,
+        "POST",
+        CASES_ROUTE,
+        checked_key(idempotency_key),
+        CASES_ROUTE,
+        body.model_dump(mode="json"),
     )
     try:
         case = create_case(
@@ -1221,7 +1319,9 @@ def submit_case(
             body.awareness_time,
             created_by=actor.id,
             idempotency=scope_key,
-            render=lambda created: _case_response(created, _scope(actor)).model_dump(mode="json"),
+            render=lambda created: _case_response(created, _scope(actor)).model_dump(
+                mode="json"
+            ),
         )
     except TimezoneNotConfigured:
         raise HTTPException(status_code=409, detail="system timezone is not configured")
@@ -1249,7 +1349,12 @@ def open_report(
     """Open a case through the reporter channel. The case, its deadlines, and the reporter identity are stored together."""
     # The contact is part of the request, so it is in the fingerprint; it is never part of a stored response.
     scope_key = key_scope(
-        actor.id, "POST", REPORTS_ROUTE, checked_key(idempotency_key), REPORTS_ROUTE, body.model_dump(mode="json")
+        actor.id,
+        "POST",
+        REPORTS_ROUTE,
+        checked_key(idempotency_key),
+        REPORTS_ROUTE,
+        body.model_dump(mode="json"),
     )
     try:
         case = submit_report(
@@ -1258,7 +1363,9 @@ def open_report(
             body.contact,
             actor.id,
             idempotency=scope_key,
-            render=lambda created: _case_response(created, _scope(actor)).model_dump(mode="json"),
+            render=lambda created: _case_response(created, _scope(actor)).model_dump(
+                mode="json"
+            ),
         )
     except TimezoneNotConfigured:
         raise HTTPException(status_code=409, detail="system timezone is not configured")
@@ -1287,7 +1394,9 @@ def get_reporter_contact(
     if outcome is ContactOutcome.NO_REPORTER:
         raise HTTPException(status_code=404, detail="reporter contact not found")
     if outcome is ContactOutcome.WINDOW_CLOSED:
-        raise HTTPException(status_code=409, detail={"status": "reporter_contact_window_closed"})
+        raise HTTPException(
+            status_code=409, detail={"status": "reporter_contact_window_closed"}
+        )
     return ReporterContactResponse(case_id=str(case_id), contact=contact)
 
 
@@ -1306,7 +1415,10 @@ async def _read_import_body(request: Request) -> bytes:
 
 
 def _import_response(results: list[RecordResult]) -> CaseImportResponse:
-    counts = {status: 0 for status in ("imported", "duplicate", "conflict", "rejected", "failed")}
+    counts = {
+        status: 0
+        for status in ("imported", "duplicate", "conflict", "rejected", "failed")
+    }
     for result in results:
         counts[result.status] += 1
     return CaseImportResponse(
@@ -1342,7 +1454,12 @@ async def import_cases(
     except ImportFileError as error:
         raise HTTPException(status_code=422, detail=str(error))
     scope_key = key_scope(
-        actor.id, "POST", IMPORT_ROUTE, key, IMPORT_ROUTE, {"file_sha256": hashlib.sha256(body).hexdigest()}
+        actor.id,
+        "POST",
+        IMPORT_ROUTE,
+        key,
+        IMPORT_ROUTE,
+        {"file_sha256": hashlib.sha256(body).hexdigest()},
     )
     try:
         results = await run_in_threadpool(
@@ -1358,9 +1475,14 @@ async def import_cases(
 
 
 def _dry_run_response(
-    results: list[DryRunResult], received: int | str | None, accepted: bool, file_errors: list[str]
+    results: list[DryRunResult],
+    received: int | str | None,
+    accepted: bool,
+    file_errors: list[str],
 ) -> CaseImportDryRunResponse:
-    counts = {status: 0 for status in ("would_import", "duplicate", "conflict", "rejected")}
+    counts = {
+        status: 0 for status in ("would_import", "duplicate", "conflict", "rejected")
+    }
     for result in results:
         counts[result.status] += 1
     return CaseImportDryRunResponse(
@@ -1378,7 +1500,9 @@ def _dry_run_response(
                 case_id=result.case_id,
                 reference=result.reference,
                 title=result.title,
-                awareness_time=result.awareness_time.isoformat() if result.awareness_time else None,
+                awareness_time=result.awareness_time.isoformat()
+                if result.awareness_time
+                else None,
                 errors=list(result.errors),
             )
             for result in results
@@ -1433,14 +1557,21 @@ def list_cases(
             raise HTTPException(status_code=400, detail={"status": "invalid_cursor"})
     # One extra row tells whether another page exists; it is not returned.
     page_cases = list_visible_cases(
-        scope, limit + 1, after, q=search, status=status, include_evidence=include_evidence
+        scope,
+        limit + 1,
+        after,
+        q=search,
+        status=status,
+        include_evidence=include_evidence,
     )
     has_more = len(page_cases) > limit
     page_cases = page_cases[:limit]
     scores = current_scores_for_cases(case.id for case in page_cases)
     return CasePage(
         items=[_case_summary(case, scores.get(case.id)) for case in page_cases],
-        next_cursor=encode_cursor(page_cases[-1].created_at, page_cases[-1].id) if has_more else None,
+        next_cursor=encode_cursor(page_cases[-1].created_at, page_cases[-1].id)
+        if has_more
+        else None,
     )
 
 
@@ -1523,7 +1654,10 @@ def get_case_assignments(
     return [_assignment_response(assignment) for assignment in assignments]
 
 
-@app.get("/api/v1/cases/{case_id}/assignable-users", response_model=list[AssignableUserResponse])
+@app.get(
+    "/api/v1/cases/{case_id}/assignable-users",
+    response_model=list[AssignableUserResponse],
+)
 def get_assignable_users(
     case_id: uuid.UUID,
     actor: User = Depends(require_permission("cases:assign")),
@@ -1548,7 +1682,11 @@ def get_assignable_users(
     ]
 
 
-@app.post("/api/v1/cases/{case_id}/assignments", status_code=201, response_model=AssignmentResponse)
+@app.post(
+    "/api/v1/cases/{case_id}/assignments",
+    status_code=201,
+    response_model=AssignmentResponse,
+)
 def add_case_assignment(
     case_id: uuid.UUID,
     body: AssignmentRequest,
@@ -1577,9 +1715,13 @@ def add_case_assignment(
     if outcome is Outcome.ASSIGNEE_INACTIVE:
         raise HTTPException(status_code=422, detail="assignee is not an active user")
     if outcome is Outcome.ROLE_NOT_ASSIGNABLE:
-        raise HTTPException(status_code=422, detail="assignee must be an investigator or reviewer")
+        raise HTTPException(
+            status_code=422, detail="assignee must be an investigator or reviewer"
+        )
     if outcome is Outcome.DUPLICATE:
-        raise HTTPException(status_code=409, detail="user is already assigned to this case")
+        raise HTTPException(
+            status_code=409, detail="user is already assigned to this case"
+        )
     assert assignment is not None
     return _assignment_response(assignment)
 
@@ -1609,7 +1751,12 @@ def close_case_endpoint(
 ) -> CaseResponse:
     scope = _scope(actor)
     scope_key = key_scope(
-        actor.id, "POST", CLOSE_ROUTE, checked_key(idempotency_key), f"/api/v1/cases/{case_id}/close", body.model_dump(mode="json")
+        actor.id,
+        "POST",
+        CLOSE_ROUTE,
+        checked_key(idempotency_key),
+        f"/api/v1/cases/{case_id}/close",
+        body.model_dump(mode="json"),
     )
     outcome, blockers = close_case(
         str(case_id),
@@ -1623,7 +1770,9 @@ def close_case_endpoint(
     if outcome is Outcome.CLOSED:
         raise CASE_CLOSED
     if outcome is Outcome.BLOCKED:
-        raise HTTPException(status_code=409, detail="case cannot be closed: " + "; ".join(blockers))
+        raise HTTPException(
+            status_code=409, detail="case cannot be closed: " + "; ".join(blockers)
+        )
     return _case_response(_visible_case_or_404(case_id, scope), scope)
 
 
@@ -1636,7 +1785,12 @@ def reopen_case_endpoint(
 ) -> CaseResponse:
     scope = _scope(actor)
     scope_key = key_scope(
-        actor.id, "POST", REOPEN_ROUTE, checked_key(idempotency_key), f"/api/v1/cases/{case_id}/reopen", body.model_dump(mode="json")
+        actor.id,
+        "POST",
+        REOPEN_ROUTE,
+        checked_key(idempotency_key),
+        f"/api/v1/cases/{case_id}/reopen",
+        body.model_dump(mode="json"),
     )
     outcome = reopen_case(
         str(case_id),
@@ -1659,7 +1813,9 @@ def update_case_deadline(
     body: DeadlineUpdateRequest,
     # The disclosure approver holds cases:read_all to read the case it approves, and may not change deadlines.
     actor: User = Depends(
-        require_any_permission_except_role(DISCLOSURE_APPROVER_ROLE, "cases:read_all", "cases:read_assigned")
+        require_any_permission_except_role(
+            DISCLOSURE_APPROVER_ROLE, "cases:read_all", "cases:read_assigned"
+        )
     ),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> CaseResponse:
@@ -1689,16 +1845,22 @@ def update_case_deadline(
     if outcome is Outcome.TASK_NOT_FOUND:
         raise HTTPException(status_code=404, detail="deadline task not found")
     if outcome is Outcome.NOT_APPLICABLE_FORBIDDEN:
-        raise HTTPException(status_code=403, detail="only a triager may mark a deadline not applicable")
+        raise HTTPException(
+            status_code=403, detail="only a triager may mark a deadline not applicable"
+        )
     return _case_response(_visible_case_or_404(case_id, scope), scope)
 
 
-@app.post("/api/v1/cases/{case_id}/deadlines/{task_id}/restore", response_model=CaseResponse)
+@app.post(
+    "/api/v1/cases/{case_id}/deadlines/{task_id}/restore", response_model=CaseResponse
+)
 def restore_case_deadline(
     case_id: uuid.UUID,
     task_id: uuid.UUID,
     actor: User = Depends(
-        require_any_permission_except_role(DISCLOSURE_APPROVER_ROLE, "cases:read_all", "cases:read_assigned")
+        require_any_permission_except_role(
+            DISCLOSURE_APPROVER_ROLE, "cases:read_all", "cases:read_assigned"
+        )
     ),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> CaseResponse:
@@ -1727,9 +1889,14 @@ def restore_case_deadline(
     if outcome is Outcome.TASK_NOT_FOUND:
         raise HTTPException(status_code=404, detail="deadline task not found")
     if outcome is Outcome.NOT_MARKED_NOT_APPLICABLE:
-        raise HTTPException(status_code=409, detail={"status": "deadline_not_marked_not_applicable"})
+        raise HTTPException(
+            status_code=409, detail={"status": "deadline_not_marked_not_applicable"}
+        )
     if outcome is Outcome.NOT_APPLICABLE_FORBIDDEN:
-        raise HTTPException(status_code=403, detail="only a triager may restore a deadline that is not applicable")
+        raise HTTPException(
+            status_code=403,
+            detail="only a triager may restore a deadline that is not applicable",
+        )
     return _case_response(_visible_case_or_404(case_id, scope), scope)
 
 
@@ -1742,7 +1909,11 @@ def get_case_history(
 ) -> HistoryPage:
     permissions = permissions_of(actor)
     result = case_history(
-        str(case_id), _scope(actor), limit, offset, include_evidence="evidence:read" in permissions
+        str(case_id),
+        _scope(actor),
+        limit,
+        offset,
+        include_evidence="evidence:read" in permissions,
     )
     if result is None:
         raise CASE_NOT_FOUND
@@ -1770,10 +1941,16 @@ def get_case_history(
 
 
 @app.get("/api/v1/privacy/inventory")
-def privacy_inventory(actor: User = Depends(require_permission("privacy:read"))) -> dict:
+def privacy_inventory(
+    actor: User = Depends(require_permission("privacy:read")),
+) -> dict:
     # Metadata and row counts only. Row contents and secrets are never read or returned here.
     years = retention_years(os.environ)
-    return {"generated_at": datetime.now(UTC).isoformat(), "retention_years": years, "items": inventory(years)}
+    return {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "retention_years": years,
+        "items": inventory(years),
+    }
 
 
 @app.get("/api/v1/privacy/inventory/export")
@@ -1786,8 +1963,14 @@ def privacy_inventory_export(
     items = inventory(years)
     if format == "json":
         return JSONResponse(
-            content={"generated_at": generated_at.isoformat(), "retention_years": years, "items": items},
-            headers={"Content-Disposition": 'attachment; filename="data-inventory.json"'},
+            content={
+                "generated_at": generated_at.isoformat(),
+                "retention_years": years,
+                "items": items,
+            },
+            headers={
+                "Content-Disposition": 'attachment; filename="data-inventory.json"'
+            },
         )
     buffer = io.StringIO()
     writer = csv.writer(buffer)

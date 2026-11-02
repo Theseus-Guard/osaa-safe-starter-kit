@@ -48,7 +48,11 @@ TEXT_LIMIT = 1000
 SOURCE_LIMIT = 500
 JURISDICTION_LIMIT = 200
 # Any role that may read a case. Visibility is then decided by the case itself (cases.is_visible_on).
-CASE_READ_PERMISSIONS_FOR_RECORDS = ("cases:read_own", "cases:read_all", "cases:read_assigned")
+CASE_READ_PERMISSIONS_FOR_RECORDS = (
+    "cases:read_own",
+    "cases:read_all",
+    "cases:read_assigned",
+)
 
 CASE_NOT_FOUND = HTTPException(status_code=404, detail="case not found")
 CASE_CLOSED = HTTPException(status_code=409, detail="case is closed")
@@ -56,9 +60,23 @@ CASE_CLOSED = HTTPException(status_code=409, detail="case is closed")
 case_records_router = APIRouter(tags=["case record"])
 
 
-def _key_scope(actor: User, method: str, route: str, path: str, idempotency_key: str | None, body: BaseModel) -> KeyScope:
+def _key_scope(
+    actor: User,
+    method: str,
+    route: str,
+    path: str,
+    idempotency_key: str | None,
+    body: BaseModel,
+) -> KeyScope:
     """The idempotency scope of a write. Checked after the permission check, so a caller without it learns nothing."""
-    return key_scope(actor.id, method, route, checked_key(idempotency_key), path, body.model_dump(mode="json"))
+    return key_scope(
+        actor.id,
+        method,
+        route,
+        checked_key(idempotency_key),
+        path,
+        body.model_dump(mode="json"),
+    )
 
 
 AWARENESS_ROUTE = "/api/v1/cases/{case_id}/awareness-events"
@@ -135,7 +153,9 @@ class AwarenessEventResponse(BaseModel):
     created_at: datetime
 
 
-def _awareness_response(event: AwarenessEvent, scope: CaseScope) -> AwarenessEventResponse:
+def _awareness_response(
+    event: AwarenessEvent, scope: CaseScope
+) -> AwarenessEventResponse:
     return AwarenessEventResponse(
         id=event.id,
         case_id=event.case_id,
@@ -148,7 +168,10 @@ def _awareness_response(event: AwarenessEvent, scope: CaseScope) -> AwarenessEve
     )
 
 
-@case_records_router.get("/api/v1/cases/{case_id}/awareness-events", response_model=list[AwarenessEventResponse])
+@case_records_router.get(
+    "/api/v1/cases/{case_id}/awareness-events",
+    response_model=list[AwarenessEventResponse],
+)
 def list_case_awareness_events(
     case_id: uuid.UUID,
     actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS_FOR_RECORDS)),
@@ -161,7 +184,9 @@ def list_case_awareness_events(
 
 
 @case_records_router.post(
-    "/api/v1/cases/{case_id}/awareness-events", status_code=201, response_model=AwarenessEventResponse
+    "/api/v1/cases/{case_id}/awareness-events",
+    status_code=201,
+    response_model=AwarenessEventResponse,
 )
 def add_case_awareness_event(
     case_id: uuid.UUID,
@@ -171,7 +196,12 @@ def add_case_awareness_event(
 ) -> AwarenessEventResponse:
     scope = _scope(actor)
     scope_key = _key_scope(
-        actor, "POST", AWARENESS_ROUTE, f"/api/v1/cases/{case_id}/awareness-events", idempotency_key, body
+        actor,
+        "POST",
+        AWARENESS_ROUTE,
+        f"/api/v1/cases/{case_id}/awareness-events",
+        idempotency_key,
+        body,
     )
     outcome, event = record_awareness_event(
         str(case_id),
@@ -181,7 +211,9 @@ def add_case_awareness_event(
         body.basis,
         scope,
         idempotency=scope_key,
-        render=lambda created: _awareness_response(created, scope).model_dump(mode="json"),
+        render=lambda created: _awareness_response(created, scope).model_dump(
+            mode="json"
+        ),
     )
     if outcome is RecordOutcome.NOT_FOUND:
         raise CASE_NOT_FOUND
@@ -224,7 +256,9 @@ def _impact_response(impact: ImpactAssessment, scope: CaseScope) -> ImpactRespon
     )
 
 
-@case_records_router.get("/api/v1/cases/{case_id}/impacts", response_model=list[ImpactResponse])
+@case_records_router.get(
+    "/api/v1/cases/{case_id}/impacts", response_model=list[ImpactResponse]
+)
 def list_case_impacts(
     case_id: uuid.UUID,
     actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS_FOR_RECORDS)),
@@ -237,11 +271,18 @@ def list_case_impacts(
     return [_impact_response(impact, scope) for impact in impacts]
 
 
-@case_records_router.put("/api/v1/cases/{case_id}/impacts/{area}", response_model=ImpactResponse)
+@case_records_router.put(
+    "/api/v1/cases/{case_id}/impacts/{area}", response_model=ImpactResponse
+)
 def set_case_impact(
     case_id: uuid.UUID,
     area: Literal[
-        "affected_people_groups", "severity", "scale", "duration", "reversibility", "disproportionate_effect"
+        "affected_people_groups",
+        "severity",
+        "scale",
+        "duration",
+        "reversibility",
+        "disproportionate_effect",
     ],
     body: ImpactRequest,
     actor: User = Depends(require_permission("cases:triage")),
@@ -249,7 +290,12 @@ def set_case_impact(
 ) -> ImpactResponse:
     scope = _scope(actor)
     scope_key = _key_scope(
-        actor, "PUT", IMPACT_ROUTE, f"/api/v1/cases/{case_id}/impacts/{area}", idempotency_key, body
+        actor,
+        "PUT",
+        IMPACT_ROUTE,
+        f"/api/v1/cases/{case_id}/impacts/{area}",
+        idempotency_key,
+        body,
     )
     outcome, impact = set_impact(
         str(case_id),
@@ -365,7 +411,9 @@ def _duty_response(duty: LegalDuty, scope: CaseScope) -> LegalDutyResponse:
     )
 
 
-@case_records_router.get("/api/v1/cases/{case_id}/legal-duties", response_model=list[LegalDutyResponse])
+@case_records_router.get(
+    "/api/v1/cases/{case_id}/legal-duties", response_model=list[LegalDutyResponse]
+)
 def list_case_legal_duties(
     case_id: uuid.UUID,
     actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS_FOR_RECORDS)),
@@ -377,7 +425,11 @@ def list_case_legal_duties(
     return [_duty_response(duty, scope) for duty in duties]
 
 
-@case_records_router.post("/api/v1/cases/{case_id}/legal-duties", status_code=201, response_model=LegalDutyResponse)
+@case_records_router.post(
+    "/api/v1/cases/{case_id}/legal-duties",
+    status_code=201,
+    response_model=LegalDutyResponse,
+)
 def add_case_legal_duty(
     case_id: uuid.UUID,
     body: LegalDutyRequest,
@@ -386,7 +438,12 @@ def add_case_legal_duty(
 ) -> LegalDutyResponse:
     scope = _scope(actor)
     scope_key = _key_scope(
-        actor, "POST", LEGAL_DUTIES_ROUTE, f"/api/v1/cases/{case_id}/legal-duties", idempotency_key, body
+        actor,
+        "POST",
+        LEGAL_DUTIES_ROUTE,
+        f"/api/v1/cases/{case_id}/legal-duties",
+        idempotency_key,
+        body,
     )
     outcome, duty = add_legal_duty(
         str(case_id),
@@ -407,7 +464,9 @@ def add_case_legal_duty(
     return _duty_response(duty, scope)
 
 
-@case_records_router.patch("/api/v1/cases/{case_id}/legal-duties/{duty_id}", response_model=LegalDutyResponse)
+@case_records_router.patch(
+    "/api/v1/cases/{case_id}/legal-duties/{duty_id}", response_model=LegalDutyResponse
+)
 def update_case_legal_duty(
     case_id: uuid.UUID,
     duty_id: uuid.UUID,
@@ -435,14 +494,16 @@ class ClassificationRequest(BaseModel):
     expected_version: int = Field(ge=0)
     # The five compact trigger values of R01, or none_applies on its own. Duplicates are removed. An empty list means
     # the triggers were not assessed.
-    triggers: list[Literal[
-        "unauthorized_access_or_change",
-        "boundary_escape",
-        "confidential_data_exposure",
-        "out_of_scope_continuation",
-        "harm_inaction_near_miss",
-        "none_applies",
-    ]] = Field(default_factory=list, max_length=5)
+    triggers: list[
+        Literal[
+            "unauthorized_access_or_change",
+            "boundary_escape",
+            "confidential_data_exposure",
+            "out_of_scope_continuation",
+            "harm_inaction_near_miss",
+            "none_applies",
+        ]
+    ] = Field(default_factory=list, max_length=5)
     event_kind: Literal["incident", "near_miss", "blocked_attempt"] | None = None
     classification_rationale: str | None = Field(default=None, max_length=TEXT_LIMIT)
     responsible_operator: str | None = Field(default=None, max_length=TEXT_LIMIT)
@@ -492,7 +553,9 @@ class ClassificationResponse(BaseModel):
     created_at: datetime | None
 
 
-def _classification_response(case_id: str, classification: Classification, scope: CaseScope) -> ClassificationResponse:
+def _classification_response(
+    case_id: str, classification: Classification, scope: CaseScope
+) -> ClassificationResponse:
     return ClassificationResponse(
         case_id=case_id,
         version=classification.version,
@@ -511,7 +574,9 @@ def _classification_response(case_id: str, classification: Classification, scope
     )
 
 
-@case_records_router.get("/api/v1/cases/{case_id}/classification", response_model=ClassificationResponse)
+@case_records_router.get(
+    "/api/v1/cases/{case_id}/classification", response_model=ClassificationResponse
+)
 def get_case_classification(
     case_id: uuid.UUID,
     actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS_FOR_RECORDS)),
@@ -523,7 +588,9 @@ def get_case_classification(
     return _classification_response(str(case_id), classification, scope)
 
 
-@case_records_router.put("/api/v1/cases/{case_id}/classification", response_model=ClassificationResponse)
+@case_records_router.put(
+    "/api/v1/cases/{case_id}/classification", response_model=ClassificationResponse
+)
 def update_case_classification(
     case_id: uuid.UUID,
     body: ClassificationRequest,
@@ -536,7 +603,12 @@ def update_case_classification(
     if not scope.read_all:
         raise HTTPException(status_code=403, detail="classification_requires_full_view")
     scope_key = _key_scope(
-        actor, "PUT", CLASSIFICATION_ROUTE, f"/api/v1/cases/{case_id}/classification", idempotency_key, body
+        actor,
+        "PUT",
+        CLASSIFICATION_ROUTE,
+        f"/api/v1/cases/{case_id}/classification",
+        idempotency_key,
+        body,
     )
     values: dict[str, Any] = {
         "triggers": tuple(body.triggers),
@@ -556,7 +628,9 @@ def update_case_classification(
         values,
         scope,
         idempotency=scope_key,
-        render=lambda saved: _classification_response(str(case_id), saved, scope).model_dump(mode="json"),
+        render=lambda saved: _classification_response(
+            str(case_id), saved, scope
+        ).model_dump(mode="json"),
     )
     if outcome is RecordOutcome.NOT_FOUND:
         raise CASE_NOT_FOUND
@@ -567,7 +641,10 @@ def update_case_classification(
         # A structured detail: clients read the stable status and the version without parsing text.
         raise HTTPException(
             status_code=409,
-            detail={"status": "classification_version_conflict", "current_version": classification.version},
+            detail={
+                "status": "classification_version_conflict",
+                "current_version": classification.version,
+            },
         )
     assert classification is not None
     return _classification_response(str(case_id), classification, scope)

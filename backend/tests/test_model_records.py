@@ -52,7 +52,9 @@ def make_record(**overrides) -> ModelRecord:
         "record_id": RECORD_ID,
         "case_id": CASE_ID,
         "version": 1,
-        "configuration": model_records_api._configuration(ModelRecordRequest(**valid_body())),
+        "configuration": model_records_api._configuration(
+            ModelRecordRequest(**valid_body())
+        ),
         "evidence_item_id": None,
         "review_round_id": None,
         "recorded_at": NOW,
@@ -106,14 +108,21 @@ def test_effort_and_budget_are_set_only_when_reasoning_is_enabled(reasoning):
 @pytest.mark.parametrize("budget", [0, 10_000_001])
 def test_budget_tokens_stay_within_the_limit(budget):
     with pytest.raises(ValidationError):
-        ModelRecordRequest(**valid_body(reasoning={"mode": "enabled", "budget_tokens": budget}))
+        ModelRecordRequest(
+            **valid_body(reasoning={"mode": "enabled", "budget_tokens": budget})
+        )
 
 
 def test_a_record_links_to_one_evidence_item_or_one_review_round_not_both():
     ids = {"evidence_item_id": str(uuid.uuid4()), "review_round_id": str(uuid.uuid4())}
     with pytest.raises(ValidationError):
         ModelRecordRequest(**valid_body(**ids))
-    assert ModelRecordRequest(**valid_body(evidence_item_id=ids["evidence_item_id"])).review_round_id is None
+    assert (
+        ModelRecordRequest(
+            **valid_body(evidence_item_id=ids["evidence_item_id"])
+        ).review_round_id
+        is None
+    )
 
 
 def test_a_blank_revocation_reason_is_refused_and_the_reason_is_trimmed():
@@ -127,20 +136,33 @@ def test_a_blank_revocation_reason_is_refused_and_the_reason_is_trimmed():
 
 def test_the_configuration_read_back_is_the_request_body_so_it_can_be_replayed():
     record = make_record()
-    response = model_records_api._response(record, CaseScope.from_permissions(USER_ID, frozenset({"cases:read_all"})))
+    response = model_records_api._response(
+        record, CaseScope.from_permissions(USER_ID, frozenset({"cases:read_all"}))
+    )
     configuration = response.configuration.model_dump(mode="json")
 
     assert configuration == valid_body()
-    assert ModelRecordRequest(**configuration).model_dump(mode="json")["reasoning"] == valid_body()["reasoning"]
+    assert (
+        ModelRecordRequest(**configuration).model_dump(mode="json")["reasoning"]
+        == valid_body()["reasoning"]
+    )
 
 
 def test_the_revocation_reason_is_returned_only_to_callers_with_the_full_view():
-    revoked = make_record(version=2, revoked=True, revoked_at=NOW, revocation_reason="wrong provider alias")
+    revoked = make_record(
+        version=2,
+        revoked=True,
+        revoked_at=NOW,
+        revocation_reason="wrong provider alias",
+    )
 
     full = CaseScope.from_permissions(USER_ID, frozenset({"cases:read_all"}))
     partial = CaseScope.from_permissions(USER_ID, frozenset({"cases:read_own"}))
 
-    assert model_records_api._response(revoked, full).revocation_reason == "wrong provider alias"
+    assert (
+        model_records_api._response(revoked, full).revocation_reason
+        == "wrong provider alias"
+    )
     assert model_records_api._response(revoked, partial).revocation_reason is None
     assert model_records_api._response(revoked, partial).revoked is True
 
@@ -148,7 +170,9 @@ def test_the_revocation_reason_is_returned_only_to_callers_with_the_full_view():
 def test_a_revoked_record_is_never_usable_as_current():
     full = CaseScope.from_permissions(USER_ID, frozenset({"cases:read_all"}))
     assert model_records_api._response(make_record(), full).usable_as_current is True
-    revoked = make_record(version=2, revoked=True, revoked_at=NOW, revocation_reason="superseded")
+    revoked = make_record(
+        version=2, revoked=True, revoked_at=NOW, revocation_reason="superseded"
+    )
     assert model_records_api._response(revoked, full).usable_as_current is False
 
 
@@ -161,7 +185,9 @@ def client(monkeypatch):
         "investigator": frozenset({"evidence:read", "evidence:write"}),
         "triager": frozenset({"evidence:read"}),
     }
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: permissions.get(role, frozenset()))
+    monkeypatch.setattr(
+        auth, "permissions_for_role", lambda role: permissions.get(role, frozenset())
+    )
     yield TestClient(api.app)
     api.app.dependency_overrides.clear()
 
@@ -189,9 +215,13 @@ def test_a_reader_without_evidence_write_cannot_record_or_revoke(client, monkeyp
     monkeypatch.setattr(model_records_api, "revoke_model_record", must_not_run)
     as_role("triager")
 
-    recorded = client.post(f"/api/v1/cases/{CASE_ID}/model-records", json=valid_body(), headers=idem())
+    recorded = client.post(
+        f"/api/v1/cases/{CASE_ID}/model-records", json=valid_body(), headers=idem()
+    )
     revoked = client.post(
-        f"/api/v1/cases/{CASE_ID}/model-records/{RECORD_ID}/revoke", json={"reason": "x"}, headers=idem()
+        f"/api/v1/cases/{CASE_ID}/model-records/{RECORD_ID}/revoke",
+        json={"reason": "x"},
+        headers=idem(),
     )
     assert recorded.status_code == 403
     assert revoked.status_code == 403
@@ -202,19 +232,32 @@ def test_the_outcomes_map_to_the_documented_statuses(client, monkeypatch):
     cases = {
         ModelRecordOutcome.NOT_FOUND: (404, {"detail": "case not found"}),
         ModelRecordOutcome.CLOSED: (409, {"detail": "case is closed"}),
-        ModelRecordOutcome.REFERENCE_NOT_FOUND: (404, {"detail": "evidence item or review round not found"}),
+        ModelRecordOutcome.REFERENCE_NOT_FOUND: (
+            404,
+            {"detail": "evidence item or review round not found"},
+        ),
     }
     for outcome, (status, detail) in cases.items():
-        monkeypatch.setattr(model_records_api, "add_model_record", lambda *a, _o=outcome, **k: (_o, None))
-        response = client.post(f"/api/v1/cases/{CASE_ID}/model-records", json=valid_body(), headers=idem())
+        monkeypatch.setattr(
+            model_records_api,
+            "add_model_record",
+            lambda *a, _o=outcome, **k: (_o, None),
+        )
+        response = client.post(
+            f"/api/v1/cases/{CASE_ID}/model-records", json=valid_body(), headers=idem()
+        )
         assert response.status_code == status
         assert response.json()["detail"] == detail["detail"]
 
     monkeypatch.setattr(
-        model_records_api, "revoke_model_record", lambda *a, **k: (ModelRecordOutcome.ALREADY_REVOKED, None)
+        model_records_api,
+        "revoke_model_record",
+        lambda *a, **k: (ModelRecordOutcome.ALREADY_REVOKED, None),
     )
     response = client.post(
-        f"/api/v1/cases/{CASE_ID}/model-records/{RECORD_ID}/revoke", json={"reason": "x"}, headers=idem()
+        f"/api/v1/cases/{CASE_ID}/model-records/{RECORD_ID}/revoke",
+        json={"reason": "x"},
+        headers=idem(),
     )
     assert response.status_code == 409
     assert response.json()["detail"] == "model record is already revoked"

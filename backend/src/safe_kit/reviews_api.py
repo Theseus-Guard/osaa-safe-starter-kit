@@ -22,7 +22,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from safe_kit.auth import permissions_of, require_any_permission, require_permission
 from safe_kit.case_records_api import CASE_READ_PERMISSIONS_FOR_RECORDS
 from safe_kit.cases import CaseScope
-from safe_kit.idempotency import KeyScope, Replayed, checked_key, fingerprint, key_scope, valid_key
+from safe_kit.idempotency import (
+    KeyScope,
+    Replayed,
+    checked_key,
+    fingerprint,
+    key_scope,
+    valid_key,
+)
 from safe_kit.revisions import etag_for, if_match_revision
 from safe_kit.reviews import (
     MAX_EVIDENCE_REFERENCES,
@@ -63,10 +70,12 @@ NOT_ASSIGNED = HTTPException(
     status_code=403, detail="only an assigned reviewer can record a review"
 )
 CONFLICT_DECLARED = HTTPException(
-    status_code=403, detail="a conflict is declared on this review round, so this reviewer cannot set a layer"
+    status_code=403,
+    detail="a conflict is declared on this review round, so this reviewer cannot set a layer",
 )
 WITHDRAWN = HTTPException(
-    status_code=403, detail="this reviewer has withdrawn from this review round, so cannot set a layer"
+    status_code=403,
+    detail="this reviewer has withdrawn from this review round, so cannot set a layer",
 )
 
 reviews_router = APIRouter(tags=["reviews"])
@@ -265,7 +274,9 @@ def set_review_layer(
             expected_revision,
             scope,
             idempotency=scope_key,
-            render=lambda changed: _round_response(changed, scope, own_layer=layer).model_dump(mode="json"),
+            render=lambda changed: _round_response(
+                changed, scope, own_layer=layer
+            ).model_dump(mode="json"),
         )
     except Replayed as replayed:
         # The same request again: the first answer, with its status and body, and the ETag it carried.
@@ -292,7 +303,10 @@ def set_review_layer(
         # Only the current revision, in the body and as the ETag. The caller learns nothing else from a refused write.
         raise HTTPException(
             status_code=412,
-            detail={"status": "precondition_failed", "current_revision": review.revision},
+            detail={
+                "status": "precondition_failed",
+                "current_revision": review.revision,
+            },
             headers={"ETag": etag_for(review.revision)},
         )
     if outcome is RoundOutcome.REASON_REQUIRED:
@@ -301,7 +315,8 @@ def set_review_layer(
         )
     if outcome is RoundOutcome.EVIDENCE_REQUIRED:
         raise HTTPException(
-            status_code=422, detail="a pass needs at least one evidence item of this case"
+            status_code=422,
+            detail="a pass needs at least one evidence item of this case",
         )
     if outcome is RoundOutcome.UNKNOWN_EVIDENCE:
         raise HTTPException(

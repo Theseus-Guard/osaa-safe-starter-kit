@@ -825,7 +825,9 @@ def test_the_public_export_never_reads_restricted_references_and_omits_internal_
 
 def export_errors(document) -> list[str]:
     """Every schema error of an export document, as 'location: message'. An empty list means it is valid."""
-    validator = Draft202012Validator(json.loads(EXPORT_SCHEMA.read_text(encoding="utf-8")))
+    validator = Draft202012Validator(
+        json.loads(EXPORT_SCHEMA.read_text(encoding="utf-8"))
+    )
     return [
         f"/{'/'.join(str(part) for part in error.absolute_path)}: {error.message}"
         for error in validator.iter_errors(document)
@@ -836,18 +838,46 @@ def export_rows() -> list[tuple]:
     """The two public version rows of one superseded entry, in the column order of the public export query."""
     run_id = RUN_ID
     first = (
-        ENTRY_ID, 1, "create", "active", "Deny unscoped tool calls", "Refuse calls outside scope.",
-        None, None, USER_ID, NOW, run_id, "gateway scope", "replay", "pass", NOW,
+        ENTRY_ID,
+        1,
+        "create",
+        "active",
+        "Deny unscoped tool calls",
+        "Refuse calls outside scope.",
+        None,
+        None,
+        USER_ID,
+        NOW,
+        run_id,
+        "gateway scope",
+        "replay",
+        "pass",
+        NOW,
     )
     second = (
-        ENTRY_ID, 2, "supersession", "superseded", "Deny unscoped tool calls", "Refuse calls outside scope.",
-        "replaced", REPLACEMENT_ID, USER_ID, NOW, None, None, None, None, None,
+        ENTRY_ID,
+        2,
+        "supersession",
+        "superseded",
+        "Deny unscoped tool calls",
+        "Refuse calls outside scope.",
+        "replaced",
+        REPLACEMENT_ID,
+        USER_ID,
+        NOW,
+        None,
+        None,
+        None,
+        None,
+        None,
     )
     return [first, second]
 
 
 def test_the_export_schema_is_a_valid_draft_2020_12_schema_and_its_example_validates():
-    Draft202012Validator.check_schema(json.loads(EXPORT_SCHEMA.read_text(encoding="utf-8")))
+    Draft202012Validator.check_schema(
+        json.loads(EXPORT_SCHEMA.read_text(encoding="utf-8"))
+    )
     example = json.loads(EXPORT_EXAMPLE.read_text(encoding="utf-8"))
     assert export_errors(example) == []
     assert example["catalog_export_schema_version"] == "0.1.0"
@@ -857,7 +887,9 @@ def test_the_export_schema_refuses_a_hidden_link_or_digest_field():
     """The schema allows no field beyond the public ones. A reference or digest added to a version fails it."""
     example = json.loads(EXPORT_EXAMPLE.read_text(encoding="utf-8"))
     with_digest = copy.deepcopy(example)
-    with_digest["catalog_export"]["entries"][0]["versions"][0]["digest"] = digest_of(HIDDEN_LINK)
+    with_digest["catalog_export"]["entries"][0]["versions"][0]["digest"] = digest_of(
+        HIDDEN_LINK
+    )
     with_reference = copy.deepcopy(example)
     with_reference["catalog_export"]["entries"][0]["versions"][0]["restricted"] = {
         "reference": HIDDEN_LINK,

@@ -25,7 +25,12 @@ from safe_kit.auth import permissions_of, require_any_permission, require_permis
 from safe_kit.case_records_api import CASE_READ_PERMISSIONS_FOR_RECORDS
 from safe_kit.cases import CaseScope
 from safe_kit.idempotency import KeyScope, fingerprint, valid_key
-from safe_kit.impact import ImpactOutcome, ImpactScores, read_impact_scores, update_impact_scores
+from safe_kit.impact import (
+    ImpactOutcome,
+    ImpactScores,
+    read_impact_scores,
+    update_impact_scores,
+)
 from safe_kit.users import User
 
 IMPACT_SCORES_ROUTE = "/api/v1/cases/{case_id}/impact-scores"
@@ -81,7 +86,12 @@ def impact_response(case_id: str, scores: ImpactScores) -> ImpactScoresResponse:
 def risk_fields(scores: ImpactScores | None) -> dict[str, Any]:
     """The four risk fields of the case responses. A case with no version has every value not set."""
     if scores is None:
-        return {"risk_score": None, "impact_c": None, "impact_b": None, "impact_a": None}
+        return {
+            "risk_score": None,
+            "impact_c": None,
+            "impact_b": None,
+            "impact_a": None,
+        }
     return {
         "risk_score": scores.risk_score,
         "impact_c": scores.confidentiality,
@@ -90,12 +100,18 @@ def risk_fields(scores: ImpactScores | None) -> dict[str, Any]:
     }
 
 
-def _key_scope(actor: User, path: str, idempotency_key: str | None, body: BaseModel) -> KeyScope:
+def _key_scope(
+    actor: User, path: str, idempotency_key: str | None, body: BaseModel
+) -> KeyScope:
     """The idempotency scope of one request. Checked after the permission check, so a caller without it learns nothing."""
     if idempotency_key is None:
-        raise HTTPException(status_code=400, detail={"status": "idempotency_key_required"})
+        raise HTTPException(
+            status_code=400, detail={"status": "idempotency_key_required"}
+        )
     if not valid_key(idempotency_key):
-        raise HTTPException(status_code=400, detail={"status": "idempotency_key_invalid"})
+        raise HTTPException(
+            status_code=400, detail={"status": "idempotency_key_invalid"}
+        )
     return KeyScope(
         principal_id=actor.id,
         method="POST",
@@ -140,9 +156,13 @@ def update_case_impact_scores(
     if result.outcome is ImpactOutcome.REPLAY:
         assert result.stored is not None
         # The same request again: the first answer, with its status and body. Nothing was written.
-        return JSONResponse(status_code=result.stored.status_code, content=result.stored.body)
+        return JSONResponse(
+            status_code=result.stored.status_code, content=result.stored.body
+        )
     if result.outcome is ImpactOutcome.KEY_REUSED:
-        raise HTTPException(status_code=409, detail={"status": "idempotency_key_reused"})
+        raise HTTPException(
+            status_code=409, detail={"status": "idempotency_key_reused"}
+        )
     if result.outcome is ImpactOutcome.NOT_FOUND:
         raise CASE_NOT_FOUND
     if result.outcome is ImpactOutcome.CLOSED:
@@ -152,7 +172,10 @@ def update_case_impact_scores(
         # Only the current version is returned. The stable status lets clients react without parsing text.
         raise HTTPException(
             status_code=409,
-            detail={"status": "impact_version_conflict", "current_version": result.value.version},
+            detail={
+                "status": "impact_version_conflict",
+                "current_version": result.value.version,
+            },
         )
     assert result.value is not None
     return impact_response(str(case_id), result.value)

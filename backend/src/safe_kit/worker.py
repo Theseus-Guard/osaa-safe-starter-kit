@@ -42,7 +42,9 @@ def reconcile_pending_uploads() -> int:
     """Fail pending evidence rows older than the window. Returns how many were failed. Safe with several workers."""
     failed = fail_stale_pending()
     if failed:
-        logger.warning("marked %d stale pending evidence upload(s) as failed", len(failed))
+        logger.warning(
+            "marked %d stale pending evidence upload(s) as failed", len(failed)
+        )
     return len(failed)
 
 
@@ -70,16 +72,22 @@ def main() -> int:
                 reconcile_pending_uploads()
             except Exception as error:
                 # Logged by error type only. The next attempt is at the next interval, and the job loop keeps running.
-                logger.error("evidence reconciliation failed (%s); retrying in %d seconds", type(error).__name__,
-                             RECONCILE_SECONDS)
+                logger.error(
+                    "evidence reconciliation failed (%s); retrying in %d seconds",
+                    type(error).__name__,
+                    RECONCILE_SECONDS,
+                )
         if time.monotonic() >= next_weekly:
             next_weekly = time.monotonic() + WEEKLY_SECONDS
             try:
                 create_weekly_updates()
             except Exception as error:
                 # Logged by error type only, as above. The next attempt is at the next interval.
-                logger.error("weekly update generation failed (%s); retrying in %d seconds", type(error).__name__,
-                             WEEKLY_SECONDS)
+                logger.error(
+                    "weekly update generation failed (%s); retrying in %d seconds",
+                    type(error).__name__,
+                    WEEKLY_SECONDS,
+                )
         # Keep processing while jobs are due; sleep only when the queue is empty.
         if not run_once():
             time.sleep(IDLE_POLL_SECONDS)
@@ -87,7 +95,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
+    )
     # The startup guard runs before main() and before any database connection is opened.
     try:
         load_settings(os.environ)

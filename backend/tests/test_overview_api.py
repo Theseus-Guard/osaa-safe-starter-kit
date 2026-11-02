@@ -30,23 +30,50 @@ ALL_ROLES = (
 # Auditor and admin: the audit and ops sections.
 OPS_ROLES = {"auditor", "admin"}
 
-OWN_COUNTS = {"open_cases": 3, "opened_in_period": 1, "deadlines_due_72h": 2, "deadlines_overdue": 1}
+OWN_COUNTS = {
+    "open_cases": 3,
+    "opened_in_period": 1,
+    "deadlines_due_72h": 2,
+    "deadlines_overdue": 1,
+}
 CASE_COUNTS = {"open_cases": 9, "opened_in_period": 4}
 APPROVAL_COUNTS = {
     "pending": 2,
     "oldest_pending_age_days": 5,
     "by_template": [
-        {"template": "confidential_rapid_alert", "pending": 2, "oldest_pending_age_days": 5},
-        {"template": "de_identified_member_advisory", "pending": 0, "oldest_pending_age_days": None},
-        {"template": "redacted_public_safety_report", "pending": 0, "oldest_pending_age_days": None},
+        {
+            "template": "confidential_rapid_alert",
+            "pending": 2,
+            "oldest_pending_age_days": 5,
+        },
+        {
+            "template": "de_identified_member_advisory",
+            "pending": 0,
+            "oldest_pending_age_days": None,
+        },
+        {
+            "template": "redacted_public_safety_report",
+            "pending": 0,
+            "oldest_pending_age_days": None,
+        },
     ],
 }
 WEEKLY_COUNTS = {
     "open_significant_risk_cases": 1,
     "latest_update_date": "2026-11-01",
     "by_status": [
-        {"status": "open", "cases_with_significant_risk": 1, "cases_with_weekly_update": 1, "latest_update_date": "2026-11-01"},
-        {"status": "closed", "cases_with_significant_risk": 0, "cases_with_weekly_update": 0, "latest_update_date": None},
+        {
+            "status": "open",
+            "cases_with_significant_risk": 1,
+            "cases_with_weekly_update": 1,
+            "latest_update_date": "2026-11-01",
+        },
+        {
+            "status": "closed",
+            "cases_with_significant_risk": 0,
+            "cases_with_weekly_update": 0,
+            "latest_update_date": None,
+        },
     ],
 }
 
@@ -89,21 +116,40 @@ def calls(monkeypatch) -> list[str]:
     monkeypatch.setattr(overview, "_own_case_counts", stub("own_cases", OWN_COUNTS))
     monkeypatch.setattr(overview, "_case_counts", stub("case_counts", CASE_COUNTS))
     monkeypatch.setattr(overview, "_failed_outbox_jobs", stub("failed_outbox", 2))
-    monkeypatch.setattr(overview, "_worker_status", stub("worker", {"status": "ok", "heartbeat_age_seconds": 4}))
-    monkeypatch.setattr(overview, "_pending_password_changes", stub("pending_password", 1))
-    monkeypatch.setattr(overview, "timeseries", lambda metric, window: recorded.append(f"timeseries:{metric}") or [])
+    monkeypatch.setattr(
+        overview,
+        "_worker_status",
+        stub("worker", {"status": "ok", "heartbeat_age_seconds": 4}),
+    )
+    monkeypatch.setattr(
+        overview, "_pending_password_changes", stub("pending_password", 1)
+    )
+    monkeypatch.setattr(
+        overview,
+        "timeseries",
+        lambda metric, window: recorded.append(f"timeseries:{metric}") or [],
+    )
     monkeypatch.setattr(
         overview,
         "my_timeseries",
-        lambda metric, user_id, permissions, window: recorded.append(f"my:{metric}") or [],
+        lambda metric, user_id, permissions, window: (
+            recorded.append(f"my:{metric}") or []
+        ),
     )
-    monkeypatch.setattr(overview, "_approval_counts", stub("approvals", APPROVAL_COUNTS))
+    monkeypatch.setattr(
+        overview, "_approval_counts", stub("approvals", APPROVAL_COUNTS)
+    )
     monkeypatch.setattr(overview, "_weekly_counts", stub("weekly", WEEKLY_COUNTS))
     monkeypatch.setattr(
         overview,
         "deadline_summary",
-        lambda user_id, now: recorded.append("deadlines")
-        or [{"kind": kind, "open": 0, "overdue": 0, "done": 0, "not_applicable": 0} for kind in overview.DEADLINE_KINDS],
+        lambda user_id, now: (
+            recorded.append("deadlines")
+            or [
+                {"kind": kind, "open": 0, "overdue": 0, "done": 0, "not_applicable": 0}
+                for kind in overview.DEADLINE_KINDS
+            ]
+        ),
     )
     monkeypatch.setattr(
         overview,
@@ -113,17 +159,26 @@ def calls(monkeypatch) -> list[str]:
     monkeypatch.setattr(
         overview,
         "users_summary",
-        lambda: recorded.append("users") or {"total": 0, "pending_password_change": 0, "roles": []},
+        lambda: (
+            recorded.append("users")
+            or {"total": 0, "pending_password_change": 0, "roles": []}
+        ),
     )
     monkeypatch.setattr(
         overview,
         "outbox_summary",
-        lambda now: recorded.append("outbox") or {"counts": {}, "oldest_pending_age_seconds": None},
+        lambda now: (
+            recorded.append("outbox")
+            or {"counts": {}, "oldest_pending_age_seconds": None}
+        ),
     )
     monkeypatch.setattr(
         overview,
         "worker_status",
-        lambda now: recorded.append("worker_status") or {"status": "no_data", "heartbeat_age_seconds": None},
+        lambda now: (
+            recorded.append("worker_status")
+            or {"status": "no_data", "heartbeat_age_seconds": None}
+        ),
     )
     return recorded
 
@@ -182,8 +237,12 @@ def test_summary_denied_sections_run_no_query(as_role, calls):
     assert "weekly" not in calls
 
 
-@pytest.mark.parametrize("role", ["reporter", "triager", "auditor", "admin", "reporting_owner"])
-def test_summary_has_no_approval_or_weekly_data_outside_their_roles(as_role, calls, role):
+@pytest.mark.parametrize(
+    "role", ["reporter", "triager", "auditor", "admin", "reporting_owner"]
+)
+def test_summary_has_no_approval_or_weekly_data_outside_their_roles(
+    as_role, calls, role
+):
     body = as_role(role).get("/api/v1/overview/summary").json()
 
     assert body["approvals"] is None
@@ -196,11 +255,17 @@ def test_approval_cards_are_counts_only_for_the_approver(as_role, calls):
     body = as_role("disclosure_approver").get("/api/v1/overview/summary").json()
 
     assert body["approvals"] == APPROVAL_COUNTS
-    assert set(body["approvals"]) == {"pending", "oldest_pending_age_days", "by_template"}
+    assert set(body["approvals"]) == {
+        "pending",
+        "oldest_pending_age_days",
+        "by_template",
+    }
     assert body["own_cases"] is None
 
 
-def test_weekly_cards_are_counts_and_a_date_for_investigator_and_reviewer(as_role, calls):
+def test_weekly_cards_are_counts_and_a_date_for_investigator_and_reviewer(
+    as_role, calls
+):
     for role in ("investigator", "reviewer"):
         body = as_role(role).get("/api/v1/overview/summary").json()
 
@@ -213,7 +278,11 @@ def test_summary_admin_gets_counts_for_each_section(as_role, calls):
 
     assert body["own_cases"] is None
     assert body["case_activity"] == CASE_COUNTS
-    assert body["ops"] == {"failed_outbox_jobs": 2, "status": "ok", "heartbeat_age_seconds": 4}
+    assert body["ops"] == {
+        "failed_outbox_jobs": 2,
+        "status": "ok",
+        "heartbeat_age_seconds": 4,
+    }
     assert body["users"] == {"pending_password_change": 1}
     assert body["days"] == 30
     assert body["timezone"] == "Europe/Istanbul"
@@ -240,7 +309,14 @@ def test_deadline_summary_is_for_own_case_roles_only(as_role, calls, role):
 
 
 @pytest.mark.parametrize("role", ALL_ROLES)
-@pytest.mark.parametrize("path", ["/api/v1/audit/summary", "/api/v1/ops/outbox-summary", "/api/v1/ops/worker-status"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/audit/summary",
+        "/api/v1/ops/outbox-summary",
+        "/api/v1/ops/worker-status",
+    ],
+)
 def test_audit_and_ops_endpoints_are_for_auditor_and_admin(as_role, calls, role, path):
     response = as_role(role).get(path)
 
@@ -280,7 +356,9 @@ def test_users_summary_is_for_admin_only(as_role, calls, role):
     ],
 )
 @pytest.mark.parametrize("role", ALL_ROLES)
-def test_timeseries_metric_follows_the_role_matrix(as_role, calls, metric, allowed, role):
+def test_timeseries_metric_follows_the_role_matrix(
+    as_role, calls, metric, allowed, role
+):
     response = as_role(role).get(f"/api/v1/metrics/timeseries?metric={metric}")
 
     if role in allowed:
@@ -303,7 +381,9 @@ def test_own_series_are_read_for_the_caller_only(as_role, calls, metric):
 
 @pytest.mark.parametrize("days", [7, 30, 90])
 def test_timeseries_accepts_the_three_ranges(as_role, calls, days):
-    response = as_role("admin").get(f"/api/v1/metrics/timeseries?metric=logins_failed&days={days}")
+    response = as_role("admin").get(
+        f"/api/v1/metrics/timeseries?metric=logins_failed&days={days}"
+    )
 
     assert response.status_code == 200
     assert response.json()["days"] == days
@@ -342,7 +422,9 @@ def test_timeseries_rejects_unknown_metric(as_role, calls):
     assert calls == []
 
 
-def test_summary_answers_409_when_system_timezone_is_not_set(as_role, calls, monkeypatch):
+def test_summary_answers_409_when_system_timezone_is_not_set(
+    as_role, calls, monkeypatch
+):
     monkeypatch.setattr(overview, "current_timezone_name", lambda: None)
 
     response = as_role("admin").get("/api/v1/overview/summary")
@@ -370,7 +452,9 @@ class _FakeConnection:
         return _FakeCursor(self._rows)
 
 
-def test_deadline_summary_lists_every_kind_and_fills_missing_ones_with_zero(monkeypatch):
+def test_deadline_summary_lists_every_kind_and_fills_missing_ones_with_zero(
+    monkeypatch,
+):
     rows = [("weekly_update", 2, 1, 4, 0)]
     monkeypatch.setattr(overview, "connect", lambda: _Connected(_FakeConnection(rows)))
 
@@ -378,8 +462,20 @@ def test_deadline_summary_lists_every_kind_and_fills_missing_ones_with_zero(monk
 
     assert [item["kind"] for item in items] == list(overview.DEADLINE_KINDS)
     weekly = items[-1]
-    assert weekly == {"kind": "weekly_update", "open": 2, "overdue": 1, "done": 4, "not_applicable": 0}
-    assert items[0] == {"kind": "affected_customers", "open": 0, "overdue": 0, "done": 0, "not_applicable": 0}
+    assert weekly == {
+        "kind": "weekly_update",
+        "open": 2,
+        "overdue": 1,
+        "done": 4,
+        "not_applicable": 0,
+    }
+    assert items[0] == {
+        "kind": "affected_customers",
+        "open": 0,
+        "overdue": 0,
+        "done": 0,
+        "not_applicable": 0,
+    }
 
 
 class _Connected:
@@ -395,12 +491,16 @@ class _Connected:
 
 def test_make_window_starts_at_local_midnight_of_the_first_day():
     # 22:30 UTC on 2 November is already 3 November in Istanbul (UTC+3).
-    window = overview.make_window("Europe/Istanbul", 7, datetime(2026, 11, 2, 22, 30, tzinfo=UTC))
+    window = overview.make_window(
+        "Europe/Istanbul", 7, datetime(2026, 11, 2, 22, 30, tzinfo=UTC)
+    )
 
     assert window.dates[0] == date(2026, 10, 28)
     assert window.dates[-1] == date(2026, 11, 3)
     assert len(window.dates) == 7
-    assert window.start == datetime(2026, 10, 28, 0, 0, tzinfo=ZoneInfo("Europe/Istanbul"))
+    assert window.start == datetime(
+        2026, 10, 28, 0, 0, tzinfo=ZoneInfo("Europe/Istanbul")
+    )
 
 
 def test_make_window_has_one_date_per_day_for_the_widest_range():
@@ -444,14 +544,21 @@ def test_bucket_audit_rows_without_rows_has_no_actions():
 
 def test_my_metrics_are_timeseries_metrics_and_names_are_unique():
     assert set(overview.MY_TIMESERIES_METRICS) <= set(overview.TIMESERIES_METRICS)
-    assert len(overview.MY_TIMESERIES_METRICS) == len(set(overview.MY_TIMESERIES_METRICS))
+    assert len(overview.MY_TIMESERIES_METRICS) == len(
+        set(overview.MY_TIMESERIES_METRICS)
+    )
     assert set(overview.MY_CASE_STATUS_METRICS.values()) == {"open", "closed"}
 
 
 def test_my_action_metrics_count_only_the_audit_actions_of_the_caller_kind():
     assert overview.MY_ACTION_METRICS["my_actions_cases_opened"] == ("case.create",)
-    assert overview.MY_ACTION_METRICS["my_actions_assignments"] == ("case.assignment_added",)
-    assert overview.MY_ACTION_METRICS["my_actions_reviews"] == ("case.review_layer_set", "case.review_recorded")
+    assert overview.MY_ACTION_METRICS["my_actions_assignments"] == (
+        "case.assignment_added",
+    )
+    assert overview.MY_ACTION_METRICS["my_actions_reviews"] == (
+        "case.review_layer_set",
+        "case.review_recorded",
+    )
     assert overview.MY_ACTION_METRICS["my_actions_cases_closed"] == ("case.closed",)
 
 
@@ -475,25 +582,35 @@ def test_weekly_panel_uses_the_weekly_update_severities():
 
 def test_approval_gate_is_the_approve_permission_only():
     assert overview.sees_approvals(frozenset({"disclosures:approve"}))
-    assert not overview.sees_approvals(frozenset({"disclosures:read", "disclosures:prepare"}))
+    assert not overview.sees_approvals(
+        frozenset({"disclosures:read", "disclosures:prepare"})
+    )
     assert not overview.sees_approvals(DEFAULT_ROLE_PERMISSIONS["admin"])
 
 
 def test_approval_counts_name_every_template_and_the_oldest_age(monkeypatch):
     now = datetime(2026, 11, 2, 12, 0, tzinfo=UTC)
-    rows = [("redacted_public_safety_report", 3, datetime(2026, 10, 28, 12, 0, tzinfo=UTC))]
+    rows = [
+        ("redacted_public_safety_report", 3, datetime(2026, 10, 28, 12, 0, tzinfo=UTC))
+    ]
 
     result = overview._approval_counts(_FakeConnection(rows), now)
 
     assert result["pending"] == 3
     assert result["oldest_pending_age_days"] == 5
-    assert [item["template"] for item in result["by_template"]] == list(overview.APPROVAL_TEMPLATES)
+    assert [item["template"] for item in result["by_template"]] == list(
+        overview.APPROVAL_TEMPLATES
+    )
     assert result["by_template"][2] == {
         "template": "redacted_public_safety_report",
         "pending": 3,
         "oldest_pending_age_days": 5,
     }
-    assert result["by_template"][0] == {"template": "confidential_rapid_alert", "pending": 0, "oldest_pending_age_days": None}
+    assert result["by_template"][0] == {
+        "template": "confidential_rapid_alert",
+        "pending": 0,
+        "oldest_pending_age_days": None,
+    }
 
 
 def test_approval_counts_with_nothing_waiting_has_no_age():
@@ -503,21 +620,35 @@ def test_approval_counts_with_nothing_waiting_has_no_age():
     assert result["oldest_pending_age_days"] is None
 
 
-def test_weekly_counts_report_open_significant_risks_and_the_latest_update_date(monkeypatch):
+def test_weekly_counts_report_open_significant_risks_and_the_latest_update_date(
+    monkeypatch,
+):
     rows = [
         ("open", 2, 1, datetime(2026, 11, 1, 22, 30, tzinfo=UTC)),
         ("closed", 1, 1, datetime(2026, 10, 1, 9, 0, tzinfo=UTC)),
     ]
     window = overview.make_window("Europe/Istanbul", 7, NOW)
 
-    result = overview._weekly_counts(_FakeConnection(rows), "11111111-1111-1111-1111-111111111111", window)
+    result = overview._weekly_counts(
+        _FakeConnection(rows), "11111111-1111-1111-1111-111111111111", window
+    )
 
     assert result["open_significant_risk_cases"] == 2
     # 22:30 UTC on 1 November is already 2 November in Istanbul.
     assert result["latest_update_date"] == "2026-11-02"
     assert result["by_status"] == [
-        {"status": "open", "cases_with_significant_risk": 2, "cases_with_weekly_update": 1, "latest_update_date": "2026-11-02"},
-        {"status": "closed", "cases_with_significant_risk": 1, "cases_with_weekly_update": 1, "latest_update_date": "2026-10-01"},
+        {
+            "status": "open",
+            "cases_with_significant_risk": 2,
+            "cases_with_weekly_update": 1,
+            "latest_update_date": "2026-11-02",
+        },
+        {
+            "status": "closed",
+            "cases_with_significant_risk": 1,
+            "cases_with_weekly_update": 1,
+            "latest_update_date": "2026-10-01",
+        },
     ]
 
 
@@ -551,7 +682,12 @@ def test_my_action_series_uses_the_caller_and_the_action_list(monkeypatch):
 
     monkeypatch.setattr(overview, "_my_action_counts", fake_actions)
 
-    points = overview.my_timeseries("my_actions_reviews", "caller-id", frozenset({"reviews:write"}), window)
+    points = overview.my_timeseries(
+        "my_actions_reviews", "caller-id", frozenset({"reviews:write"}), window
+    )
 
-    assert seen == {"user_id": "caller-id", "actions": ("case.review_layer_set", "case.review_recorded")}
+    assert seen == {
+        "user_id": "caller-id",
+        "actions": ("case.review_layer_set", "case.review_recorded"),
+    }
     assert {point["date"]: point["count"] for point in points}["2026-11-02"] == 4
