@@ -121,6 +121,21 @@ def first_version(world, label: str = "AMBER", **changes) -> tuple[dict, str]:
     return response.json(), derived
 
 
+def open_attempt(world, version_id: str, purpose: str = "external_notice") -> None:
+    """Commit an open release attempt for a version, so that a direct check_release can pass. In the product the release
+    path writes the attempt and closes it in one transaction, inside the notice record or the export; a direct call of
+    check_release has no such transaction, so these tests write the open attempt themselves."""
+    attempt_id = str(uuid.uuid4())
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO release_attempts (id, attempt_id, state, purpose, case_id, package_id, version_id, actor_id)
+            SELECT %s, %s, 'attempted', %s, case_id, package_id, id, %s FROM disclosure_versions WHERE id = %s
+            """,
+            (attempt_id, attempt_id, purpose, world["people"]["approver"], version_id),
+        )
+
+
 def version_count(case_id: str) -> int:
     with connect() as conn:
         return conn.execute(
@@ -514,6 +529,7 @@ def test_a_change_after_approval_revokes_it_for_the_send_check(dworld):
         ).status_code
         == 201
     )
+    open_attempt(dworld, first["id"])
     assert disclosure.check_release(first["id"]).outcome is ReleaseOutcome.RELEASABLE
 
     changed = create(
@@ -549,6 +565,7 @@ def test_a_change_after_approval_revokes_it_for_the_send_check(dworld):
         second["digest"],
     )
     assert own.status_code == 201, own.text
+    open_attempt(dworld, second["id"])
     assert disclosure.check_release(second["id"]).outcome is ReleaseOutcome.RELEASABLE
 
 
@@ -578,6 +595,7 @@ def test_a_clear_package_is_not_releasable_before_its_approval(dworld):
     assert response.status_code == 201, response.text
     # Approving the CLEAR package records the release of its CLEAR item in the same transaction.
     assert tlp.is_release_approved(clear) is True
+    open_attempt(dworld, view["id"])
     assert disclosure.check_release(view["id"]).outcome is ReleaseOutcome.RELEASABLE
 
 

@@ -308,8 +308,9 @@ def export_disclosure_version(
     version_id: uuid.UUID,
     actor: User = Depends(require_permission("disclosures:read")),
 ) -> dict[str, Any]:
-    """The approved version as the versioned export (schemas/disclosure-export.v0.json). It is refused for a version
-    without an approval, and each export is written to the audit log without its content."""
+    """The approved version as the versioned export (schemas/disclosure-export.v0.json). It is a release: it is refused
+    for a version without an approval or without a release attempt, and each export is written to the audit log without
+    its content."""
     result = disclosure.export_version(
         str(case_id), str(version_id), _scope(actor), tlp.recipient_for(actor)
     )
@@ -321,6 +322,12 @@ def export_disclosure_version(
         raise HTTPException(status_code=409, detail={"status": "version_not_approved"})
     if result.outcome is Outcome.INTEGRITY_FAILED:
         raise HTTPException(status_code=409, detail={"status": "digest_mismatch"})
+    if result.outcome is Outcome.APPROVAL_MISMATCH:
+        raise HTTPException(status_code=409, detail={"status": "approval_mismatch"})
+    if result.outcome is Outcome.RELEASE_APPROVAL_MISSING:
+        raise HTTPException(status_code=409, detail={"status": "release_approval_missing"})
+    if result.outcome is Outcome.RELEASE_TRACE_MISSING:
+        raise HTTPException(status_code=409, detail={"status": "release_trace_missing"})
     assert result.outcome is Outcome.OK and result.value is not None
     return result.value
 

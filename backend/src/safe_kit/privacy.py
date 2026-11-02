@@ -728,6 +728,19 @@ CATALOG: tuple[TableEntry, ...] = (
         deletion_mode="Soft delete (is_deleted, deleted_at). The application never removes rows.",
         created_column="created_at",
     ),
+    TableEntry(
+        table="release_attempts",
+        description="Each release of a disclosure version (a notice record or an export): the attempt, and its outcome, done or refused with a reason code.",
+        category="disclosure",
+        contains_personal_data=True,
+        personal_fields=("actor_id (links to the person who attempted the release)",),
+        purpose="Showing that a release was attempted and whether it went through, and why a refused release was refused, so that a release without a trace is never counted.",
+        retention="Kept with its version. Retention is not defined yet.",
+        retention_defined=False,
+        security="Insert-only: a trigger rejects every change, and an outcome must close an open attempt of the same version and purpose (database trigger). Written only by the release path, in the same transaction as the release.",
+        deletion_mode="Soft delete (is_deleted, deleted_at). The application never removes rows.",
+        created_column="created_at",
+    ),
 )
 
 

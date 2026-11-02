@@ -17,7 +17,7 @@ These need PostgreSQL: they run with SAFE_TEST_DATABASE=1 and the SAFE_DB_* sett
 from safe_kit import disclosure
 from safe_kit.disclosure import ReleaseOutcome
 from test_evidence_lifecycle import provider, requires_database  # provider: fixture
-from test_fixture_p6_disclosure import approve, body, create, dworld, first_version, read  # dworld: fixture
+from test_fixture_p6_disclosure import approve, body, create, dworld, first_version, open_attempt, read  # dworld: fixture
 from test_fixture_t06a_redaction import world  # world: fixture
 from test_fixture_t12_notices import payload, read_list, record, row_count
 
@@ -29,6 +29,7 @@ def test_an_approved_package_is_noticed_and_a_change_revokes_the_approval_and_re
 
     approved = approve(dworld, "approver", first["id"], first["recipient"], first["purpose"], first["digest"])
     assert approved.status_code == 201, approved.text
+    open_attempt(dworld, first["id"])
     assert disclosure.check_release(first["id"]).outcome is ReleaseOutcome.RELEASABLE
 
     notice = record(dworld, "approver", first["id"], payload(recipient_ref="cert-07"))
@@ -67,5 +68,6 @@ def test_an_approved_package_is_noticed_and_a_change_revokes_the_approval_and_re
     # The new version passes only with its own approval, bound to its own digest.
     own = approve(dworld, "approver", second["id"], second["recipient"], second["purpose"], second["digest"])
     assert own.status_code == 201, own.text
+    open_attempt(dworld, second["id"])
     assert disclosure.check_release(second["id"]).outcome is ReleaseOutcome.RELEASABLE
     assert record(dworld, "approver", second["id"], payload(recipient_ref="cert-08")).status_code == 201
