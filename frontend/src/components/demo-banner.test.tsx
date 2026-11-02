@@ -13,13 +13,13 @@ describe("DemoBanner", () => {
   });
 
   it("shows the demo text when the server reports demo mode", async () => {
-    vi.mocked(demoStatus).mockResolvedValue({ demo: true });
+    vi.mocked(demoStatus).mockResolvedValue({ demo: true, users: [] });
     render(<DemoBanner />);
     expect(await screen.findByText("DEMO / SYNTHETIC DATA")).toBeInTheDocument();
   });
 
   it("renders nothing when the server reports production", async () => {
-    vi.mocked(demoStatus).mockResolvedValue({ demo: false });
+    vi.mocked(demoStatus).mockResolvedValue({ demo: false, users: [] });
     const { container } = render(<DemoBanner />);
     await vi.waitFor(() => expect(demoStatus).toHaveBeenCalled());
     await vi.waitFor(() => expect(container).toBeEmptyDOMElement());

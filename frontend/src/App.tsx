@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { changePassword, login, logout, me, Me, onSessionEnded, restoreSession } from "./api";
+import { changePassword, demoSignIn, login, logout, me, Me, onSessionEnded, restoreSession } from "./api";
 import { watchIdle } from "./idle";
 import { ChangePassword } from "./screens/ChangePassword";
 import { Home } from "./screens/Home";
@@ -67,12 +67,23 @@ export function App() {
     });
   }, [phase]);
 
-  async function handleLogin(username: string, password: string) {
-    setNotice(null);
-    await login(username, password);
+  // Shared by the password sign-in and the demo sign-in: both leave a session cookie behind.
+  async function completeSignIn() {
     const current = await me();
     setProfile(current);
     setPhase(phaseFor(current));
+  }
+
+  async function handleLogin(username: string, password: string) {
+    setNotice(null);
+    await login(username, password);
+    await completeSignIn();
+  }
+
+  async function handleDemoSignIn(username: string, credential: string) {
+    setNotice(null);
+    await demoSignIn(username, credential);
+    await completeSignIn();
   }
 
   // Shared by the forced first-login change and the voluntary change: the backend ends all sessions,
@@ -115,7 +126,7 @@ export function App() {
   if (phase === "starting") return <p className="p-4 text-sm text-muted-foreground">Loading…</p>;
 
   // The login page has its own full-page layout, with its own header and footer.
-  if (phase === "anonymous") return <Login notice={notice} onLogin={handleLogin} />;
+  if (phase === "anonymous") return <Login notice={notice} onLogin={handleLogin} onDemoSignIn={handleDemoSignIn} />;
 
   // The first-login steps stay outside the dashboard shell (no clock and no user menu here).
   return (

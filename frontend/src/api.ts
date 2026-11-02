@@ -244,9 +244,28 @@ export async function login(username: string, password: string): Promise<void> {
   startSession();
 }
 
-// Public: the server says whether it runs in demo mode with the synthetic dataset. The demo banner depends on it only.
+// Demo sign-in: one demo role with its own credential. The server answers 401 for a wrong credential, a wrong username,
+// and a username outside the demo roles alike. The page holds no credential after the request.
+export async function demoSignIn(username: string, credential: string): Promise<void> {
+  await request<unknown>("/demo/sign-in", {
+    method: "POST",
+    json: { username, credential },
+    auth: false,
+  });
+  startSession();
+}
+
+// Public: the server says whether it runs in demo mode with the synthetic dataset, and lists the demo roles that can
+// sign in (names and roles only). The demo banner and the login screen depend on it. Outside demo mode users is empty.
+export interface DemoUser {
+  username: string;
+  name: string;
+  role: string;
+}
+
 export interface DemoStatus {
   demo: boolean;
+  users: DemoUser[];
 }
 
 export function demoStatus(): Promise<DemoStatus> {

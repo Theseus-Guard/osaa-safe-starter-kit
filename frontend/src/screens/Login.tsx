@@ -1,6 +1,6 @@
 import { EyeIcon, EyeOffIcon, Loader2Icon, OctagonXIcon, TriangleAlertIcon } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
-import { ApiError, readiness, Readiness } from "../api";
+import { ApiError, DemoStatus, demoStatus, readiness, Readiness } from "../api";
 import { describeCode, describeError } from "../messages";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,13 @@ import { Input } from "@/components/ui/input";
 interface Props {
   notice: string | null;
   onLogin: (username: string, password: string) => Promise<void>;
+  onDemoSignIn: (username: string, credential: string) => Promise<void>;
 }
+
+// The native select, styled like the text inputs. It lists the demo roles in the server's order.
+const SELECT_CLASS =
+  "h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none " +
+  "focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50";
 
 // Caution tone for setup states. It is not a failed sign-in, so it is not destructive red.
 const WARNING_ALERT =
@@ -25,26 +31,39 @@ interface Failure {
   message: string;
 }
 
-export function Login({ notice, onLogin }: Props) {
+export function Login({ notice, onLogin, onDemoSignIn }: Props) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [failure, setFailure] = useState<Failure | null>(null);
   const [busy, setBusy] = useState(false);
   const [state, setState] = useState<Readiness | "checking">("checking");
+  // Demo mode only: the role picker and the demo credential field. Null until the server has answered.
+  const [demo, setDemo] = useState<DemoStatus | null>(null);
+  const [demoRole, setDemoRole] = useState("");
 
   useEffect(() => {
     readiness()
       .then(setState)
       .catch(() => setState("unavailable"));
+    demoStatus()
+      .then(setDemo)
+      .catch(() => setDemo(null));
   }, []);
+
+  const demoMode = demo?.demo === true && demo.users.length > 0;
+  const selectedRole = demoRole || demo?.users[0]?.username || "";
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setFailure(null);
     setBusy(true);
     try {
-      await onLogin(username, password);
+      if (demoMode) {
+        await onDemoSignIn(selectedRole, password);
+      } else {
+        await onLogin(username, password);
+      }
     } catch (caught) {
       // A 503 at login means the system timezone is not set yet, and this non-admin account cannot continue.
       if (caught instanceof ApiError && caught.status === 503) {
@@ -111,48 +130,106 @@ export function Login({ notice, onLogin }: Props) {
                 ))}
 
               <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+                {demoMode && (
+                  <p className="text-sm text-muted-foreground">
+                    Demo sign-in. Each role has its own credential, kept on the demo server.
+                  </p>
+                )}
                 <FieldGroup>
-                  <Field>
-                    <FieldLabel htmlFor="login-username">Username</FieldLabel>
-                    <Input
-                      id="login-username"
-                      name="username"
-                      value={username}
-                      onChange={(event) => setUsername(event.target.value)}
-                      autoComplete="username"
-                      autoFocus
-                      required
-                      disabled={unavailable}
-                    />
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="login-password">Password</FieldLabel>
-                    <div className="relative">
+                  {demoMode && demo && (
+                    <>
+                      <Field>
+                        <FieldLabel htmlFor="login-demo-role">Demo role</FieldLabel>
+                        <select
+                          id="login-demo-role"
+                          name="username"
+                          className={SELECT_CLASS}
+                          value={selectedRole}
+                          onChange={(event) => setDemoRole(event.target.value)}
+                          disabled={unavailable}
+                        >
+                          {demo.users.map((user) => (
+                            <option key={user.username} value={user.username}>
+                              {user.name} ({user.role})
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="login-demo-credential">Demo credential</FieldLabel>
+                        <div className="relative">
+                          <Input
+                            id="login-demo-credential"
+                            name="credential"
+                            type={showPassword ? "text" : "password"}
+                            value={password}
+                            onChange={(event) => setPassword(event.target.value)}
+                            autoComplete="off"
+                            required
+                            disabled={unavailable}
+                            className="pr-10"
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            className="absolute top-1/2 right-1 -translate-y-1/2"
+                            aria-label={showPassword ? "Hide credential" : "Show credential"}
+                            aria-pressed={showPassword}
+                            disabled={unavailable}
+                            onClick={() => setShowPassword((value) => !value)}
+                          >
+                            {showPassword ? <EyeOffIcon /> : <EyeIcon />}
+                          </Button>
+                        </div>
+                      </Field>
+                    </>
+                  )}
+                  {!demoMode && (
+                    <>
+                    <Field>
+                      <FieldLabel htmlFor="login-username">Username</FieldLabel>
                       <Input
-                        id="login-password"
-                        name="password"
-                        type={showPassword ? "text" : "password"}
-                        value={password}
-                        onChange={(event) => setPassword(event.target.value)}
-                        autoComplete="current-password"
+                        id="login-username"
+                        name="username"
+                        value={username}
+                        onChange={(event) => setUsername(event.target.value)}
+                        autoComplete="username"
+                        autoFocus
                         required
                         disabled={unavailable}
-                        className="pr-10"
                       />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        className="absolute top-1/2 right-1 -translate-y-1/2"
-                        aria-label={showPassword ? "Hide password" : "Show password"}
-                        aria-pressed={showPassword}
-                        disabled={unavailable}
-                        onClick={() => setShowPassword((value) => !value)}
-                      >
-                        {showPassword ? <EyeOffIcon /> : <EyeIcon />}
-                      </Button>
-                    </div>
-                  </Field>
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="login-password">Password</FieldLabel>
+                      <div className="relative">
+                        <Input
+                          id="login-password"
+                          name="password"
+                          type={showPassword ? "text" : "password"}
+                          value={password}
+                          onChange={(event) => setPassword(event.target.value)}
+                          autoComplete="current-password"
+                          required
+                          disabled={unavailable}
+                          className="pr-10"
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          className="absolute top-1/2 right-1 -translate-y-1/2"
+                          aria-label={showPassword ? "Hide password" : "Show password"}
+                          aria-pressed={showPassword}
+                          disabled={unavailable}
+                          onClick={() => setShowPassword((value) => !value)}
+                        >
+                          {showPassword ? <EyeOffIcon /> : <EyeIcon />}
+                        </Button>
+                      </div>
+                    </Field>
+                    </>
+                  )}
                 </FieldGroup>
                 <Button type="submit" className="w-full" disabled={busy || unavailable} aria-busy={busy}>
                   {busy && <Loader2Icon className="animate-spin" />}
