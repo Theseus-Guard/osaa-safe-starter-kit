@@ -140,7 +140,7 @@ def test_filing_an_appeal_needs_a_case_read_permission(client, caller, monkeypat
     monkeypatch.setattr(review_independence_api, "file_appeal", forbid("file_appeal"))
     monkeypatch.setattr(review_independence_api, "list_appeals", forbid("list_appeals"))
     as_role(caller, ADMIN_ID, role)
-    body = {"grounds": "Wrong outcome", "independent_reviewer_id": OTHER_REVIEWER_ID}
+    body = {"grounds": "Wrong outcome"}
     assert client.post(APPEAL_URL, headers=idem(), json=body).status_code == 403
     assert client.get(APPEAL_URL).status_code == 403
 
@@ -148,14 +148,14 @@ def test_filing_an_appeal_needs_a_case_read_permission(client, caller, monkeypat
 def test_a_reporter_may_file_an_appeal_but_not_declare_a_conflict(client, caller, monkeypatch):
     seen = {}
 
-    def fake_file(round_id, grounds, independent_reviewer_id, scope, *, idempotency, render):
+    def fake_file(round_id, grounds, scope, *, idempotency, render):
         seen["scope"] = scope
         return IndependenceOutcome.OK, appeal_entry(), None
 
     monkeypatch.setattr(review_independence_api, "file_appeal", fake_file)
     monkeypatch.setattr(review_independence_api, "declare_conflict", forbid("declare_conflict"))
     as_role(caller, REPORTER_ID, "reporter")
-    body = {"grounds": "Wrong outcome", "independent_reviewer_id": OTHER_REVIEWER_ID}
+    body = {"grounds": "Wrong outcome"}
     assert client.post(APPEAL_URL, headers=idem(), json=body).status_code == 201
     assert seen["scope"] == CaseScope(user_id=REPORTER_ID, read_own=True)
     assert client.post(CONFLICT_URL, headers=idem(), json={"kind": "declared", "description": "x"}).status_code == 403
@@ -165,7 +165,7 @@ def test_the_permission_refusal_comes_before_the_key_check(client, caller):
     as_role(caller, ADMIN_ID, "admin")
     assert client.post(CONFLICT_URL, json={"kind": "declared", "description": "x"}).status_code == 403
     assert client.post(RECUSAL_URL, json={"replacement_id": OTHER_REVIEWER_ID}).status_code == 403
-    assert client.post(APPEAL_URL, json={"grounds": "x", "independent_reviewer_id": OTHER_REVIEWER_ID}).status_code == 403
+    assert client.post(APPEAL_URL, json={"grounds": "x"}).status_code == 403
 
 
 # --- Idempotency-Key ---------------------------------------------------------------------------------------------------
@@ -178,7 +178,7 @@ def test_each_side_effect_post_requires_an_idempotency_key(client, caller, monke
     monkeypatch.setattr(review_independence_api, "record_recusal", forbid("record_recusal"))
     monkeypatch.setattr(review_independence_api, "file_appeal", forbid("file_appeal"))
     body = {"kind": "declared", "description": "x"} if url == CONFLICT_URL else (
-        {"replacement_id": OTHER_REVIEWER_ID} if url == RECUSAL_URL else {"grounds": "x", "independent_reviewer_id": OTHER_REVIEWER_ID}
+        {"replacement_id": OTHER_REVIEWER_ID} if url == RECUSAL_URL else {"grounds": "x"}
     )
     missing = client.post(url, json=body)
     assert missing.status_code == 400
@@ -251,7 +251,7 @@ def test_a_stored_answer_is_replayed_with_its_status_and_body(client, caller, mo
     [
         (CONFLICT_URL, "declare_conflict", {"kind": "declared", "description": "x"}),
         (RECUSAL_URL, "record_recusal", {"replacement_id": OTHER_REVIEWER_ID}),
-        (APPEAL_URL, "file_appeal", {"grounds": "x", "independent_reviewer_id": OTHER_REVIEWER_ID}),
+        (APPEAL_URL, "file_appeal", {"grounds": "x"}),
     ],
 )
 def test_a_key_used_with_another_request_is_refused_without_its_content(client, caller, monkeypatch, url, service, body):
@@ -309,9 +309,18 @@ def test_the_replacement_is_required_and_must_be_an_identifier(client, caller, m
 def test_appeal_grounds_are_required_and_limited(client, caller, monkeypatch):
     as_role(caller, REVIEWER_ID, "reviewer")
     monkeypatch.setattr(review_independence_api, "file_appeal", forbid("file_appeal"))
-    assert client.post(APPEAL_URL, headers=idem(), json={"grounds": "  ", "independent_reviewer_id": OTHER_REVIEWER_ID}).status_code == 422
-    assert client.post(APPEAL_URL, headers=idem(), json={"grounds": "x" * 2001, "independent_reviewer_id": OTHER_REVIEWER_ID}).status_code == 422
-    assert client.post(APPEAL_URL, headers=idem(), json={"grounds": "x", "independent_reviewer_id": "nobody"}).status_code == 422
+    assert client.post(APPEAL_URL, headers=idem(), json={"grounds": "  "}).status_code == 422
+    assert client.post(APPEAL_URL, headers=idem(), json={"grounds": "x" * 2001}).status_code == 422
+
+
+@pytest.mark.parametrize("reviewer", [OTHER_REVIEWER_ID, "nobody", None])
+def test_an_appeal_that_names_a_reviewer_is_refused(client, caller, monkeypatch, reviewer):
+    # The filer cannot choose the independent reviewer: the field is refused, whatever its value.
+    as_role(caller, REVIEWER_ID, "reviewer")
+    monkeypatch.setattr(review_independence_api, "file_appeal", forbid("file_appeal"))
+    response = client.post(APPEAL_URL, headers=idem(), json={"grounds": "x", "independent_reviewer_id": reviewer})
+    assert response.status_code == 422
+    assert any(error["loc"][-1] == "independent_reviewer_id" for error in response.json()["detail"])
 
 
 # --- refusal mapping ---------------------------------------------------------------------------------------------------
@@ -367,25 +376,14 @@ def test_recusal_refusals_map_to_their_status_codes(client, caller, monkeypatch,
 @pytest.mark.parametrize(
     ("outcome", "status", "detail"),
     [
-        (IndependenceOutcome.INDEPENDENT_IS_FILER, 422, "the independent reviewer cannot be the person who files the appeal"),
-        (
-            IndependenceOutcome.INDEPENDENT_NOT_ELIGIBLE,
-            422,
-            "the independent reviewer must be an active, assigned user who holds reviews:write",
-        ),
-        (IndependenceOutcome.INDEPENDENT_TOOK_PART, 422, "the independent reviewer took part in this review round"),
-        (
-            IndependenceOutcome.INDEPENDENT_CONFLICTED,
-            422,
-            "the independent reviewer has a declared conflict on this review round",
-        ),
+        (IndependenceOutcome.NO_ELIGIBLE_REVIEWER, 409, {"status": "no_eligible_reviewer"}),
         (IndependenceOutcome.NOT_FOUND, 404, "review not found"),
     ],
 )
 def test_appeal_refusals_map_to_their_status_codes(client, caller, monkeypatch, outcome, status, detail):
     as_role(caller, REPORTER_ID, "reporter")
     monkeypatch.setattr(review_independence_api, "file_appeal", lambda *args, **kwargs: (outcome, None, None))
-    response = client.post(APPEAL_URL, headers=idem(), json={"grounds": "x", "independent_reviewer_id": OTHER_REVIEWER_ID})
+    response = client.post(APPEAL_URL, headers=idem(), json={"grounds": "x"})
     assert response.status_code == status
     assert response.json()["detail"] == detail
 

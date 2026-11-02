@@ -582,6 +582,62 @@ def _task_list(base_url: str, args: argparse.Namespace) -> None:
     _with_session(base_url, args, action)
 
 
+TASK_UPDATE_MESSAGES = {
+    403: "forbidden: only a triager can mark a deadline not applicable or change one that is not applicable",
+    404: "case or deadline task not found, or its case is not available to your account",
+    409: "the case is closed, so its deadlines cannot change",
+    422: "the reason is missing or too long: a not applicable deadline needs a reason of 1 to 1000 characters",
+}
+TASK_RESTORE_MESSAGES = {
+    403: "forbidden: only a triager can restore a deadline that is not applicable",
+    404: "case or deadline task not found, or its case is not available to your account",
+    409: "the case is closed, or the deadline is not marked not applicable",
+}
+
+
+def _render_tasks_change(heading: str):
+    def render(raw: bytes) -> None:
+        print(heading)
+        _print_tasks(_json_object(raw))
+
+    return render
+
+
+def _task_update(base_url: str, args: argparse.Namespace) -> None:
+    """Set one deadline task to open, done or not applicable. Only one task changes; due dates never change."""
+    case_id = _case_id_arg(args.case_id)
+    task_id = _uuid_arg(args.task_id, "TASK_ID")
+    status = args.status.replace("-", "_")
+    reason = args.reason.strip() if args.reason is not None else None
+    if status == "not_applicable" and not reason:
+        raise UsageError("--reason is required when --status is not-applicable")
+    if status != "not_applicable" and args.reason is not None:
+        raise UsageError("--reason is only allowed with --status not-applicable")
+    _write_case(
+        base_url,
+        args,
+        "PATCH",
+        f"/api/v1/cases/{case_id}/deadlines/{task_id}",
+        payload={"status": status, "reason": reason if status == "not_applicable" else None},
+        messages=TASK_UPDATE_MESSAGES,
+        render=_render_tasks_change("Deadline task updated."),
+    )
+
+
+def _task_restore(base_url: str, args: argparse.Namespace) -> None:
+    """Turn off the not applicable exception of one task: it goes back to the status it had before."""
+    case_id = _case_id_arg(args.case_id)
+    task_id = _uuid_arg(args.task_id, "TASK_ID")
+    _write_case(
+        base_url,
+        args,
+        "POST",
+        f"/api/v1/cases/{case_id}/deadlines/{task_id}/restore",
+        messages=TASK_RESTORE_MESSAGES,
+        render=_render_tasks_change("Deadline task restored to the status it had before."),
+    )
+
+
 def _write_case(
     base_url: str,
     args: argparse.Namespace,
@@ -664,7 +720,6 @@ def _render_classification(raw: bytes) -> None:
     print(f"Classification saved as version {classification['version']}.")
     print(f"  Triggers:          {', '.join(classification['triggers']) or '-'}")
     print(f"  Event kind:        {classification['event_kind'] or '-'}")
-    print(f"  Internal option:   {'yes' if classification['internal_incident_option'] else 'no'}")
     print(f"  Next update (UTC): {classification['next_update_due_at'] or '-'}")
 
 
@@ -998,7 +1053,7 @@ def _render_recusal(raw: bytes) -> None:
 
 def _render_appeal(raw: bytes) -> None:
     entry = _json_object(raw)
-    print("Appeal filed. It is assigned to the independent reviewer; the product does not decide it.")
+    print("Appeal filed. The system named the independent reviewer; the product does not decide the appeal.")
     print(f"  ID:               {entry['id']}")
     print(f"  Round ID:         {entry['round_id']}")
     print(f"  Filed by:         {entry['filed_by']}")
@@ -1021,7 +1076,7 @@ RECUSAL_MESSAGES = {
 APPEAL_MESSAGES = {
     403: "forbidden: filing an appeal needs a case read permission",
     404: "review round not found, or its case is not available to your account",
-    422: "the independent reviewer must be another active, assigned user who holds reviews:write, did not take part in this round, and has no declared conflict on it",
+    409: "no reviewer is eligible for this round: the system needs an active, assigned user with reviews:write who did not take part in the round and has no declared conflict on it",
 }
 
 
@@ -1084,14 +1139,11 @@ def _review_recuse(base_url: str, args: argparse.Namespace) -> None:
 
 
 def _review_appeal(base_url: str, args: argparse.Namespace) -> None:
-    """File an appeal against a review round for an independent reviewer. Without a key, each run gets a new one."""
+    """File an appeal against a review round. The system names the independent reviewer. Without a key, each run gets a new one."""
     round_id = _uuid_arg(args.round_id, "ROUND_ID")
     if not args.grounds.strip():
         raise UsageError("--grounds must not be blank")
-    payload = {
-        "grounds": args.grounds,
-        "independent_reviewer_id": _uuid_arg(args.independent, "--independent"),
-    }
+    payload = {"grounds": args.grounds}
     key = args.idempotency_key or str(uuid.uuid4())
 
     def action(base: str, token: str) -> None:
@@ -1135,7 +1187,6 @@ def _classification_set(base_url: str, args: argparse.Namespace) -> None:
         "expected_version": args.expected_version,
         "triggers": args.trigger or [],
         "event_kind": args.event_kind,
-        "internal_incident_option": args.internal_incident_option,
         "classification_rationale": args.classification_rationale,
         "responsible_operator": args.responsible_operator,
         "affected_versions": args.affected_versions,
@@ -1310,7 +1361,6 @@ def _classification_show(base_url: str, args: argparse.Namespace) -> None:
         print(f"Classification version {classification['version']}:")
         _print_field("Triggers", ", ".join(classification["triggers"]) or "not assessed")
         _print_field("Event kind", classification["event_kind"] or "-")
-        _print_field("Internal option", "yes" if classification["internal_incident_option"] else "no")
         for label, field in CLASSIFICATION_FREE_TEXT:
             _print_field(label, _free_text(classification[field], full_view))
         _print_field("Next update (UTC)", classification["next_update_due_at"] or "-")
@@ -1553,6 +1603,24 @@ def build_parser() -> argparse.ArgumentParser:
     task_listing.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     _add_auth_options(task_listing)
     task_listing.set_defaults(handler=_task_list)
+
+    task_update = task_commands.add_parser(
+        "update", help="Set a deadline task to open, done or not-applicable. Not applicable needs a reason"
+    )
+    task_update.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    task_update.add_argument("task_id", metavar="TASK_ID", help="Deadline task ID (UUID), from task list")
+    task_update.add_argument("--status", required=True, choices=["open", "done", "not-applicable"], help="New status")
+    task_update.add_argument("--reason", help="Why the deadline does not apply, 1 to 1000 characters (not-applicable only)")
+    _add_auth_options(task_update)
+    task_update.set_defaults(handler=_task_update)
+
+    task_restore = task_commands.add_parser(
+        "restore", help="Turn off a not-applicable deadline: it returns to the status it had before"
+    )
+    task_restore.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    task_restore.add_argument("task_id", metavar="TASK_ID", help="Deadline task ID (UUID), from task list")
+    _add_auth_options(task_restore)
+    task_restore.set_defaults(handler=_task_restore)
     return parser
 
 
@@ -1690,15 +1758,10 @@ def _add_case_update_commands(case_commands) -> None:
     review_recuse.set_defaults(handler=_review_recuse)
     review_appeal = review_commands.add_parser(
         "appeal",
-        help="File an appeal against a review round for an independent reviewer. No approval is needed",
+        help="File an appeal against a review round. The system names the independent reviewer. No approval is needed",
     )
     review_appeal.add_argument("round_id", metavar="ROUND_ID", help="Review round ID (UUID)")
     review_appeal.add_argument("--grounds", required=True, help="Grounds of the appeal, up to 2000 characters")
-    review_appeal.add_argument(
-        "--independent", required=True, metavar="USER_ID",
-        help="User ID (UUID) of the independent reviewer: an active, assigned user with reviews:write who did not take "
-        "part in the round and has no declared conflict on it",
-    )
     review_appeal.add_argument(
         "--idempotency-key",
         metavar="KEY",
@@ -1731,11 +1794,6 @@ def _add_case_update_commands(case_commands) -> None:
         + ". Repeat for each trigger (up to five). none_applies cannot be combined with another value",
     )
     classification_set.add_argument("--event-kind", choices=EVENT_KINDS, help="Event kind")
-    classification_set.add_argument(
-        "--internal-incident-option",
-        action="store_true",
-        help="Use the internal incident option. Needs --classification-rationale",
-    )
     classification_set.add_argument("--classification-rationale", help="Rationale, up to 1000 characters")
     classification_set.add_argument("--responsible-operator", help="Responsible operator, up to 1000 characters")
     classification_set.add_argument("--affected-versions", help="Affected versions, up to 1000 characters")

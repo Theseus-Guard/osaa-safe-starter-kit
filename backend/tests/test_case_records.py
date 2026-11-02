@@ -68,7 +68,6 @@ def full_classification(version: int = 1) -> Classification:
         version=version,
         triggers=("boundary_escape",),
         event_kind="near_miss",
-        internal_incident_option=False,
         classification_rationale="rationale",
         responsible_operator="operator",
         affected_versions="model 1.2",
@@ -305,11 +304,11 @@ def test_audit_refuses_a_raw_ip_address_in_case_record_details():
 # --- request validation ----------------------------------------------------------------------------------------------
 
 
-def test_internal_incident_option_needs_a_rationale():
-    with pytest.raises(ValidationError):
-        ClassificationRequest(expected_version=0, internal_incident_option=True)
-    accepted = ClassificationRequest(expected_version=0, internal_incident_option=True, classification_rationale="why")
-    assert accepted.internal_incident_option
+@pytest.mark.parametrize("value", [True, False])
+def test_the_request_refuses_the_case_wide_internal_option(value):
+    # The option is per task now. A request that sends it is refused, with the way to mark the tasks.
+    with pytest.raises(ValidationError, match="PATCH /api/v1/cases/"):
+        ClassificationRequest(expected_version=0, internal_incident_option=value, classification_rationale="why")
 
 
 def test_classification_request_removes_duplicate_triggers():
@@ -541,7 +540,10 @@ def test_classification_put_is_refused_without_read_all_so_the_hidden_text_is_no
     assert response.json()["detail"] == "classification_requires_full_view"
 
 
-def test_classification_put_refuses_internal_option_without_rationale(client, caller):
+def test_classification_put_refuses_the_case_wide_internal_option(client, caller, monkeypatch):
+    monkeypatch.setattr(
+        case_records_api, "update_classification", lambda *args, **kwargs: pytest.fail("the save must not run")
+    )
     as_role(caller, TRIAGER_ID, "triager")
     body = {"expected_version": 0, "internal_incident_option": True}
     assert client.put(f"/api/v1/cases/{CASE_ID}/classification", json=body).status_code == 422

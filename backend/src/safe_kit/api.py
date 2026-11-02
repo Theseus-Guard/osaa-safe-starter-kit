@@ -49,6 +49,7 @@ from safe_kit.cases import (
     list_visible_cases,
     redact_history,
     reopen_case,
+    restore_deadline,
     unassign_member,
     update_deadline,
 )
@@ -1088,6 +1089,33 @@ def update_case_deadline(
         raise HTTPException(status_code=404, detail="deadline task not found")
     if outcome is Outcome.NOT_APPLICABLE_FORBIDDEN:
         raise HTTPException(status_code=403, detail="only a triager may mark a deadline not applicable")
+    return _case_response(_visible_case_or_404(case_id, scope), scope)
+
+
+@app.post("/api/v1/cases/{case_id}/deadlines/{task_id}/restore", response_model=CaseResponse)
+def restore_case_deadline(
+    case_id: uuid.UUID,
+    task_id: uuid.UUID,
+    actor: User = Depends(require_any_permission("cases:read_all", "cases:read_assigned")),
+) -> CaseResponse:
+    """Turn off the not applicable exception of a deadline task: it goes back to the status it had before."""
+    scope = _scope(actor)
+    outcome = restore_deadline(
+        str(case_id),
+        str(task_id),
+        scope,
+        may_mark_not_applicable="cases:triage" in permissions_of(actor),
+    )
+    if outcome is Outcome.NOT_FOUND:
+        raise CASE_NOT_FOUND
+    if outcome is Outcome.CLOSED:
+        raise CASE_CLOSED
+    if outcome is Outcome.TASK_NOT_FOUND:
+        raise HTTPException(status_code=404, detail="deadline task not found")
+    if outcome is Outcome.NOT_MARKED_NOT_APPLICABLE:
+        raise HTTPException(status_code=409, detail={"status": "deadline_not_marked_not_applicable"})
+    if outcome is Outcome.NOT_APPLICABLE_FORBIDDEN:
+        raise HTTPException(status_code=403, detail="only a triager may restore a deadline that is not applicable")
     return _case_response(_visible_case_or_404(case_id, scope), scope)
 
 

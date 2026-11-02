@@ -58,6 +58,7 @@ class Outcome(Enum):
     ASSIGNMENT_NOT_FOUND = "assignment_not_found"
     TASK_NOT_FOUND = "task_not_found"
     NOT_APPLICABLE_FORBIDDEN = "not_applicable_forbidden"
+    NOT_MARKED_NOT_APPLICABLE = "not_marked_not_applicable"
 
 
 REPORTER_CASE_SQL = "EXISTS (SELECT 1 FROM reporter_identities ri WHERE ri.case_id = cases.id AND NOT ri.is_deleted)"
@@ -178,8 +179,8 @@ SAFE_DEADLINE_KINDS = (
 BROADER_ADVISORY_CONDITION_REASON = (
     "conditional advisory: no condition is recorded in the case data, so the advisory is not applicable yet"
 )
-# The reason a task holds only by its default, so that no person has decided it. The internal incident option may
-# replace it, and turning the option off puts it back.
+# The reason a task holds only by its default, so that no person has decided it. A person who marks the task not
+# applicable replaces it, and restoring the task puts it back.
 DEFAULT_NOT_APPLICABLE_REASONS = {"broader_advisory": BROADER_ADVISORY_CONDITION_REASON}
 # The weekly update is due while a significant risk is open: an impact area is recorded as high or critical.
 WEEKLY_UPDATE_KIND = "weekly_update"
@@ -399,105 +400,72 @@ def insert_case(conn, title: str, awareness_time: datetime, created_by: str) -> 
 
 
 # The SAFE deadline tasks that are external notices: to the affected customers, to SAFE, to customers in general, and
-# to the public. Remediation status is tracked inside the organization and is not one of them.
+# to the public. Remediation status is tracked inside the organization and is not one of them. Each one is marked not
+# applicable on its own, with a reason (update_deadline). No case-wide switch applies to all of them.
 EXTERNAL_NOTICE_KINDS = (
     "affected_customers",
     "preliminary_safe_report",
     "broader_advisory",
     "preliminary_public_report",
 )
-# The source written in the audit details of a deadline change that the internal incident option made.
-INTERNAL_OPTION_SOURCE = "internal_incident_option"
-INTERNAL_OPTION_RESTORED_SOURCE = "internal_incident_option_restored"
+# The source written in the audit details of a deadline change that restores a task from not applicable.
+RESTORED_SOURCE = "restore"
 
 
-def _last_task_change(conn, case_id: str, task_id: str) -> dict[str, Any] | None:
-    """The details of the latest deadline audit row of one task. Audit rows are never removed, so this is the record."""
+def _previous_status(conn, case_id: str, task_id: str) -> str:
+    """The status a not applicable task held before it became not applicable.
+
+    The latest status change of the task is the one that made it not applicable, so its old status is the answer. A
+    task with no status change was created not applicable (the conditional advisory), so it returns to that. Audit rows
+    are never removed, so this reads the record of the task's changes.
+    """
     row = conn.execute(
         """
-        SELECT details FROM audit_events
-        WHERE target_type = 'case' AND target_id = %s AND action = %s AND details->>'task_id' = %s AND NOT is_deleted
-        ORDER BY created_at DESC LIMIT 1
+        SELECT details->'status'->>'old' FROM audit_events
+        WHERE target_type = 'case' AND target_id = %s AND action = %s AND details->>'task_id' = %s
+          AND details->'status' IS NOT NULL AND NOT is_deleted
+        ORDER BY created_at DESC, id DESC LIMIT 1
         """,
         (case_id, audit.CASE_DEADLINE_UPDATE, task_id),
     ).fetchone()
-    return None if row is None else row[0]
+    if row is None or row[0] is None:
+        return "not_applicable"
+    return row[0]
 
 
-def _option_previous_state(conn, case_id: str, task_id: str, kind: str) -> tuple[str, str | None]:
-    """The status and reason that the option replaced on one task.
+def restore_deadline(case_id: str, task_id: str, scope: CaseScope, may_mark_not_applicable: bool) -> Outcome:
+    """Turn off the not applicable exception of one deadline task: it goes back to the status it had before.
 
-    The option's own change that set the status records the old status. A task that was not applicable only by its
-    default reason has no such change: the option only replaced its reason, so it returns to that default reason.
+    The task's due date does not change. The reason goes too, except for a task that was created not applicable by its
+    default reason. Only a triager may change a task that is not applicable. Writes one deadline audit row.
     """
-    row = conn.execute(
-        """
-        SELECT details FROM audit_events
-        WHERE target_type = 'case' AND target_id = %s AND action = %s AND details->>'task_id' = %s
-          AND details->>'source' = %s AND details->'status' IS NOT NULL AND NOT is_deleted
-        ORDER BY created_at DESC LIMIT 1
-        """,
-        (case_id, audit.CASE_DEADLINE_UPDATE, task_id, INTERNAL_OPTION_SOURCE),
-    ).fetchone()
-    if row is not None:
-        return row[0]["status"]["old"], None
-    return "not_applicable", DEFAULT_NOT_APPLICABLE_REASONS[kind]
-
-
-def sync_internal_incident_option(
-    conn, case_id: str, enabled: bool, rationale: str | None, actor_id: str
-) -> dict[str, list[str]]:
-    """Make the external notice tasks follow the internal incident option. Runs on the caller's transaction.
-
-    Option on: each external notice task that is not already not applicable becomes not applicable, with the
-    rationale as its reason. A task that is not applicable only by its default reason (the conditional advisory) takes
-    the rationale in place of that reason. A task the option changed keeps that reason in step with the rationale.
-    Option off: each task the option changed goes back to the status and reason it had before. The previous state is
-    read from the audit rows that made the change, so nothing is deleted and no extra table is needed. A task that
-    someone changed by hand after the option was set is left as it is.
-    Tasks are never deleted. Every change writes one deadline audit row. Returns the changed task kinds by action.
-    """
-    rows = conn.execute(
-        """
-        SELECT id::text, kind, status, not_applicable_reason FROM deadline_tasks
-        WHERE case_id = %s AND NOT is_deleted AND kind = ANY(%s)
-        ORDER BY due_at, kind
-        FOR UPDATE
-        """,
-        (case_id, list(EXTERNAL_NOTICE_KINDS)),
-    ).fetchall()
-    changed: dict[str, list[str]] = {"applied": [], "reason_updated": [], "restored": []}
-    for task_id, kind, status, reason in rows:
-        last = _last_task_change(conn, case_id, task_id)
-        set_by_option = last is not None and last.get("source") == INTERNAL_OPTION_SOURCE
-        if enabled:
-            if set_by_option:
-                if status == "not_applicable" and reason != rationale:
-                    _write_task_change(
-                        conn, case_id, task_id, kind, status, "not_applicable", reason, rationale,
-                        INTERNAL_OPTION_SOURCE, actor_id,
-                    )
-                    changed["reason_updated"].append(kind)
-            elif status != "not_applicable":
-                _write_task_change(
-                    conn, case_id, task_id, kind, status, "not_applicable", None, rationale,
-                    INTERNAL_OPTION_SOURCE, actor_id,
-                )
-                changed["applied"].append(kind)
-            elif reason == DEFAULT_NOT_APPLICABLE_REASONS.get(kind):
-                _write_task_change(
-                    conn, case_id, task_id, kind, status, "not_applicable", reason, rationale,
-                    INTERNAL_OPTION_SOURCE, actor_id,
-                )
-                changed["applied"].append(kind)
-        elif set_by_option and status == "not_applicable":
-            previous_status, previous_reason = _option_previous_state(conn, case_id, task_id, kind)
-            _write_task_change(
-                conn, case_id, task_id, kind, status, previous_status, reason, previous_reason,
-                INTERNAL_OPTION_RESTORED_SOURCE, actor_id,
-            )
-            changed["restored"].append(kind)
-    return changed
+    with connect() as conn:
+        locked = _lock_visible_case(conn, case_id, scope)
+        if locked is None:
+            return Outcome.NOT_FOUND
+        if locked[0] == "closed":
+            return Outcome.CLOSED
+        task = conn.execute(
+            """
+            SELECT kind, status, not_applicable_reason FROM deadline_tasks
+            WHERE id = %s AND case_id = %s AND NOT is_deleted
+            FOR UPDATE
+            """,
+            (task_id, case_id),
+        ).fetchone()
+        if task is None:
+            return Outcome.TASK_NOT_FOUND
+        kind, status, reason = task
+        if status != "not_applicable":
+            return Outcome.NOT_MARKED_NOT_APPLICABLE
+        if not may_mark_not_applicable:
+            return Outcome.NOT_APPLICABLE_FORBIDDEN
+        previous = _previous_status(conn, case_id, task_id)
+        previous_reason = DEFAULT_NOT_APPLICABLE_REASONS.get(kind) if previous == "not_applicable" else None
+        _write_task_change(
+            conn, case_id, task_id, kind, status, previous, reason, previous_reason, RESTORED_SOURCE, scope.user_id,
+        )
+    return Outcome.OK
 
 
 def _write_task_change(

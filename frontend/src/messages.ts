@@ -60,13 +60,8 @@ const MESSAGES: Record<string, string> = {
     "The replacement must be an active reviewer assigned to this case.",
   "the replacement has a declared conflict on this review round": "The replacement has a declared conflict on this review round.",
   "the replacement has withdrawn from this review round": "The replacement has withdrawn from this review round.",
-  "the independent reviewer cannot be the person who files the appeal":
-    "The independent reviewer must be someone other than you.",
-  "the independent reviewer must be an active, assigned user who holds reviews:write":
-    "The independent reviewer must be an active reviewer assigned to this case.",
-  "the independent reviewer took part in this review round": "The independent reviewer took part in this review round.",
-  "the independent reviewer has a declared conflict on this review round":
-    "The independent reviewer has a declared conflict on this review round.",
+  no_eligible_reviewer:
+    "No independent reviewer can be named for this round yet. An assigned reviewer who did not take part in the round and has no declared conflict on it is needed.",
   "evidence is not available on this case": "One of the evidence items is not available on this case.",
   idempotency_key_required: "The request needs an Idempotency-Key. Try again.",
   idempotency_key_invalid: "The Idempotency-Key is not valid. Try again.",
@@ -74,6 +69,9 @@ const MESSAGES: Record<string, string> = {
   "deadline task not found": "That deadline task does not exist on this case.",
   "legal duty not found": "That legal duty does not exist on this case.",
   "only a triager may mark a deadline not applicable": "Only a triager can mark a deadline not applicable.",
+  "only a triager may restore a deadline that is not applicable":
+    "Only a triager can restore a deadline that is not applicable.",
+  deadline_not_marked_not_applicable: "This deadline is not marked not applicable, so there is nothing to restore.",
   "assignment not found": "That person is not assigned to this case.",
   "assignee is not an active user": "That user is not active, so they cannot be assigned.",
   "assignee must be an investigator or reviewer": "Only an investigator or a reviewer can be assigned to a case.",

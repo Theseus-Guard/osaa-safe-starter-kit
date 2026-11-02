@@ -64,10 +64,10 @@ CLASSIFICATION_TEXT_FIELDS = (
     "containment",
     "evidence_gap_plan",
 )
+# internal_incident_option is no longer a field: the external notice tasks are marked not applicable per task.
 CLASSIFICATION_EDITABLE_FIELDS = (
     "triggers",
     "event_kind",
-    "internal_incident_option",
     *CLASSIFICATION_TEXT_FIELDS,
     "next_update_due_at",
 )
@@ -140,7 +140,6 @@ class Classification:
     version: int
     triggers: tuple[str, ...] = ()
     event_kind: str | None = None
-    internal_incident_option: bool = False
     classification_rationale: str | None = None
     responsible_operator: str | None = None
     affected_versions: str | None = None
@@ -249,7 +248,7 @@ _DUTY_COLUMNS = (
     "id::text, case_id::text, kind, description, source_reference, jurisdiction, due_at, status, created_by::text, created_at"
 )
 _CLASSIFICATION_COLUMNS = (
-    "version, triggers, event_kind, internal_incident_option, classification_rationale, responsible_operator, "
+    "version, triggers, event_kind, classification_rationale, responsible_operator, "
     "affected_versions, approved_scope, scope_permission_source, containment, evidence_gap_plan, "
     "next_update_due_at, created_by::text, created_at"
 )
@@ -292,17 +291,16 @@ def _current_classification(conn, case_id: str) -> Classification:
         version=row[0],
         triggers=tuple(row[1]),
         event_kind=row[2],
-        internal_incident_option=row[3],
-        classification_rationale=row[4],
-        responsible_operator=row[5],
-        affected_versions=row[6],
-        approved_scope=row[7],
-        scope_permission_source=row[8],
-        containment=row[9],
-        evidence_gap_plan=row[10],
-        next_update_due_at=row[11],
-        created_by=row[12],
-        created_at=row[13],
+        classification_rationale=row[3],
+        responsible_operator=row[4],
+        affected_versions=row[5],
+        approved_scope=row[6],
+        scope_permission_source=row[7],
+        containment=row[8],
+        evidence_gap_plan=row[9],
+        next_update_due_at=row[10],
+        created_by=row[11],
+        created_at=row[12],
     )
 
 
@@ -587,14 +585,16 @@ def update_classification(
             "SELECT COALESCE(MAX(version), 0) + 1 FROM case_classifications WHERE case_id = %s",
             (case_id,),
         ).fetchone()[0]
+        # The column keeps its default (false) in new versions: the option is no longer written. Older versions keep
+        # what they recorded, and migration 0037 turned that into per-task exceptions.
         created_at = conn.execute(
             """
             INSERT INTO case_classifications (
-                case_id, version, triggers, event_kind, internal_incident_option, classification_rationale,
+                case_id, version, triggers, event_kind, classification_rationale,
                 responsible_operator, affected_versions, approved_scope, scope_permission_source, containment,
                 evidence_gap_plan, next_update_due_at, created_by
             )
-            VALUES (%s, %s, %s::text[], %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s::text[], %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING created_at
             """,
             (
@@ -602,7 +602,6 @@ def update_classification(
                 new_version,
                 list(values["triggers"]),
                 values["event_kind"],
-                values["internal_incident_option"],
                 values["classification_rationale"],
                 values["responsible_operator"],
                 values["affected_versions"],
@@ -614,10 +613,6 @@ def update_classification(
                 scope.user_id,
             ),
         ).fetchone()[0]
-        # The external notice tasks follow the option in the same transaction. Each change writes its own audit row.
-        cases.sync_internal_incident_option(
-            conn, case_id, values["internal_incident_option"], values["classification_rationale"], scope.user_id
-        )
         audit.record(
             conn,
             audit.CASE_CLASSIFICATION_CHANGE,
@@ -663,7 +658,6 @@ def build_preliminary_report(
             "version": classification.version,
             "triggers": list(classification.triggers),
             "event_kind": classification.event_kind,
-            "internal_incident_option": classification.internal_incident_option,
             **{name: getattr(classification, name) for name in CLASSIFICATION_TEXT_FIELDS},
             "next_update_due_at": _iso(classification.next_update_due_at),
         },

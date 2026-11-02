@@ -426,6 +426,14 @@ export function updateDeadline(
   });
 }
 
+// Turns off the not applicable exception of one task: it goes back to the status it had before. Due dates do not change.
+export function restoreDeadline(caseId: string, taskId: string): Promise<CaseDetail> {
+  return request<CaseDetail>(
+    `/cases/${encodeURIComponent(caseId)}/deadlines/${encodeURIComponent(taskId)}/restore`,
+    { method: "POST" },
+  );
+}
+
 // The outcome of one review layer, as the backend accepts it. A layer that is not set has no outcome (null).
 export type LayerOutcome = "pass" | "fail" | "insufficient_evidence" | "not_applicable";
 
@@ -545,9 +553,9 @@ export interface ReviewAppeal {
   created_at: string;
 }
 
+// The filer names no reviewer: the system names the independent reviewer.
 export interface ReviewAppealBody {
   grounds: string;
-  independent_reviewer_id: string;
 }
 
 // The conflict entries of a round, newest first. Answers 404 when the caller cannot see the round.
@@ -905,7 +913,6 @@ export interface Classification extends ClassificationText {
   version: number;
   triggers: Trigger[];
   event_kind: RecordEventKind | null;
-  internal_incident_option: boolean;
   next_update_due_at: string | null;
   created_by: string | null;
   created_at: string | null;
@@ -917,7 +924,6 @@ export type ClassificationUpdateBody = ClassificationText & {
   expected_version: number;
   triggers: Trigger[];
   event_kind: RecordEventKind | null;
-  internal_incident_option: boolean;
   next_update_due_at: string | null;
 };
 
@@ -944,7 +950,6 @@ export interface PreliminaryReport {
     version: number;
     triggers: Trigger[];
     event_kind: RecordEventKind | null;
-    internal_incident_option: boolean;
     next_update_due_at: string | null;
   };
   awareness_events: {

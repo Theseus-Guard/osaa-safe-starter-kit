@@ -257,7 +257,6 @@ function RecusalForm({ roundId, onSaved }: { roundId: string; onSaved: () => voi
 function AppealForm({ roundId, onSaved }: { roundId: string; onSaved: () => void }) {
   const fieldId = useId();
   const [grounds, setGrounds] = useState("");
-  const [independent, setIndependent] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -269,17 +268,11 @@ function AppealForm({ roundId, onSaved }: { roundId: string; onSaved: () => void
       setError("Give the grounds of the appeal.");
       return;
     }
-    const independentId = independent.trim();
-    if (!UUID_PATTERN.test(independentId)) {
-      setError("Enter the user ID (UUID) of the independent reviewer.");
-      return;
-    }
     setBusy(true);
     try {
-      await fileReviewAppeal(roundId, { grounds: trimmedGrounds, independent_reviewer_id: independentId });
+      await fileReviewAppeal(roundId, { grounds: trimmedGrounds });
       toast.success("Appeal filed.");
       setGrounds("");
-      setIndependent("");
       onSaved();
     } catch (caught) {
       setError(describeError(caught));
@@ -301,17 +294,10 @@ function AppealForm({ roundId, onSaved }: { roundId: string; onSaved: () => void
             onChange={(event) => setGrounds(event.target.value)}
           />
         </Field>
-        <Field>
-          <FieldLabel htmlFor={`${fieldId}-independent`}>Independent reviewer ID</FieldLabel>
-          <Input
-            id={`${fieldId}-independent`}
-            value={independent}
-            onChange={(event) => setIndependent(event.target.value)}
-          />
-          <FieldDescription>
-            The user ID of an assigned reviewer who did not take part in this round. The appeal needs no approval.
-          </FieldDescription>
-        </Field>
+        <FieldDescription>
+          The system names the independent reviewer: an assigned reviewer who did not take part in this round. The appeal
+          needs no approval.
+        </FieldDescription>
       </FieldGroup>
       {error && (
         <Alert variant="destructive">

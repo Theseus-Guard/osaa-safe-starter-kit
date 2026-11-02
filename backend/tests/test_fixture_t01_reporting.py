@@ -4,15 +4,16 @@ Covered without a database:
 - the five compact trigger values are the only accepted values, and a repeated trigger is removed in plan order;
 - incident, near miss and blocked attempt are three separate event kinds, and the preliminary report keeps each one;
 - none_applies is a value of its own: it stands alone, and an empty trigger list is reported as not assessed;
-- an internal incident option needs a written rationale, and it keeps the SAFE due dates. The external notice tasks
-  are the ones it marks not applicable (EXTERNAL_NOTICE_KINDS).
+- the classification no longer takes a case-wide internal incident option. The external notice tasks
+  (EXTERNAL_NOTICE_KINDS) are marked not applicable one by one, through the deadline update, with a reason.
 
 Covered with a database (the scenario is run through the API, so the stored record is read back):
 - the triggers are stored without duplicates in plan order;
 - none_applies is stored alone and refused with 422 together with another trigger;
-- the internal incident option marks the four external notice tasks not applicable with the rationale as reason, and
-  turning it off restores their previous status; a task changed by hand while the option is on is not restored;
-- the SAFE due dates never move with the option, and remediation_status is never changed by it.
+- each external notice task is marked not applicable on its own, with a required reason, and no other task changes;
+- restoring one task puts it back to the status it had before, and its due date never moves;
+- migration 0037 gives a case whose current classification had the old flag the same per-task exceptions;
+- the SAFE due dates never move with an exception, and remediation_status is never changed by one.
 
 Not testable yet, so not asserted here:
 - Linked reports do not delete tasks. The model that links a report to a case or to a deadline task does not exist in
@@ -26,6 +27,7 @@ The database tests use the helpers of tests/test_case_records_db.py and are skip
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -34,7 +36,13 @@ from safe_kit import api, audit, system_timezone
 from safe_kit.migrate import main as migrate
 from safe_kit.case_records import EVENT_KINDS, TRIGGERS, AwarenessEvent, Classification, build_preliminary_report
 from safe_kit.case_records_api import ClassificationRequest
-from safe_kit.cases import EXTERNAL_NOTICE_KINDS, Case, calendar_for, deadline_tasks_for
+from safe_kit.cases import (
+    BROADER_ADVISORY_CONDITION_REASON,
+    EXTERNAL_NOTICE_KINDS,
+    Case,
+    calendar_for,
+    deadline_tasks_for,
+)
 from safe_kit.db import connect
 from test_case_records_db import ActingClient, classification_body, new_case, new_user
 from test_evidence_lifecycle import requires_database
@@ -49,6 +57,8 @@ FIVE_TRIGGERS = (
 )
 # none_applies is an explicit value of its own: it records that no trigger applies, and it stands alone.
 TRIGGER_VALUES = (*FIVE_TRIGGERS, "none_applies")
+MIGRATED_REASON = "migrated: the case-wide internal incident option was set on this case"
+MIGRATION_PATH = Path(__file__).resolve().parents[1] / "migrations" / "0037_internal_option_per_task.sql"
 
 
 def classified(**changes) -> Classification:
@@ -141,15 +151,14 @@ def test_preliminary_report_keeps_each_awareness_kind_apart():
     ]
 
 
-def test_internal_incident_option_needs_a_written_rationale():
-    with pytest.raises(ValidationError):
-        ClassificationRequest(expected_version=0, internal_incident_option=True, classification_rationale=None)
-    # A blank rationale is cleaned to None before the rule runs, so it is refused as well.
-    with pytest.raises(ValidationError):
-        ClassificationRequest(expected_version=0, internal_incident_option=True, classification_rationale="   ")
+@pytest.mark.parametrize("value", [True, False])
+def test_the_request_refuses_the_case_wide_internal_option(value):
+    # The option is per task now. A request that sends it is refused, and the message says where the choice is.
+    with pytest.raises(ValidationError, match="PATCH /api/v1/cases/"):
+        ClassificationRequest(expected_version=0, internal_incident_option=value, classification_rationale="why")
 
 
-def test_the_external_notice_tasks_are_the_four_the_internal_option_changes():
+def test_the_external_notice_tasks_are_the_four_that_can_be_marked_per_task():
     assert EXTERNAL_NOTICE_KINDS == (
         "affected_customers",
         "preliminary_safe_report",
@@ -159,7 +168,7 @@ def test_the_external_notice_tasks_are_the_four_the_internal_option_changes():
     assert "remediation_status" not in EXTERNAL_NOTICE_KINDS
 
 
-def test_the_report_keeps_the_due_dates_and_shows_the_not_applicable_external_tasks():
+def test_the_report_keeps_the_due_dates_when_external_tasks_are_not_applicable():
     case = case_with_deadlines()
     plain = build_preliminary_report(case, classified(), [awareness("incident", 0)], [], [], True, NOW)
     marked = [
@@ -168,20 +177,20 @@ def test_the_report_keeps_the_due_dates_and_shows_the_not_applicable_external_ta
         else task
         for task in case.deadlines
     ]
-    internal = build_preliminary_report(
+    marked_report = build_preliminary_report(
         replace(case, deadlines=marked),
-        classified(internal_incident_option=True, classification_rationale="handled inside the team"),
+        classified(classification_rationale="handled inside the team"),
         [awareness("incident", 0)],
         [],
         [],
         True,
         NOW,
     )
-    assert internal["classification"]["internal_incident_option"] is True
-    assert [item["due_at"] for item in internal["safe_deadlines"]] == [
+    assert "internal_incident_option" not in marked_report["classification"]
+    assert [item["due_at"] for item in marked_report["safe_deadlines"]] == [
         item["due_at"] for item in plain["safe_deadlines"]
     ]
-    statuses = {item["kind"]: item["status"] for item in internal["safe_deadlines"]}
+    statuses = {item["kind"]: item["status"] for item in marked_report["safe_deadlines"]}
     assert statuses == {
         "affected_customers": "not_applicable",
         "preliminary_safe_report": "not_applicable",
@@ -250,15 +259,21 @@ def test_none_applies_is_stored_alone_and_refused_with_another_trigger(triage_pe
     assert triager.get(url).json()["triggers"] == ["none_applies"]
 
 
-def internal_option_body(expected_version: int, rationale: str | None = "handled inside the team") -> dict:
-    return classification_body(
-        expected_version, internal_incident_option=rationale is not None, classification_rationale=rationale
-    )
-
-
 def task_states(triager: ActingClient, case_id: str) -> dict[str, tuple[str, str | None, str]]:
     deadlines = triager.get(f"/api/v1/cases/{case_id}").json()["deadlines"]
     return {task["kind"]: (task["status"], task["not_applicable_reason"], task["due_at"]) for task in deadlines}
+
+
+def task_id_of(triager: ActingClient, case_id: str, kind: str) -> str:
+    deadlines = triager.get(f"/api/v1/cases/{case_id}").json()["deadlines"]
+    return next(task["id"] for task in deadlines if task["kind"] == kind)
+
+
+def mark_not_applicable(triager: ActingClient, case_id: str, kind: str, reason: str):
+    return triager.patch(
+        f"/api/v1/cases/{case_id}/deadlines/{task_id_of(triager, case_id, kind)}",
+        json={"status": "not_applicable", "reason": reason},
+    )
 
 
 def deadline_audit_rows(case_id: str) -> int:
@@ -270,97 +285,165 @@ def deadline_audit_rows(case_id: str) -> int:
 
 
 @requires_database
-def test_internal_incident_option_marks_the_external_notice_tasks_not_applicable(triage_people):
+def test_each_external_notice_task_is_marked_not_applicable_on_its_own(triage_people):
     reporter, triager = triage_people["reporter"], triage_people["triager"]
     case_id = new_case(reporter)
-    url = f"/api/v1/cases/{case_id}/classification"
     before = task_states(triager, case_id)
 
-    saved = triager.put(url, json=internal_option_body(0))
+    marked = mark_not_applicable(triager, case_id, "affected_customers", "no customer data was involved")
 
-    assert saved.status_code == 200, saved.text
-    assert saved.json()["internal_incident_option"] is True
+    assert marked.status_code == 200, marked.text
     after = task_states(triager, case_id)
-    for kind in EXTERNAL_NOTICE_KINDS:
-        assert after[kind][0] == "not_applicable"
-        assert after[kind][1] == "handled inside the team"
-    assert after["remediation_status"] == before["remediation_status"]
+    assert after["affected_customers"] == ("not_applicable", "no customer data was involved", before["affected_customers"][2])
+    # Only the task that was marked changes: the other external notice tasks and remediation_status keep their state.
+    for kind in set(before) - {"affected_customers"}:
+        assert after[kind] == before[kind], kind
     assert {kind: value[2] for kind, value in after.items()} == {kind: value[2] for kind, value in before.items()}
     assert len(after) == 5
-    assert deadline_audit_rows(case_id) == 4
+    assert deadline_audit_rows(case_id) == 1
 
 
 @requires_database
-def test_turning_the_internal_option_off_restores_the_previous_states(triage_people):
+def test_a_per_task_exception_needs_a_reason(triage_people):
     reporter, triager = triage_people["reporter"], triage_people["triager"]
     case_id = new_case(reporter)
-    url = f"/api/v1/cases/{case_id}/classification"
-    before = task_states(triager, case_id)
-    assert triager.put(url, json=internal_option_body(0)).status_code == 200
+    task_id = task_id_of(triager, case_id, "preliminary_safe_report")
 
-    restored = triager.put(url, json=internal_option_body(1, rationale=None))
+    refused = triager.patch(f"/api/v1/cases/{case_id}/deadlines/{task_id}", json={"status": "not_applicable"})
+
+    assert refused.status_code == 422, refused.text
+    assert task_states(triager, case_id)["preliminary_safe_report"][0] == "open"
+    assert deadline_audit_rows(case_id) == 0
+
+
+@requires_database
+def test_each_task_keeps_its_own_reason(triage_people):
+    reporter, triager = triage_people["reporter"], triage_people["triager"]
+    case_id = new_case(reporter)
+    assert mark_not_applicable(triager, case_id, "affected_customers", "reason one").status_code == 200
+    assert mark_not_applicable(triager, case_id, "preliminary_public_report", "reason two").status_code == 200
+
+    states = task_states(triager, case_id)
+    assert states["affected_customers"][1] == "reason one"
+    assert states["preliminary_public_report"][1] == "reason two"
+    assert states["preliminary_safe_report"][0] == "open"
+
+
+@requires_database
+def test_restoring_a_task_puts_it_back_to_the_status_it_had_before(triage_people):
+    reporter, triager = triage_people["reporter"], triage_people["triager"]
+    case_id = new_case(reporter)
+    task_id = task_id_of(triager, case_id, "preliminary_public_report")
+    before = task_states(triager, case_id)
+    # The task is done before it becomes not applicable, so restoring it must give done back, not open.
+    assert triager.patch(f"/api/v1/cases/{case_id}/deadlines/{task_id}", json={"status": "done"}).status_code == 200
+    assert mark_not_applicable(triager, case_id, "preliminary_public_report", "not for the public").status_code == 200
+
+    restored = triager.post(f"/api/v1/cases/{case_id}/deadlines/{task_id}/restore")
 
     assert restored.status_code == 200, restored.text
     after = task_states(triager, case_id)
-    assert after == before
-    assert deadline_audit_rows(case_id) == 8
+    assert after["preliminary_public_report"] == ("done", None, before["preliminary_public_report"][2])
+    assert after == {**before, "preliminary_public_report": after["preliminary_public_report"]}
 
 
 @requires_database
-def test_turning_the_option_off_after_a_rationale_change_restores_the_states(triage_people):
+def test_restoring_the_default_not_applicable_advisory_returns_it_to_the_default_reason(triage_people):
     reporter, triager = triage_people["reporter"], triage_people["triager"]
     case_id = new_case(reporter)
-    url = f"/api/v1/cases/{case_id}/classification"
-    before = task_states(triager, case_id)
-    assert triager.put(url, json=internal_option_body(0)).status_code == 200
-    # The last audit row of each marked task now only changes the reason, not the status.
-    assert triager.put(url, json=internal_option_body(1, rationale="a different rationale")).status_code == 200
+    assert task_states(triager, case_id)["broader_advisory"][1] == BROADER_ADVISORY_CONDITION_REASON
+    assert mark_not_applicable(triager, case_id, "broader_advisory", "decided by the team").status_code == 200
+    task_id = task_id_of(triager, case_id, "broader_advisory")
 
-    restored = triager.put(url, json=internal_option_body(2, rationale=None))
+    restored = triager.post(f"/api/v1/cases/{case_id}/deadlines/{task_id}/restore")
 
     assert restored.status_code == 200, restored.text
+    assert task_states(triager, case_id)["broader_advisory"][:2] == ("not_applicable", BROADER_ADVISORY_CONDITION_REASON)
+
+
+@requires_database
+def test_restore_refuses_a_task_that_is_not_marked_not_applicable(triage_people):
+    reporter, triager = triage_people["reporter"], triage_people["triager"]
+    case_id = new_case(reporter)
+    before = task_states(triager, case_id)
+    task_id = task_id_of(triager, case_id, "affected_customers")
+
+    refused = triager.post(f"/api/v1/cases/{case_id}/deadlines/{task_id}/restore")
+
+    assert refused.status_code == 409, refused.text
+    assert refused.json() == {"detail": {"status": "deadline_not_marked_not_applicable"}}
     assert task_states(triager, case_id) == before
 
 
 @requires_database
-def test_a_task_changed_by_hand_while_the_option_is_on_is_not_restored(triage_people):
+def test_only_a_triager_may_restore_a_task_that_is_not_applicable(triage_people):
     reporter, triager = triage_people["reporter"], triage_people["triager"]
     case_id = new_case(reporter)
-    url = f"/api/v1/cases/{case_id}/classification"
-    assert triager.put(url, json=internal_option_body(0)).status_code == 200
-    deadlines = triager.get(f"/api/v1/cases/{case_id}").json()["deadlines"]
-    task_id = next(task["id"] for task in deadlines if task["kind"] == "broader_advisory")
-    assert triager.patch(f"/api/v1/cases/{case_id}/deadlines/{task_id}", json={"status": "done"}).status_code == 200
+    investigator = ActingClient(new_user("investigator"))
+    assigned = triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": investigator.user_id})
+    assert assigned.status_code == 201, assigned.text
+    assert mark_not_applicable(triager, case_id, "affected_customers", "no customer data").status_code == 200
+    task_id = task_id_of(triager, case_id, "affected_customers")
 
-    assert triager.put(url, json=internal_option_body(1, rationale=None)).status_code == 200
+    refused = investigator.post(f"/api/v1/cases/{case_id}/deadlines/{task_id}/restore")
 
-    states = task_states(triager, case_id)
-    assert states["broader_advisory"][0] == "done"
-    assert states["affected_customers"][0] == "open"
+    assert refused.status_code == 403, refused.text
+    assert task_states(triager, case_id)["affected_customers"][0] == "not_applicable"
+
+
+def run_migration_0037() -> None:
+    # The migration is idempotent, so running it again in a test is the same as the first run changing nothing new.
+    with connect() as conn:
+        conn.execute(MIGRATION_PATH.read_text(encoding="utf-8"))
+
+
+def migrated_audit_rows(case_id: str) -> int:
+    with connect() as conn:
+        return conn.execute(
+            "SELECT count(*) FROM audit_events WHERE target_id = %s AND action = %s "
+            "AND details->>'source' = 'migration_0037' AND NOT is_deleted",
+            (case_id, audit.CASE_DEADLINE_UPDATE),
+        ).fetchone()[0]
 
 
 @requires_database
-def test_a_changed_rationale_is_copied_to_the_tasks_the_option_marked(triage_people):
+def test_migration_0037_gives_a_case_with_the_old_flag_the_per_task_exceptions(triage_people):
     reporter, triager = triage_people["reporter"], triage_people["triager"]
-    case_id = new_case(reporter)
-    url = f"/api/v1/cases/{case_id}/classification"
-    assert triager.put(url, json=internal_option_body(0)).status_code == 200
+    flagged = new_case(reporter)
+    unflagged = new_case(reporter)
+    flagged_before = task_states(triager, flagged)
+    unflagged_before = task_states(triager, unflagged)
+    # The old switch was stored on each classification version. The current version of "flagged" has it set. The
+    # current version of "unflagged" has it cleared again after an earlier version set it.
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO case_classifications (case_id, version, internal_incident_option, classification_rationale, "
+            "created_by) VALUES (%s, 1, true, 'handled inside the team', %s)",
+            (flagged, triager.user_id),
+        )
+        conn.execute(
+            "INSERT INTO case_classifications (case_id, version, internal_incident_option, classification_rationale, "
+            "created_by) VALUES (%s, 1, true, 'handled inside the team', %s)",
+            (unflagged, triager.user_id),
+        )
+        conn.execute(
+            "INSERT INTO case_classifications (case_id, version, internal_incident_option, created_by) "
+            "VALUES (%s, 2, false, %s)",
+            (unflagged, triager.user_id),
+        )
 
-    assert triager.put(url, json=internal_option_body(1, rationale="team agreed a new rationale")).status_code == 200
+    run_migration_0037()
 
-    states = task_states(triager, case_id)
-    assert states["affected_customers"][1] == "team agreed a new rationale"
-    assert states["remediation_status"][0] == "open"
+    flagged_after = task_states(triager, flagged)
+    for kind in EXTERNAL_NOTICE_KINDS:
+        assert flagged_after[kind][:2] == ("not_applicable", MIGRATED_REASON), kind
+    assert flagged_after["remediation_status"] == flagged_before["remediation_status"]
+    assert {kind: value[2] for kind, value in flagged_after.items()} == {
+        kind: value[2] for kind, value in flagged_before.items()
+    }
+    assert migrated_audit_rows(flagged) == 4
+    assert task_states(triager, unflagged) == unflagged_before
+    assert migrated_audit_rows(unflagged) == 0
 
-
-@requires_database
-def test_none_of_the_internal_option_changes_moves_a_due_date(triage_people):
-    reporter, triager = triage_people["reporter"], triage_people["triager"]
-    case_id = new_case(reporter)
-    url = f"/api/v1/cases/{case_id}/classification"
-    due_before = {kind: value[2] for kind, value in task_states(triager, case_id).items()}
-
-    assert triager.put(url, json=internal_option_body(0)).status_code == 200
-    assert triager.put(url, json=internal_option_body(1, rationale=None)).status_code == 200
-
-    assert {kind: value[2] for kind, value in task_states(triager, case_id).items()} == due_before
+    run_migration_0037()
+    assert migrated_audit_rows(flagged) == 4
