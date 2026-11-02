@@ -141,7 +141,6 @@ def classification_body(expected_version: int, event_kind: str = "near_miss", **
         "expected_version": expected_version,
         "triggers": ["boundary_escape", "harm_inaction_near_miss"],
         "event_kind": event_kind,
-        "internal_incident_option": False,
         "classification_rationale": "the rationale",
         "responsible_operator": "operator team",
         "affected_versions": "model 1.2, runtime 3",
@@ -403,23 +402,18 @@ def test_classification_is_stored_as_versions_with_a_conflict_check(people):
     assert triager.get(f"/api/v1/cases/{case_id}/classification").json()["event_kind"] == "incident"
 
 
-def test_internal_incident_option_keeps_every_safe_due_date(people):
+@pytest.mark.parametrize("value", [True, False])
+def test_the_classification_refuses_the_case_wide_internal_option(people, value):
+    # The switch was replaced by per-task not-applicable exceptions. Sending it, true or false, is a 422 and stores nothing.
     case_id = new_case(people["reporter"])
     triager = people["triager"]
     deadlines_before = triager.get(f"/api/v1/cases/{case_id}").json()["deadlines"]
-    body = classification_body(0, internal_incident_option=True, classification_rationale="handled internally")
-    assert triager.put(f"/api/v1/cases/{case_id}/classification", json=body).status_code == 200
-    deadlines_after = triager.get(f"/api/v1/cases/{case_id}").json()["deadlines"]
-    # The option changes statuses of the external notice tasks only. No due date moves and no task is removed.
-    assert [(task["kind"], task["due_at"]) for task in deadlines_after] == [
-        (task["kind"], task["due_at"]) for task in deadlines_before
-    ]
-
-
-def test_internal_incident_option_without_rationale_is_refused(people):
-    case_id = new_case(people["reporter"])
-    body = classification_body(0, internal_incident_option=True, classification_rationale=None)
-    assert people["triager"].put(f"/api/v1/cases/{case_id}/classification", json=body).status_code == 422
+    body = classification_body(0, internal_incident_option=value)
+    refused = triager.put(f"/api/v1/cases/{case_id}/classification", json=body)
+    assert refused.status_code == 422, refused.text
+    assert "PATCH /api/v1/cases/{case_id}/deadlines/{task_id}" in refused.text
+    assert triager.get(f"/api/v1/cases/{case_id}/classification").json()["version"] == 0
+    assert triager.get(f"/api/v1/cases/{case_id}").json()["deadlines"] == deadlines_before
 
 
 def test_reporter_cannot_store_a_classification(people):

@@ -2,12 +2,12 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
-import { CaseDetail, DeadlineTask, updateDeadline } from "../../api";
+import { CaseDetail, DeadlineTask, restoreDeadline, updateDeadline } from "../../api";
 import { CaseDeadlines } from "./CaseDeadlines";
 
 vi.mock("../../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../api")>();
-  return { ...actual, updateDeadline: vi.fn() };
+  return { ...actual, updateDeadline: vi.fn(), restoreDeadline: vi.fn() };
 });
 
 vi.mock("../../system-timezone", () => ({
@@ -17,6 +17,7 @@ vi.mock("../../system-timezone", () => ({
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const update = vi.mocked(updateDeadline);
+const restore = vi.mocked(restoreDeadline);
 
 const TASKS: DeadlineTask[] = [
   {
@@ -42,6 +43,7 @@ function openRow(): HTMLElement {
 
 beforeEach(() => {
   update.mockReset();
+  restore.mockReset();
   vi.mocked(toast.success).mockClear();
   vi.mocked(toast.error).mockClear();
 });
@@ -239,5 +241,31 @@ describe("CaseDeadlines", () => {
     );
 
     expect(screen.getByText("Reason: Out of scope")).toBeInTheDocument();
+  });
+
+  it("restores a not-applicable task to its previous status and reports the updated case", async () => {
+    const updated = { id: "case-1" } as CaseDetail;
+    restore.mockResolvedValue(updated);
+    const onChanged = vi.fn();
+    const na: DeadlineTask = { ...TASKS[0], status: "not_applicable", not_applicable_reason: "Out of scope" };
+    const user = userEvent.setup();
+    render(
+      <CaseDeadlines caseId="case-1" deadlines={[na]} closed={false} canUpdate canMarkNotApplicable onChanged={onChanged} />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Restore previous status" }));
+
+    expect(restore).toHaveBeenCalledWith("case-1", "task-1");
+    await waitFor(() => expect(onChanged).toHaveBeenCalledWith(updated));
+    expect(toast.success).toHaveBeenCalledWith("Preliminary safe report is restored to its previous status.");
+  });
+
+  it("locks the restore action for a caller who is not a triager", () => {
+    const na: DeadlineTask = { ...TASKS[0], status: "not_applicable", not_applicable_reason: "Out of scope" };
+    render(
+      <CaseDeadlines caseId="case-1" deadlines={[na]} closed={false} canUpdate canMarkNotApplicable={false} onChanged={() => {}} />,
+    );
+
+    expect(screen.getByRole("button", { name: "Restore previous status" })).toBeDisabled();
   });
 });

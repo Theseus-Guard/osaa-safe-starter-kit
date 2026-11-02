@@ -6,7 +6,8 @@ Access rules:
 - Declaring a conflict and recording a recusal need reviews:write and an active assignment to the case. The case must be
   open. An invisible round answers 404, a visible round without the assignment answers 403.
 - Filing an appeal needs a case read permission and a visible case. It is accepted on a closed case. No approval is
-  asked from anybody: an appeal cannot be blocked.
+  asked from anybody: an appeal cannot be blocked. The system names the independent reviewer. The request has no
+  reviewer field: a body that names one is refused with 422.
 - Reading needs the same case read permissions as the case. A round the caller may not see answers 404.
 - Free text (a conflict description, a recusal reason, appeal grounds) is returned only to callers with cases:read_all
   and to the caller who wrote it, as a layer reason is.
@@ -20,7 +21,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from safe_kit.auth import permissions_of, require_any_permission, require_permission
 from safe_kit.case_records_api import CASE_READ_PERMISSIONS_FOR_RECORDS
@@ -90,18 +91,8 @@ RECUSAL_REFUSALS: dict[IndependenceOutcome, HTTPException] = {
     ),
 }
 APPEAL_REFUSALS: dict[IndependenceOutcome, HTTPException] = {
-    IndependenceOutcome.INDEPENDENT_IS_FILER: HTTPException(
-        status_code=422, detail="the independent reviewer cannot be the person who files the appeal"
-    ),
-    IndependenceOutcome.INDEPENDENT_NOT_ELIGIBLE: HTTPException(
-        status_code=422,
-        detail="the independent reviewer must be an active, assigned user who holds reviews:write",
-    ),
-    IndependenceOutcome.INDEPENDENT_TOOK_PART: HTTPException(
-        status_code=422, detail="the independent reviewer took part in this review round"
-    ),
-    IndependenceOutcome.INDEPENDENT_CONFLICTED: HTTPException(
-        status_code=422, detail="the independent reviewer has a declared conflict on this review round"
+    IndependenceOutcome.NO_ELIGIBLE_REVIEWER: HTTPException(
+        status_code=409, detail={"status": "no_eligible_reviewer"}
     ),
 }
 
@@ -176,8 +167,10 @@ class RecusalResponse(BaseModel):
 
 
 class AppealRequest(BaseModel):
+    # extra="forbid": a client that still sends independent_reviewer_id gets a 422, not a silently ignored field.
+    model_config = ConfigDict(extra="forbid")
+
     grounds: str
-    independent_reviewer_id: uuid.UUID
 
     @field_validator("grounds")
     @classmethod
@@ -361,7 +354,6 @@ def file_review_appeal(
     outcome, entry, stored = file_appeal(
         str(review_id),
         body.grounds,
-        str(body.independent_reviewer_id),
         scope,
         idempotency=_key_scope(actor, APPEALS_ROUTE, f"/api/v1/reviews/{review_id}/appeals", key, payload),
         render=lambda created: _appeal_response(created, scope).model_dump(mode="json"),

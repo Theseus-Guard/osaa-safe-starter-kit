@@ -403,7 +403,6 @@ class ClassificationRequest(BaseModel):
         "none_applies",
     ]] = Field(default_factory=list, max_length=5)
     event_kind: Literal["incident", "near_miss", "blocked_attempt"] | None = None
-    internal_incident_option: bool = False
     classification_rationale: str | None = Field(default=None, max_length=TEXT_LIMIT)
     responsible_operator: str | None = Field(default=None, max_length=TEXT_LIMIT)
     affected_versions: str | None = Field(default=None, max_length=TEXT_LIMIT)
@@ -423,11 +422,16 @@ class ClassificationRequest(BaseModel):
     def triggers_distinct(cls, value: list[str]) -> list[str]:
         return list(normalize_triggers(value))
 
-    @model_validator(mode="after")
-    def internal_option_needs_rationale(self) -> "ClassificationRequest":
-        if self.internal_incident_option and self.classification_rationale is None:
-            raise ValueError("classification_rationale is required when internal_incident_option is true")
-        return self
+    @model_validator(mode="before")
+    @classmethod
+    def internal_option_is_per_task(cls, data: Any) -> Any:
+        # The case-wide switch was replaced. A client that still sends it is told where the choice lives now.
+        if isinstance(data, dict) and "internal_incident_option" in data:
+            raise ValueError(
+                "internal_incident_option has been replaced: mark each external notice task not applicable "
+                "on its own with PATCH /api/v1/cases/{case_id}/deadlines/{task_id}, with a reason"
+            )
+        return data
 
 
 class ClassificationResponse(BaseModel):
@@ -435,7 +439,6 @@ class ClassificationResponse(BaseModel):
     version: int
     triggers: list[str]
     event_kind: str | None
-    internal_incident_option: bool
     classification_rationale: str | None
     responsible_operator: str | None
     affected_versions: str | None
@@ -454,7 +457,6 @@ def _classification_response(case_id: str, classification: Classification, scope
         version=classification.version,
         triggers=list(classification.triggers),
         event_kind=classification.event_kind,
-        internal_incident_option=classification.internal_incident_option,
         classification_rationale=_text(classification.classification_rationale, scope),
         responsible_operator=_text(classification.responsible_operator, scope),
         affected_versions=_text(classification.affected_versions, scope),
@@ -494,7 +496,6 @@ def update_case_classification(
     values: dict[str, Any] = {
         "triggers": tuple(body.triggers),
         "event_kind": body.event_kind,
-        "internal_incident_option": body.internal_incident_option,
         "classification_rationale": body.classification_rationale,
         "responsible_operator": body.responsible_operator,
         "affected_versions": body.affected_versions,

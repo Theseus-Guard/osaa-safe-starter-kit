@@ -49,7 +49,6 @@ def complete_record(version: int = 1) -> Classification:
         version=version,
         triggers=("boundary_escape",),
         event_kind="near_miss",
-        internal_incident_option=False,
         classification_rationale="rationale",
         responsible_operator="operator",
         affected_versions="model 1.2",

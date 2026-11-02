@@ -24,7 +24,6 @@ const NONE: Classification = {
   version: 0,
   triggers: [],
   event_kind: null,
-  internal_incident_option: false,
   classification_rationale: null,
   responsible_operator: null,
   affected_versions: null,
@@ -42,7 +41,6 @@ const VERSION_TWO: Classification = {
   version: 2,
   triggers: ["boundary_escape", "harm_inaction_near_miss"],
   event_kind: "near_miss",
-  internal_incident_option: true,
   classification_rationale: "Harm was avoided by the block",
   containment: null,
   created_by: "user-1",
@@ -84,7 +82,7 @@ describe("CaseClassification", () => {
     expect(screen.getByText("Boundary escape")).toBeInTheDocument();
     expect(screen.getByText("Harm, inaction or near miss")).toBeInTheDocument();
     expect(screen.getByText("Harm was avoided by the block")).toBeInTheDocument();
-    expect(screen.getByText("Yes")).toBeInTheDocument();
+    expect(screen.queryByText("Internal incident option")).not.toBeInTheDocument();
     expect(screen.getAllByText("Not recorded.").length).toBeGreaterThan(0);
   });
 
@@ -126,7 +124,6 @@ describe("CaseClassification", () => {
         expected_version: 0,
         triggers: ["boundary_escape"],
         event_kind: "incident",
-        internal_incident_option: false,
         classification_rationale: null,
         responsible_operator: null,
         affected_versions: null,
@@ -141,18 +138,14 @@ describe("CaseClassification", () => {
     expect(toast.success).toHaveBeenCalledWith("Classification saved as version 1.");
   });
 
-  it("requires a rationale when the internal incident option is chosen", async () => {
+  it("has no case-wide internal incident option: the external notice tasks are marked on the deadlines", async () => {
     const user = userEvent.setup();
     render(<CaseClassification {...BASE_PROPS} />);
 
     const dialog = await openEditor(user);
-    await user.click(within(dialog).getByRole("checkbox", { name: "Internal incident option" }));
-    await user.click(within(dialog).getByRole("button", { name: "Save new version" }));
 
-    expect(save).not.toHaveBeenCalled();
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "Enter the rationale. It is required when the internal incident option is chosen.",
-    );
+    expect(within(dialog).queryByRole("checkbox", { name: "Internal incident option" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Internal incident option")).not.toBeInTheDocument();
   });
 
   it("chooses none applies on its own: it clears the other triggers", async () => {

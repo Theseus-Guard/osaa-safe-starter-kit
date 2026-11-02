@@ -131,11 +131,10 @@ def recuse(db_client, people: dict, who: str, round_id: str, replacement: str, *
     )
 
 
-def appeal(db_client, people: dict, who: str, round_id: str, independent: str, grounds: str = "The model layer was not tested"):
+def appeal(db_client, people: dict, who: str, round_id: str, grounds: str = "The model layer was not tested"):
+    # The filer names no reviewer: the system names the independent reviewer.
     return db_client(people[who]).post(
-        f"/api/v1/reviews/{round_id}/appeals",
-        headers=idem(),
-        json={"grounds": grounds, "independent_reviewer_id": people[independent]},
+        f"/api/v1/reviews/{round_id}/appeals", headers=idem(), json={"grounds": grounds}
     )
 
 
@@ -214,7 +213,7 @@ def test_t09_the_database_refuses_an_edit_of_a_declaration_and_a_soft_delete_is_
     _, round_id = setup_round(db_client, people)
     entry = declare(db_client, people, "reviewer", round_id, kind="declared", description="Original").json()
     assert recuse(db_client, people, "reviewer", round_id, "reviewer_b", reason="Original").status_code == 201
-    assert appeal(db_client, people, "reporter", round_id, "reviewer_c", grounds="Original").status_code == 201
+    assert appeal(db_client, people, "reporter", round_id, grounds="Original").status_code == 201
 
     with pytest.raises(psycopg.Error):
         with connect() as conn:
@@ -320,32 +319,14 @@ def test_t09_a_recusal_by_a_user_who_is_not_assigned_is_not_found(db_client, peo
 
 
 @requires_database
-def test_t09_an_appeal_needs_an_independent_reviewer_who_took_no_part_and_has_no_conflict(db_client, people):
+def test_t09_the_system_names_an_independent_reviewer_who_took_no_part_and_has_no_conflict(db_client, people):
     case_id, round_id = setup_round(db_client, people)
     assert set_layer(db_client, people, "reviewer", round_id, revision=1, outcome="fail", reason="No tests").status_code == 200
     assert declare(db_client, people, "reviewer_c", round_id, kind="declared", description="Shared team").status_code == 201
 
-    # The original reviewer, who opened the round and set a layer, is not independent.
-    original = appeal(db_client, people, "reporter", round_id, "reviewer")
-    assert original.status_code == 422
-    assert original.json()["detail"] == "the independent reviewer took part in this review round"
-
-    # A reviewer with a declared conflict on the round is not independent.
-    conflicted = appeal(db_client, people, "reporter", round_id, "reviewer_c")
-    assert conflicted.status_code == 422
-    assert conflicted.json()["detail"] == "the independent reviewer has a declared conflict on this review round"
-
-    # An investigator, and an assigned user who is not in the case, have no reviews:write.
-    no_permission = appeal(db_client, people, "reporter", round_id, "investigator")
-    assert no_permission.status_code == 422
-    not_assigned = appeal(db_client, people, "reporter", round_id, "unassigned_reviewer")
-    assert not_assigned.status_code == 422
-
-    # The appellant cannot assign the appeal to themselves.
-    itself = appeal(db_client, people, "reporter", round_id, "reporter")
-    assert itself.status_code == 422
-
-    filed = appeal(db_client, people, "reporter", round_id, "reviewer_b")
+    # The original reviewer opened the round and set a layer, reviewer_c declared a conflict, the investigator has no
+    # reviews:write, and the unassigned reviewer is not on the case. The only eligible reviewer is B.
+    filed = appeal(db_client, people, "reporter", round_id)
     assert filed.status_code == 201, filed.text
     body = filed.json()
     assert body["independent_reviewer_id"] == people["reviewer_b"]
@@ -361,16 +342,47 @@ def test_t09_an_appeal_needs_an_independent_reviewer_who_took_no_part_and_has_no
 
 
 @requires_database
-def test_t09_a_user_who_recused_or_was_named_as_replacement_is_not_independent(db_client, people):
+def test_t09_the_system_picks_the_eligible_reviewer_with_the_fewest_open_appeals_then_the_lowest_id(db_client, people):
+    _, round_id = setup_round(db_client, people)
+    # The opener is not eligible, so B and C are the candidates. Both have no appeal yet: the lowest ID is chosen.
+    first = appeal(db_client, people, "reporter", round_id)
+    assert first.status_code == 201, first.text
+    lowest, other = sorted([people["reviewer_b"], people["reviewer_c"]])
+    assert first.json()["independent_reviewer_id"] == lowest
+
+    # The reviewer with one open appeal now has more than the other one, so the next appeal goes to the other one.
+    second = appeal(db_client, people, "reporter", round_id)
+    assert second.status_code == 201, second.text
+    assert second.json()["independent_reviewer_id"] == other
+
+    # Both have one open appeal again: the lowest ID is chosen.
+    third = appeal(db_client, people, "reporter", round_id)
+    assert third.status_code == 201, third.text
+    assert third.json()["independent_reviewer_id"] == lowest
+
+
+@requires_database
+def test_t09_no_eligible_reviewer_refuses_the_appeal_and_stores_nothing(db_client, people):
+    _, round_id = setup_round(db_client, people)
+    # B and C both declare a conflict on the round. A opened it, so nobody is eligible.
+    assert declare(db_client, people, "reviewer_b", round_id, kind="declared", description="Own team").status_code == 201
+    assert declare(db_client, people, "reviewer_c", round_id, kind="declared", description="Own team").status_code == 201
+
+    refused = appeal(db_client, people, "reporter", round_id)
+    assert refused.status_code == 409
+    assert refused.json() == {"detail": {"status": "no_eligible_reviewer"}}
+    assert count("SELECT count(*) FROM review_appeals WHERE round_id = %s", (round_id,)) == 0
+
+
+@requires_database
+def test_t09_a_user_who_recused_or_was_named_as_replacement_is_not_chosen(db_client, people):
     _, round_id = setup_round(db_client, people)
     assert recuse(db_client, people, "reviewer", round_id, "reviewer_b").status_code == 201
 
-    # B was named as the replacement, so B took part in the round.
-    refused = appeal(db_client, people, "reporter", round_id, "reviewer_b")
-    assert refused.status_code == 422
-    assert refused.json()["detail"] == "the independent reviewer took part in this review round"
-    # A withdrew, so A took part too.
-    assert appeal(db_client, people, "reporter", round_id, "reviewer").status_code == 422
+    # B was named as the replacement and A withdrew, so both took part. C is the only one left.
+    filed = appeal(db_client, people, "reporter", round_id)
+    assert filed.status_code == 201, filed.text
+    assert filed.json()["independent_reviewer_id"] == people["reviewer_c"]
 
 
 @requires_database
@@ -380,10 +392,11 @@ def test_t09_nothing_blocks_an_appeal_and_the_case_stays_as_it_was(db_client, pe
     assert recuse(db_client, people, "reviewer", round_id, "reviewer_b").status_code == 201
     assert declare(db_client, people, "reviewer_b", round_id, kind="declared", description="Own team").status_code == 201
 
-    # The investigator, who is assigned but not a reviewer, files the appeal. The independent reviewer is C.
-    filed = appeal(db_client, people, "investigator", round_id, "reviewer_c", grounds="Decision needs a second look")
+    # The investigator, who is assigned but not a reviewer, files the appeal. The system names C.
+    filed = appeal(db_client, people, "investigator", round_id, grounds="Decision needs a second look")
     assert filed.status_code == 201, filed.text
     assert filed.json()["grounds"] == "Decision needs a second look"
+    assert filed.json()["independent_reviewer_id"] == people["reviewer_c"]
 
     # The case itself is unchanged: an appeal writes no layer, no revision and no status.
     rounds = db_client(people["triager"]).get("/api/v1/reviews", params={"case_id": case_id}).json()
@@ -400,7 +413,7 @@ def test_t09_free_text_is_shown_to_the_writer_and_the_full_view_only(db_client, 
     # A declares a conflict, then withdraws and names B. The appeal is filed by the reporter and names C.
     assert declare(db_client, people, "reviewer", round_id, kind="declared", description="Shared team with the author").status_code == 201
     assert recuse(db_client, people, "reviewer", round_id, "reviewer_b", reason="Too close to the author").status_code == 201
-    assert appeal(db_client, people, "reporter", round_id, "reviewer_c", grounds="The data was not checked").status_code == 201
+    assert appeal(db_client, people, "reporter", round_id, grounds="The data was not checked").status_code == 201
 
     conflict_views = {
         who: db_client(people[who]).get(f"/api/v1/reviews/{round_id}/conflicts").json()[0]["description"]
@@ -505,7 +518,7 @@ def test_recusal_and_appeal_replays_write_one_row_each(db_client, people):
     assert count("SELECT count(*) FROM review_recusals WHERE round_id = %s", (round_id,)) == 1
 
     appeal_key = {"Idempotency-Key": str(uuid.uuid4())}
-    appeal_body = {"grounds": "Once only", "independent_reviewer_id": people["reviewer_c"]}
+    appeal_body = {"grounds": "Once only"}
     appeal_url = f"/api/v1/reviews/{round_id}/appeals"
     first_appeal = db_client(people["reporter"]).post(appeal_url, headers=appeal_key, json=appeal_body)
     again_appeal = db_client(people["reporter"]).post(appeal_url, headers=appeal_key, json=appeal_body)

@@ -383,6 +383,66 @@ def test_task_list_with_a_bad_case_id_is_a_usage_error_without_any_request(api, 
     assert api.calls == []
 
 
+TASK_PATH = f"/api/v1/cases/{CASE_ID}/deadlines/dddddddd-1111-4222-8333-444444444444"
+
+
+def task_update_args(*extra: str) -> tuple[str, ...]:
+    return ("task", "update", CASE_ID, "dddddddd-1111-4222-8333-444444444444", "--username", "ines", *extra)
+
+
+def test_task_update_not_applicable_sends_the_trimmed_reason_and_prints_the_tasks(api, capsys):
+    api.route("PATCH", TASK_PATH, body=CASE_BODY)
+    code, out, err = run(capsys, *task_update_args("--status", "not-applicable", "--reason", "  No external party  "))
+    assert code == 0, err
+    assert out.startswith("Deadline task updated.")
+    (patch,) = [call for call in api.calls if call["method"] == "PATCH"]
+    assert json.loads(patch["data"]) == {"status": "not_applicable", "reason": "No external party"}
+
+
+def test_task_update_open_sends_no_reason(api, capsys):
+    api.route("PATCH", TASK_PATH, body=CASE_BODY)
+    code, _, err = run(capsys, *task_update_args("--status", "open"))
+    assert code == 0, err
+    (patch,) = [call for call in api.calls if call["method"] == "PATCH"]
+    assert json.loads(patch["data"]) == {"status": "open", "reason": None}
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [("--status", "not-applicable"), ("--status", "not-applicable", "--reason", "   ")],
+)
+def test_task_update_not_applicable_needs_a_reason_before_any_request(api, capsys, extra):
+    code, _, err = run(capsys, *task_update_args(*extra))
+    assert code == 2
+    assert "--reason is required when --status is not-applicable" in err
+    assert api.calls == []
+
+
+def test_task_update_refuses_a_reason_for_an_open_or_done_task(api, capsys):
+    code, _, err = run(capsys, *task_update_args("--status", "done", "--reason", "Not needed"))
+    assert code == 2
+    assert "--reason is only allowed with --status not-applicable" in err
+    assert api.calls == []
+
+
+def test_task_restore_posts_to_the_restore_route_and_prints_the_tasks(api, capsys):
+    api.route("POST", f"{TASK_PATH}/restore", body=CASE_BODY)
+    code, out, err = run(capsys, "task", "restore", CASE_ID, "dddddddd-1111-4222-8333-444444444444", "--username", "ines")
+    assert code == 0, err
+    assert out.startswith("Deadline task restored to the status it had before.")
+    assert ("POST", f"{TASK_PATH}/restore") in api.paths()
+
+
+def test_task_restore_of_a_task_that_is_not_not_applicable_says_so(api, capsys):
+    api.route(
+        "POST", f"{TASK_PATH}/restore", status=409,
+        body={"detail": {"status": "deadline_not_marked_not_applicable"}},
+    )
+    code, _, err = run(capsys, "task", "restore", CASE_ID, "dddddddd-1111-4222-8333-444444444444", "--username", "ines")
+    assert code != 0
+    assert "the deadline is not marked not applicable" in err
+
+
 # --- scope of the parity set ---
 
 

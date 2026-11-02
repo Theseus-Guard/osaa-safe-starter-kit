@@ -213,53 +213,48 @@ describe("ReviewIndependence", () => {
     expect(await within(form).findByRole("alert")).toHaveTextContent("The replacement has a declared conflict");
   });
 
-  it("requires grounds and an independent reviewer ID before filing an appeal", async () => {
+  it("requires grounds before filing an appeal and has no reviewer field", async () => {
     const user = userEvent.setup();
     render(<ReviewIndependence roundId={ROUND_ID} canDeclare={false} />);
 
     const form = await screen.findByRole("form", { name: "File an appeal" });
+    expect(within(form).queryByLabelText("Independent reviewer ID")).not.toBeInTheDocument();
     await user.click(within(form).getByRole("button", { name: "File appeal" }));
     expect(await within(form).findByRole("alert")).toHaveTextContent("Give the grounds of the appeal.");
-
-    await user.type(within(form).getByLabelText("Appeal grounds"), "Wrong outcome");
-    await user.click(within(form).getByRole("button", { name: "File appeal" }));
-    expect(await within(form).findByRole("alert")).toHaveTextContent(
-      "Enter the user ID (UUID) of the independent reviewer.",
-    );
     expect(appeal).not.toHaveBeenCalled();
   });
 
-  it("files an appeal with the trimmed grounds and the independent reviewer", async () => {
+  it("files an appeal with the trimmed grounds only, and the system names the reviewer", async () => {
     appeal.mockResolvedValue(APPEAL);
     const user = userEvent.setup();
     render(<ReviewIndependence roundId={ROUND_ID} canDeclare={false} />);
 
     const form = await screen.findByRole("form", { name: "File an appeal" });
     await user.type(within(form).getByLabelText("Appeal grounds"), "  The model layer was not tested  ");
-    await user.type(within(form).getByLabelText("Independent reviewer ID"), INDEPENDENT);
     await user.click(within(form).getByRole("button", { name: "File appeal" }));
 
     await waitFor(() =>
       expect(appeal).toHaveBeenCalledWith(ROUND_ID, {
         grounds: "The model layer was not tested",
-        independent_reviewer_id: INDEPENDENT,
       }),
     );
     expect(toast.success).toHaveBeenCalledWith("Appeal filed.");
     await waitFor(() => expect(listAppeals).toHaveBeenCalledTimes(2));
   });
 
-  it("shows the refusal when the independent reviewer took part in the round", async () => {
-    appeal.mockRejectedValue(new ApiError(422, "the independent reviewer took part in this review round"));
+  it("shows the refusal when no reviewer is eligible for the round", async () => {
+    appeal.mockRejectedValue(new ApiError(409, "no_eligible_reviewer"));
     const user = userEvent.setup();
     render(<ReviewIndependence roundId={ROUND_ID} canDeclare={false} />);
 
     const form = await screen.findByRole("form", { name: "File an appeal" });
     await user.type(within(form).getByLabelText("Appeal grounds"), "Wrong outcome");
-    await user.type(within(form).getByLabelText("Independent reviewer ID"), INDEPENDENT);
     await user.click(within(form).getByRole("button", { name: "File appeal" }));
 
-    expect(await within(form).findByRole("alert")).toHaveTextContent("The independent reviewer took part in this review round.");
+    expect(await within(form).findByRole("alert")).toHaveTextContent(
+      "No independent reviewer can be named for this round yet.",
+    );
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it("shows an error when the entries cannot be loaded", async () => {

@@ -7,11 +7,12 @@ Rules:
 - Recusal: an assigned reviewer withdraws from a round and names a replacement. A withdrawn reviewer cannot set a layer
   on the round. The replacement must be an active, assigned user who holds reviews:write, has no declared conflict on
   the round, and has not withdrawn from it.
-- Appeal: any user who can see the case may file an appeal on one of its rounds and names an independent reviewer. The
-  independent reviewer must be an active, assigned user who holds reviews:write, must not have taken part in the round
-  (opened it, set a layer, withdrawn, or been named as a replacement), must not hold a declared conflict on it, and
-  must not be the appellant. No party can block an appeal: nothing asks the original reviewer or a stakeholder for an
-  approval, and the product does not decide the appeal.
+- Appeal: any user who can see the case may file an appeal on one of its rounds. The system names the independent
+  reviewer; the filer cannot choose one. An eligible reviewer is an active, assigned user who holds reviews:write, has
+  not taken part in the round (opened it, set a layer, withdrawn, or been named as a replacement), has no declared
+  conflict on it, and is not the appellant. The choice is the eligible user with the fewest open appeals, then the
+  lowest user ID. If nobody is eligible, the appeal is refused and nothing is stored. No party can block an appeal:
+  nothing asks the original reviewer or a stakeholder for an approval, and the product does not decide the appeal.
 - Corrections: a declaration or recusal changes only by a new row that names the row it supersedes
   (supersedes_id). Old rows are never edited; migration 0033 rejects an update of their content.
 
@@ -50,10 +51,7 @@ class IndependenceOutcome(Enum):
     REPLACEMENT_NOT_ELIGIBLE = "replacement_not_eligible"
     REPLACEMENT_CONFLICTED = "replacement_conflicted"
     REPLACEMENT_WITHDRAWN = "replacement_withdrawn"
-    INDEPENDENT_IS_FILER = "independent_is_filer"
-    INDEPENDENT_NOT_ELIGIBLE = "independent_not_eligible"
-    INDEPENDENT_TOOK_PART = "independent_took_part"
-    INDEPENDENT_CONFLICTED = "independent_conflicted"
+    NO_ELIGIBLE_REVIEWER = "no_eligible_reviewer"
     REPLAY = "replay"
     KEY_REUSED = "key_reused"
 
@@ -385,18 +383,50 @@ def list_recusals(round_id: str, scope: CaseScope) -> list[RecusalEntry] | None:
         return _select_recusals(conn, "r.round_id = %s", (round_id,))
 
 
+def _choose_independent_reviewer(conn, round_id: str, case_id: str, filer_id: str) -> str | None:
+    """The reviewer the system names for an appeal, or None when nobody is eligible.
+
+    Eligible users pass _eligible_reviewer (active, not a reporter, reviews:write, assigned to the case), are not the
+    filer, took no part in the round, and hold no declared conflict on it. The choice is the eligible user with the
+    fewest open appeals, then the lowest user ID. An open appeal is a non-deleted appeal that names the user as
+    independent reviewer on a round of an open case. Runs on the caller's transaction, with the case row locked.
+    """
+    candidates = [
+        row[0]
+        for row in conn.execute("SELECT id::text FROM users WHERE NOT is_deleted AND is_active ORDER BY id").fetchall()
+    ]
+    best: tuple[int, str] | None = None
+    for user_id in candidates:
+        if user_id == filer_id or not _eligible_reviewer(conn, case_id, user_id):
+            continue
+        if _took_part(conn, round_id, user_id) or has_declared_conflict(conn, round_id, user_id):
+            continue
+        open_appeals = conn.execute(
+            """
+            SELECT count(*) FROM review_appeals a
+            JOIN review_rounds r ON r.id = a.round_id AND NOT r.is_deleted
+            JOIN cases c ON c.id = r.case_id AND NOT c.is_deleted
+            WHERE a.independent_reviewer_id = %s AND NOT a.is_deleted AND c.status = 'open'
+            """,
+            (user_id,),
+        ).fetchone()[0]
+        if best is None or (open_appeals, user_id) < best:
+            best = (open_appeals, user_id)
+    return None if best is None else best[1]
+
+
 def file_appeal(
     round_id: str,
     grounds: str,
-    independent_reviewer_id: str,
     scope: CaseScope,
     *,
     idempotency: KeyScope | None = None,
     render: Callable[[AppealEntry], Any] | None = None,
 ) -> tuple[IndependenceOutcome, AppealEntry | None, StoredResponse | None]:
-    """File an appeal against a round and name its independent reviewer.
+    """File an appeal against a round. The system names the independent reviewer (_choose_independent_reviewer).
 
     Any caller who can see the case may file. The case state does not matter: an appeal is accepted on a closed case.
+    When nobody is eligible the appeal is refused and nothing is written.
     """
     with connect() as conn:
         replayed = _replay(conn, idempotency)
@@ -406,17 +436,12 @@ def file_appeal(
         case_id = _visible_round_case(conn, round_id, scope)
         if case_id is None:
             return IndependenceOutcome.NOT_FOUND, None, None
-        # Locks the case so the conflict and participation checks see the state that the insert commits against.
+        # Locks the case so the eligibility checks and the choice see the state that the insert commits against.
         if _lock_visible_case(conn, case_id, scope) is None:
             return IndependenceOutcome.NOT_FOUND, None, None
-        if independent_reviewer_id == scope.user_id:
-            return IndependenceOutcome.INDEPENDENT_IS_FILER, None, None
-        if not _eligible_reviewer(conn, case_id, independent_reviewer_id):
-            return IndependenceOutcome.INDEPENDENT_NOT_ELIGIBLE, None, None
-        if _took_part(conn, round_id, independent_reviewer_id):
-            return IndependenceOutcome.INDEPENDENT_TOOK_PART, None, None
-        if has_declared_conflict(conn, round_id, independent_reviewer_id):
-            return IndependenceOutcome.INDEPENDENT_CONFLICTED, None, None
+        independent_reviewer_id = _choose_independent_reviewer(conn, round_id, case_id, scope.user_id)
+        if independent_reviewer_id is None:
+            return IndependenceOutcome.NO_ELIGIBLE_REVIEWER, None, None
         entry_id = conn.execute(
             """
             INSERT INTO review_appeals (round_id, filed_by, grounds, independent_reviewer_id)

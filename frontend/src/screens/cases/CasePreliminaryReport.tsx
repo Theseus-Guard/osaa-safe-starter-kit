@@ -108,10 +108,6 @@ function ReportBody({ report }: { report: PreliminaryReport }) {
               </dd>
             </div>
             <div>
-              <dt className="font-medium">Internal incident option</dt>
-              <dd className="text-muted-foreground">{report.classification.internal_incident_option ? "Yes" : "No"}</dd>
-            </div>
-            <div>
               <dt className="font-medium">Rationale</dt>
               <dd className="whitespace-pre-wrap text-muted-foreground">
                 {recordText(report.classification.classification_rationale, true)}

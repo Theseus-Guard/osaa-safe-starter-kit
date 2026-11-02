@@ -501,6 +501,15 @@ describe("case and evidence endpoints", () => {
     expect(bodyOf(1)).toEqual({ status: "not_applicable", reason: "Does not apply" });
   });
 
+  it("restores a deadline task with a POST to its restore route and no body", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+
+    await api.restoreDeadline("case-1", "task-1");
+
+    expect(urlOf(0)).toBe("/api/v1/cases/case-1/deadlines/task-1/restore");
+    expect(methodOf(0)).toBe("POST");
+  });
+
   it("lists and removes assignments", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, [])).mockResolvedValueOnce(new Response(null, { status: 204 }));
 

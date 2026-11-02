@@ -621,7 +621,6 @@ def classification_body(version: int = 2) -> dict:
         "version": version,
         "triggers": ["boundary_escape"],
         "event_kind": "incident",
-        "internal_incident_option": False,
         "classification_rationale": None,
         "responsible_operator": None,
         "affected_versions": None,
@@ -641,7 +640,6 @@ def empty_classification_payload(expected_version: int) -> dict:
         "expected_version": expected_version,
         "triggers": [],
         "event_kind": None,
-        "internal_incident_option": False,
         "classification_rationale": None,
         "responsible_operator": None,
         "affected_versions": None,
@@ -940,7 +938,7 @@ def test_classification_set_sends_every_field(api, capsys):
         "--expected-version", "3",
         "--trigger", "boundary_escape", "--trigger", "confidential_data_exposure",
         "--event-kind", "near_miss",
-        "--internal-incident-option", "--classification-rationale", "Within the plan",
+        "--classification-rationale", "Within the plan",
         "--responsible-operator", "Ops", "--affected-versions", "1.2",
         "--approved-scope", "Scope A", "--scope-permission-source", "Contract 7",
         "--containment", "Keys rotated", "--evidence-gap-plan", "Pull logs",
@@ -953,7 +951,6 @@ def test_classification_set_sends_every_field(api, capsys):
         "expected_version": 3,
         "triggers": ["boundary_escape", "confidential_data_exposure"],
         "event_kind": "near_miss",
-        "internal_incident_option": True,
         "classification_rationale": "Within the plan",
         "responsible_operator": "Ops",
         "affected_versions": "1.2",
@@ -1267,7 +1264,6 @@ CLASSIFICATION_BODY = {
     "version": 2,
     "triggers": ["boundary_escape", "confidential_data_exposure"],
     "event_kind": "incident",
-    "internal_incident_option": False,
     "classification_rationale": "Customer data left the boundary",
     "responsible_operator": "Ops lead",
     "affected_versions": None,
@@ -1328,7 +1324,6 @@ REPORT_BODY = {
         "version": 2,
         "triggers": ["boundary_escape"],
         "event_kind": "incident",
-        "internal_incident_option": False,
         "next_update_due_at": "2026-11-02T09:00:00+00:00",
     },
     "awareness_events": [
@@ -1807,37 +1802,38 @@ def test_review_recuse_replacement_refusal_names_the_rule(api, capsys):
     assert "declared conflict" in err
 
 
-def test_review_appeal_posts_the_grounds_and_the_independent_reviewer(api, capsys):
+def test_review_appeal_posts_only_the_grounds_and_the_system_names_the_reviewer(api, capsys):
     api.route("POST", APPEAL_PATH, status=201, body=APPEAL_ENTRY)
     code, out, err = run(
-        capsys, "case", "review", "appeal", ROUND_ID, "--grounds", "The layer was not tested",
-        "--independent", REPLACEMENT_ID, "--username", "alice",
+        capsys, "case", "review", "appeal", ROUND_ID, "--grounds", "The layer was not tested", "--username", "alice",
     )
     assert code == 0, err
     assert "Appeal filed." in out
-    assert "the product does not decide it" in out
-    assert last_post(api)["json"] == {"grounds": "The layer was not tested", "independent_reviewer_id": REPLACEMENT_ID}
+    assert "the product does not decide the appeal" in out
+    assert last_post(api)["json"] == {"grounds": "The layer was not tested"}
     assert len(posted_key(api)) >= 1
+
+
+def test_review_appeal_has_no_reviewer_option(api, capsys):
+    code, out, err = run(
+        capsys, "case", "review", "appeal", ROUND_ID, "--grounds", "Wrong", "--independent", REPLACEMENT_ID,
+        "--username", "alice",
+    )
+    assert code == 2
+    assert all(method != "POST" for method, _ in api.paths())
 
 
 def test_review_appeal_refuses_blank_grounds_before_any_request(api, capsys):
     code, out, err = run(
-        capsys, "case", "review", "appeal", ROUND_ID, "--grounds", "   ", "--independent", REPLACEMENT_ID,
-        "--username", "alice",
+        capsys, "case", "review", "appeal", ROUND_ID, "--grounds", "   ", "--username", "alice",
     )
     assert code == 2
     assert "--grounds must not be blank" in err
     assert all(method != "POST" for method, _ in api.paths())
 
 
-def test_review_appeal_422_names_the_independence_rule(api, capsys):
-    api.route(
-        "POST", APPEAL_PATH, status=422,
-        body={"detail": "the independent reviewer took part in this review round"},
-    )
-    code, out, err = run(
-        capsys, "case", "review", "appeal", ROUND_ID, "--grounds", "Wrong", "--independent", REPLACEMENT_ID,
-        "--username", "alice",
-    )
+def test_review_appeal_409_says_no_reviewer_is_eligible(api, capsys):
+    api.route("POST", APPEAL_PATH, status=409, body={"detail": {"status": "no_eligible_reviewer"}})
+    code, out, err = run(capsys, "case", "review", "appeal", ROUND_ID, "--grounds", "Wrong", "--username", "alice")
     assert code != 0
-    assert "independent reviewer must be another active, assigned user" in err
+    assert "no reviewer is eligible for this round" in err
