@@ -405,7 +405,9 @@ def _latest_version_number(conn, package_id: str) -> int:
     ).fetchone()[0]
 
 
-def _load_version(conn, case_id: str, version_id: str) -> Version | None:
+def load_version_on(conn, case_id: str, version_id: str) -> Version | None:
+    """One version of the case with its items, approval and latest-version state, on the caller's connection. None when
+    the version is not part of the case. The caller checks the case first."""
     row = conn.execute(
         """
         SELECT id::text, package_id::text, case_id::text, version, template, tlp_audience, recipient, purpose,
@@ -654,7 +656,7 @@ def list_versions(case_id: str, scope: CaseScope, limit: int) -> list[Version] |
             """,
             (case_id, limit),
         ).fetchall()
-        return [_load_version(conn, case_id, row[0]) for row in ids]
+        return [load_version_on(conn, case_id, row[0]) for row in ids]
 
 
 def get_version(case_id: str, version_id: str, scope: CaseScope) -> Version | None:
@@ -669,7 +671,7 @@ def get_version(case_id: str, version_id: str, scope: CaseScope) -> Version | No
             is None
         ):
             return None
-        return _load_version(conn, case_id, version_id)
+        return load_version_on(conn, case_id, version_id)
 
 
 def item_visibility(version: Version, recipient: tlp.Recipient) -> list[bool]:
@@ -761,7 +763,7 @@ def approve_version(
                 return Result(Outcome.NOT_FOUND)
             if status == "closed":
                 return Result(Outcome.CLOSED)
-            version = _load_version(conn, case_id, version_id)
+            version = load_version_on(conn, case_id, version_id)
             if version is None:
                 return Result(Outcome.VERSION_NOT_FOUND)
             if version.approval is not None:
@@ -854,7 +856,8 @@ def approve_version(
 
 
 def check_release(version_id: str) -> ReleaseCheck:
-    """Re-check a version right before a send. Not called by any route yet: the send step (a later package) calls it.
+    """Re-check a version right before a send. The send step of a package calls it, and so does the notice record
+    (safe_kit.external_notices), which may only record a notice for a version that passes.
 
     It passes only when all of these hold: the version exists; an approval exists for it; the approval's recipient,
     purpose and digest equal the version's; the version is still the latest of its package; the digest recomputed from
@@ -867,44 +870,42 @@ def check_release(version_id: str) -> ReleaseCheck:
         ).fetchone()
         if row is None:
             return ReleaseCheck(ReleaseOutcome.NOT_FOUND, version_id)
-        version = _load_version(conn, row[0], version_id)
+        version = load_version_on(conn, row[0], version_id)
         assert version is not None
-        if version.approval is None:
-            return ReleaseCheck(ReleaseOutcome.NOT_APPROVED, version_id, version.digest)
-        if not version.is_latest:
-            return ReleaseCheck(
-                ReleaseOutcome.REVOKED_BY_CHANGE, version_id, version.digest
-            )
-        approval = version.approval
-        if (approval.recipient, approval.purpose, approval.digest) != (
-            version.recipient,
-            version.purpose,
-            version.digest,
-        ):
-            return ReleaseCheck(
-                ReleaseOutcome.APPROVAL_MISMATCH, version_id, version.digest
-            )
-        if digest_of_version(version) != version.digest:
-            return ReleaseCheck(
-                ReleaseOutcome.DIGEST_MISMATCH, version_id, version.digest
-            )
-        release_ok = all(
-            tlp.is_release_approved_on(conn, item.evidence_id)
-            for item in version.items
-            if item.tlp_label == tlp.CLEAR
-        )
-        # The TLP rule (safe_kit.tlp): CLEAR is permitted only after the approval record exists, which it does here.
-        # A CLEAR item still needs its own release approval, so both checks are required for a CLEAR package.
-        if version.tlp_audience == tlp.CLEAR and not tlp.permits(
-            tlp.CLEAR,
-            named=False,
-            organisation=False,
-            external=False,
-            approved=release_ok,
-        ):
-            return ReleaseCheck(
-                ReleaseOutcome.RELEASE_APPROVAL_MISSING, version_id, version.digest
-            )
+        return release_check_on(conn, version)
+
+
+def release_check_on(conn, version: Version) -> ReleaseCheck:
+    """The check of check_release for a version already loaded on the caller's connection (see the docstring above)."""
+    version_id = version.id
+    if version.approval is None:
+        return ReleaseCheck(ReleaseOutcome.NOT_APPROVED, version_id, version.digest)
+    if not version.is_latest:
+        return ReleaseCheck(ReleaseOutcome.REVOKED_BY_CHANGE, version_id, version.digest)
+    approval = version.approval
+    if (approval.recipient, approval.purpose, approval.digest) != (
+        version.recipient,
+        version.purpose,
+        version.digest,
+    ):
+        return ReleaseCheck(ReleaseOutcome.APPROVAL_MISMATCH, version_id, version.digest)
+    if digest_of_version(version) != version.digest:
+        return ReleaseCheck(ReleaseOutcome.DIGEST_MISMATCH, version_id, version.digest)
+    release_ok = all(
+        tlp.is_release_approved_on(conn, item.evidence_id)
+        for item in version.items
+        if item.tlp_label == tlp.CLEAR
+    )
+    # The TLP rule (safe_kit.tlp): CLEAR is permitted only after the approval record exists, which it does here.
+    # A CLEAR item still needs its own release approval, so both checks are required for a CLEAR package.
+    if version.tlp_audience == tlp.CLEAR and not tlp.permits(
+        tlp.CLEAR,
+        named=False,
+        organisation=False,
+        external=False,
+        approved=release_ok,
+    ):
+        return ReleaseCheck(ReleaseOutcome.RELEASE_APPROVAL_MISSING, version_id, version.digest)
     return ReleaseCheck(ReleaseOutcome.RELEASABLE, version_id, version.digest)
 
 
@@ -1022,7 +1023,7 @@ def export_version(
             is None
         ):
             return Result(Outcome.NOT_FOUND)
-        version = _load_version(conn, case_id, version_id)
+        version = load_version_on(conn, case_id, version_id)
         if version is None:
             return Result(Outcome.VERSION_NOT_FOUND)
         if version.approval is None:

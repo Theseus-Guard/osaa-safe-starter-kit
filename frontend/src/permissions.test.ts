@@ -55,6 +55,7 @@ describe("permissions", () => {
       canReadReporterContact: false,
       canReadDisclosures: false,
       canApproveDisclosures: false,
+      canRecordNotices: false,
     });
   });
 
@@ -62,14 +63,23 @@ describe("permissions", () => {
     const approver = caseAbilities(["disclosures:read", "disclosures:approve", "cases:read_assigned"]);
     expect(approver.canReadDisclosures).toBe(true);
     expect(approver.canApproveDisclosures).toBe(true);
+    expect(approver.canRecordNotices).toBe(true);
 
     const reader = caseAbilities(["disclosures:read"]);
     expect(reader.canReadDisclosures).toBe(true);
     expect(reader.canApproveDisclosures).toBe(false);
+    expect(reader.canRecordNotices).toBe(false);
 
     const auditor = caseAbilities(["cases:read_all"]);
     expect(auditor.canReadDisclosures).toBe(false);
     expect(auditor.canApproveDisclosures).toBe(false);
+    expect(auditor.canRecordNotices).toBe(false);
+  });
+
+  it("lets a preparer record a notice on the manual path only", () => {
+    const preparer = caseAbilities(["disclosures:read", "disclosures:prepare"]);
+    expect(preparer.canRecordNotices).toBe(true);
+    expect(preparer.canApproveDisclosures).toBe(false);
   });
 
   it("lets only reporter_contact:read open the reporter contact", () => {

@@ -1427,6 +1427,70 @@ export function approveDisclosure(
   );
 }
 
+// External notices of a disclosure version (safe_kit.external_notices). A notice records a send that a person made. Nothing
+// is sent from here, and a notice is never resent automatically. Recording needs disclosures:approve, or disclosures:prepare
+// on the manual path with a reason. A receipt, follow-up or cancel is recorded with the command line for now.
+export type NoticeChannel = "email" | "postal" | "webhook" | "secure_manual" | "other";
+export type NoticeState =
+  | "sent"
+  | "receipt_received"
+  | "receipt_unknown"
+  | "follow_up_required"
+  | "follow_up_done"
+  | "cancelled";
+
+export interface ExternalNotice {
+  id: string;
+  revision: number;
+  case_id: string;
+  package_id: string;
+  version_id: string;
+  version: number;
+  channel: NoticeChannel;
+  channel_other: string | null;
+  // An identifier of the recipient kept outside SAFE. Not a name or an address.
+  recipient_ref: string;
+  sent_at: string;
+  recorded_at: string;
+  recorded_by: string;
+  manual_fallback: boolean;
+  fallback_reason: string | null;
+  repeat_reason: string | null;
+  state: NoticeState;
+  state_reason_code: string | null;
+  state_reason: string | null;
+  received_at: string | null;
+  changed_by: string;
+  changed_at: string;
+}
+
+export interface ExternalNoticeList {
+  items: ExternalNotice[];
+}
+
+export interface ExternalNoticeBody {
+  channel: NoticeChannel;
+  channel_other: string | null;
+  recipient_ref: string;
+  sent_at: string;
+  manual_fallback: boolean;
+  fallback_reason: string | null;
+  repeat_reason: string | null;
+}
+
+export function listNotices(caseId: string, versionId: string): Promise<ExternalNoticeList> {
+  return request<ExternalNoticeList>(
+    `/cases/${encodeURIComponent(caseId)}/disclosures/${encodeURIComponent(versionId)}/notices`,
+  );
+}
+
+export function recordNotice(caseId: string, versionId: string, body: ExternalNoticeBody): Promise<ExternalNotice> {
+  return request<ExternalNotice>(
+    `/cases/${encodeURIComponent(caseId)}/disclosures/${encodeURIComponent(versionId)}/notices`,
+    { method: "POST", json: body, headers: idempotencyHeaders() },
+  );
+}
+
 export async function readiness(): Promise<Readiness> {
   const response = await fetch("/api/v1/health/ready", { credentials: "include" });
   if (response.ok) return "ready";

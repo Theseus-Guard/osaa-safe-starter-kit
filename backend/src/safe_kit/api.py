@@ -1510,4 +1510,9 @@ from safe_kit.disclosure_api import disclosure_router  # noqa: E402
 
 app.include_router(disclosure_router)
 
+# External notices of a disclosure version: recorded sends, receipts, follow-ups and cancels (see safe_kit.external_notices_api).
+from safe_kit.external_notices_api import notice_router  # noqa: E402
+
+app.include_router(notice_router)
+
 app.include_router(profile_router)

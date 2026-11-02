@@ -1941,15 +1941,21 @@ def _disclosure_failure(error: RequestFailed) -> RequestFailed:
     return RequestFailed(text, status=error.status, detail=detail)
 
 
-def _disclosure_write(base_url: str, args: argparse.Namespace, method: str, path: str, payload: dict, render) -> None:
-    """One disclosure write in its own login session, with an Idempotency-Key. --json prints the API body."""
+def _disclosure_write(
+    base_url: str, args: argparse.Namespace, method: str, path: str, payload: dict, render, failure=None
+) -> None:
+    """One disclosure write in its own login session, with an Idempotency-Key. --json prints the API body.
+
+    failure maps a refused write to its message; the disclosure messages are the default. The notice commands pass their own.
+    """
     headers = {"Idempotency-Key": args.idempotency_key or str(uuid.uuid4())}
+    to_message = failure or _disclosure_failure
 
     def action(base: str, token: str) -> None:
         try:
             raw = _call(base, method, path, token=token, payload=payload, extra_headers=headers)
         except RequestFailed as error:
-            raise _disclosure_failure(error) from None
+            raise to_message(error) from None
         if args.json:
             _print_json(raw)
         else:
@@ -2088,6 +2094,213 @@ def _disclosure_export(base_url: str, args: argparse.Namespace) -> None:
 
     _with_session(base_url, args, action)
     _write_document(captured["raw"], args.out)
+# --- external notices (safe_kit.external_notices_api) -----------------------------------------------------------------
+
+NOTICE_CHANNELS = ("email", "postal", "webhook", "secure_manual", "other")
+NOTICE_UNKNOWN_REASONS = ("provider_accepted_no_receipt", "timeout", "no_answer")
+NOTICE_FOLLOW_UP_ACTIONS = ("require", "complete")
+NOTICE_RECIPIENT_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
+NOTICE_REASON_LIMIT = 500
+NOTICE_CHANNEL_OTHER_LIMIT = 200
+NOTICE_LIST_MESSAGES = {404: "case or disclosure version not found, or the case is not visible to your account"}
+NOTICE_STATE_TEXT = {
+    "sent": "sent; no receipt recorded yet",
+    "receipt_received": "receipt received",
+    "receipt_unknown": "receipt unknown",
+    "follow_up_required": "follow-up required",
+    "follow_up_done": "follow-up done",
+    "cancelled": "cancelled",
+}
+# The text for each status the API gives a refused notice write. Unknown statuses keep the API's HTTP message.
+NOTICE_STATUS_TEXT = {
+    "state_conflict": (
+        "the notice is not in a state that allows this change. Run 'case notice list CASE_ID VERSION_ID' to read its state"
+    ),
+    "case_closed": "the case is closed, so its notices cannot change",
+    "version_not_approved": (
+        "the version is not approved, so no notice can be recorded for it. An approver must approve this exact version first"
+    ),
+    "version_superseded": (
+        "a newer version of the package exists, so no notice can be recorded for this one. Use the latest approved version"
+    ),
+    "approval_mismatch": "the approval does not match the version. Report this to an administrator",
+    "digest_mismatch": "the stored content does not match its digest, so nothing was recorded. Report this to an administrator",
+    "release_approval_missing": "a CLEAR item has no release approval, so no notice can be recorded for this version",
+    "time_out_of_range": (
+        "the time is before the approval, before the notice was sent, or in the future. Enter the time it happened"
+    ),
+    "repeat_reason_required": (
+        "this recipient already has a notice for this version. Give --repeat-reason to record a second notice"
+    ),
+    "manual_fallback_required": (
+        "your account records notices on the manual path only. Give --manual-fallback and --fallback-reason"
+    ),
+    "idempotency_key_reused": "this Idempotency-Key was used with another request. Run again without --idempotency-key",
+}
+
+
+def _notice_failure(error: RequestFailed) -> RequestFailed:
+    """Replace the message of a refused notice write with the text for its status, when the API names one."""
+    detail = error.detail
+    status = detail.get("status") if isinstance(detail, dict) else None
+    if status == "state_conflict" and isinstance(detail, dict):
+        current = NOTICE_STATE_TEXT.get(str(detail.get("current_state")), "unknown")
+        text = (
+            f"this change is not allowed while the notice is '{current}'. "
+            "Run 'case notice list CASE_ID VERSION_ID' to read its state"
+        )
+    else:
+        text = NOTICE_STATUS_TEXT.get(status or "")
+    if text is None:
+        return error
+    return RequestFailed(text, status=error.status, detail=detail)
+
+
+def _notice_text(value: str, option: str, limit: int) -> str:
+    text = value.strip()
+    if not text:
+        raise UsageError(f"{option} cannot be empty")
+    if len(text) > limit:
+        raise UsageError(f"{option} can be at most {limit} characters")
+    return text
+
+
+def _notice_base(case_id: str, version_id: str) -> str:
+    return f"/api/v1/cases/{case_id}/disclosures/{version_id}/notices"
+
+
+def _render_notice(notice: dict) -> None:
+    print(f"Notice {notice['id']} (revision {notice['revision']}): {NOTICE_STATE_TEXT[notice['state']]}")
+    _print_field("Version", f"{notice['version']} ({notice['version_id']})")
+    channel = notice["channel"] if notice["channel_other"] is None else f"other: {notice['channel_other']}"
+    _print_field("Channel", channel)
+    _print_field("Recipient reference", notice["recipient_ref"])
+    _print_field("Sent (UTC)", notice["sent_at"])
+    _print_field("Recorded by", notice["recorded_by"])
+    if notice["received_at"] is not None:
+        _print_field("Received (UTC)", notice["received_at"])
+    if notice["state_reason_code"] is not None:
+        _print_field("No receipt because", notice["state_reason_code"])
+    if notice["state_reason"] is not None:
+        _print_field("Reason", notice["state_reason"])
+    if notice["manual_fallback"]:
+        _print_field("Manual path", notice["fallback_reason"])
+
+
+def _render_notice_recorded(notice: dict) -> None:
+    print("Notice recorded as sent. No receipt is assumed: record the receipt, or that it is unknown, with 'case notice receipt'.")
+    _render_notice(notice)
+
+
+def _render_notice_list(raw: bytes, _full_view: bool) -> None:
+    items = _json_object(raw)["items"]
+    if not items:
+        print("No external notice exists for this disclosure version.")
+        return
+    for item in items:
+        print(
+            f"  {item['id']}  version {item['version']}  {item['channel']}  {item['recipient_ref']}  "
+            f"sent {item['sent_at']}  {NOTICE_STATE_TEXT[item['state']]}"
+        )
+
+
+def _notice_record(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+    version_id = _uuid_arg(args.version_id, "VERSION_ID")
+    if (args.channel == "other") != (args.channel_other is not None):
+        raise UsageError("--channel-other is required with --channel other, and only then")
+    channel_other = None
+    if args.channel_other is not None:
+        channel_other = _notice_text(args.channel_other, "--channel-other", NOTICE_CHANNEL_OTHER_LIMIT)
+    if not NOTICE_RECIPIENT_PATTERN.match(args.recipient_ref):
+        raise UsageError(
+            "--recipient-ref is an identifier of the recipient kept outside SAFE: letters, digits, '.', '_', ':' or '-', "
+            "up to 64 characters. Do not put a name or an address"
+        )
+    if args.manual_fallback != (args.fallback_reason is not None):
+        raise UsageError("--fallback-reason is required with --manual-fallback, and only then")
+    sent_at = _parse_timestamp(args.sent_at, "--sent-at", not_in_future=True)
+    payload = {
+        "channel": args.channel,
+        "channel_other": channel_other,
+        "recipient_ref": args.recipient_ref,
+        "sent_at": sent_at.isoformat(),
+        "manual_fallback": args.manual_fallback,
+        "fallback_reason": _notice_text(args.fallback_reason, "--fallback-reason", NOTICE_REASON_LIMIT)
+        if args.fallback_reason is not None
+        else None,
+        "repeat_reason": _notice_text(args.repeat_reason, "--repeat-reason", NOTICE_REASON_LIMIT)
+        if args.repeat_reason is not None
+        else None,
+    }
+    _disclosure_write(
+        base_url,
+        args,
+        "POST",
+        _notice_base(case_id, version_id),
+        payload,
+        _render_notice_recorded,
+        failure=_notice_failure,
+    )
+
+
+def _notice_list(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+    version_id = _uuid_arg(args.version_id, "VERSION_ID")
+    _case_read(base_url, args, _notice_base(case_id, version_id), NOTICE_LIST_MESSAGES, _render_notice_list)
+
+
+def _notice_receipt(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+    version_id = _uuid_arg(args.version_id, "VERSION_ID")
+    notice_id = _uuid_arg(args.notice_id, "NOTICE_ID")
+    reason = _notice_text(args.reason, "--reason", NOTICE_REASON_LIMIT) if args.reason is not None else None
+    if args.received_at is not None:
+        received_at = _parse_timestamp(args.received_at, "--received-at", not_in_future=True)
+        payload = {"outcome": "received", "received_at": received_at.isoformat(), "reason_code": None, "reason": reason}
+    else:
+        payload = {"outcome": "unknown", "received_at": None, "reason_code": args.unknown, "reason": reason}
+    _disclosure_write(
+        base_url,
+        args,
+        "POST",
+        f"{_notice_base(case_id, version_id)}/{notice_id}/receipt",
+        payload,
+        _render_notice,
+        failure=_notice_failure,
+    )
+
+
+def _notice_follow_up(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+    version_id = _uuid_arg(args.version_id, "VERSION_ID")
+    notice_id = _uuid_arg(args.notice_id, "NOTICE_ID")
+    payload = {"action": args.action, "reason": _notice_text(args.reason, "--reason", NOTICE_REASON_LIMIT)}
+    _disclosure_write(
+        base_url,
+        args,
+        "POST",
+        f"{_notice_base(case_id, version_id)}/{notice_id}/follow-up",
+        payload,
+        _render_notice,
+        failure=_notice_failure,
+    )
+
+
+def _notice_cancel(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+    version_id = _uuid_arg(args.version_id, "VERSION_ID")
+    notice_id = _uuid_arg(args.notice_id, "NOTICE_ID")
+    payload = {"reason": _notice_text(args.reason, "--reason", NOTICE_REASON_LIMIT)}
+    _disclosure_write(
+        base_url,
+        args,
+        "POST",
+        f"{_notice_base(case_id, version_id)}/{notice_id}/cancel",
+        payload,
+        _render_notice,
+        failure=_notice_failure,
+    )
 
 
 def _add_idempotency_option(parser: argparse.ArgumentParser) -> None:
@@ -2372,6 +2585,88 @@ def _add_case_update_commands(case_commands) -> None:
     )
     _add_auth_options(disclosure_export, json_output=False)
     disclosure_export.set_defaults(handler=_disclosure_export)
+
+    notice = case_commands.add_parser(
+        "notice",
+        help="Record the external notices of an approved disclosure version: the send, the receipt or unknown, follow-ups, "
+        "and cancels. Nothing is sent from here",
+    )
+    notice_commands = notice.add_subparsers(dest="notice_command", required=True)
+    notice_record = notice_commands.add_parser(
+        "record", help="Record that you sent an approved version to a recipient. It starts as sent, with no receipt"
+    )
+    notice_record.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    notice_record.add_argument("version_id", metavar="VERSION_ID", help="Version ID (UUID) of an approved, current version")
+    notice_record.add_argument("--channel", required=True, choices=NOTICE_CHANNELS, help="How you sent it")
+    notice_record.add_argument(
+        "--channel-other", metavar="TEXT", help="Describe the channel, up to 200 characters. Required with --channel other"
+    )
+    notice_record.add_argument(
+        "--recipient-ref",
+        required=True,
+        metavar="REF",
+        help="Identifier of the recipient kept outside SAFE, up to 64 characters: letters, digits, '.', '_', ':' or '-'",
+    )
+    notice_record.add_argument(
+        "--sent-at", required=True, metavar="ISO8601", help="When you sent it, with a timezone, for example 2026-11-02T09:00:00Z"
+    )
+    notice_record.add_argument(
+        "--manual-fallback",
+        action="store_true",
+        help="Record on the manual path, because the approver was unavailable. Needs --fallback-reason",
+    )
+    notice_record.add_argument("--fallback-reason", metavar="TEXT", help="Why the manual path is used, up to 500 characters")
+    notice_record.add_argument(
+        "--repeat-reason", metavar="TEXT", help="Why a second notice to this recipient is needed, up to 500 characters"
+    )
+    _add_idempotency_option(notice_record)
+    _add_auth_options(notice_record)
+    notice_record.set_defaults(handler=_notice_record)
+    notice_list = notice_commands.add_parser(
+        "list", help="List the notices of a disclosure version, newest first, with their current state"
+    )
+    notice_list.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    notice_list.add_argument("version_id", metavar="VERSION_ID", help="Version ID (UUID)")
+    _add_auth_options(notice_list)
+    notice_list.set_defaults(handler=_notice_list)
+    notice_receipt = notice_commands.add_parser(
+        "receipt", help="Record the receipt from the recipient, or that no receipt is known and why"
+    )
+    notice_receipt.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    notice_receipt.add_argument("version_id", metavar="VERSION_ID", help="Version ID (UUID)")
+    notice_receipt.add_argument("notice_id", metavar="NOTICE_ID", help="Notice ID (UUID)")
+    receipt_outcome = notice_receipt.add_mutually_exclusive_group(required=True)
+    receipt_outcome.add_argument(
+        "--received-at", metavar="ISO8601", help="The recipient's receipt, with its time and a timezone"
+    )
+    receipt_outcome.add_argument(
+        "--unknown",
+        choices=NOTICE_UNKNOWN_REASONS,
+        help="No receipt is known. A provider's acceptance is not a receipt: use provider_accepted_no_receipt",
+    )
+    notice_receipt.add_argument("--reason", metavar="TEXT", help="A note, up to 500 characters")
+    _add_idempotency_option(notice_receipt)
+    _add_auth_options(notice_receipt)
+    notice_receipt.set_defaults(handler=_notice_receipt)
+    notice_follow_up = notice_commands.add_parser(
+        "follow-up", help="Mark a follow-up as required, or as done, with the reason"
+    )
+    notice_follow_up.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    notice_follow_up.add_argument("version_id", metavar="VERSION_ID", help="Version ID (UUID)")
+    notice_follow_up.add_argument("notice_id", metavar="NOTICE_ID", help="Notice ID (UUID)")
+    notice_follow_up.add_argument("--action", required=True, choices=NOTICE_FOLLOW_UP_ACTIONS, help="require or complete")
+    notice_follow_up.add_argument("--reason", required=True, metavar="TEXT", help="Up to 500 characters")
+    _add_idempotency_option(notice_follow_up)
+    _add_auth_options(notice_follow_up)
+    notice_follow_up.set_defaults(handler=_notice_follow_up)
+    notice_cancel = notice_commands.add_parser("cancel", help="Cancel a notice with a reason. Not possible after a receipt")
+    notice_cancel.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    notice_cancel.add_argument("version_id", metavar="VERSION_ID", help="Version ID (UUID)")
+    notice_cancel.add_argument("notice_id", metavar="NOTICE_ID", help="Notice ID (UUID)")
+    notice_cancel.add_argument("--reason", required=True, metavar="TEXT", help="Up to 500 characters")
+    _add_idempotency_option(notice_cancel)
+    _add_auth_options(notice_cancel)
+    notice_cancel.set_defaults(handler=_notice_cancel)
 
     review = case_commands.add_parser(
         "review",
