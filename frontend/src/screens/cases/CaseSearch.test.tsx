@@ -20,6 +20,12 @@ const CASE: CaseSummary = {
   awareness_time: "2026-10-30T08:00:00Z",
   status: "open",
   created_at: "2026-10-30T08:05:00Z",
+  next_deadline: null,
+  updated_at: "2026-10-30T08:05:00Z",
+  risk_score: null,
+  impact_c: null,
+  impact_b: null,
+  impact_a: null,
 };
 
 function page(items: CaseSummary[]) {

@@ -22,6 +22,9 @@ REQUEST_TIMEOUT_SECONDS = 10
 MAX_TITLE_LENGTH = 200
 DEFAULT_PAGE_SIZE = 20
 MAX_PAGE_SIZE = 200
+# The case status values, the same as safe_kit.cases.CaseStatus. The CLI does not import the backend package, so the
+# list is written out here. A test checks it against the API.
+CASE_STATUS_CHOICES = ("open", "closed")
 # Same limit as the API (safe_kit.case_import.MAX_IMPORT_BYTES). The CLI does not import the backend package.
 MAX_IMPORT_FILE_BYTES = 1024 * 1024
 # Same default as the API (SAFE_EVIDENCE_MAX_BYTES). The server sets the real limit and answers 413 when it is lower.
@@ -323,9 +326,17 @@ def _print_case_page(page: dict) -> None:
     if not items:
         print(f"No cases to show. Total: {page['total']}")
         return
-    rows = [("REFERENCE", "STATUS", "AWARENESS (UTC)", "RISK", "TITLE")]
+    rows = [("REFERENCE", "STATUS", "AWARENESS (UTC)", "NEXT DEADLINE (UTC)", "LAST UPDATED (UTC)", "RISK", "TITLE")]
     rows += [
-        (item["reference"], item["status"], item["awareness_time"], _format_risk(item["risk_score"]), item["title"])
+        (
+            item["reference"],
+            item["status"],
+            item["awareness_time"],
+            item["next_deadline"] or "None",
+            item["updated_at"],
+            _format_risk(item["risk_score"]),
+            item["title"],
+        )
         for item in items
     ]
     _print_table(rows)
@@ -376,15 +387,12 @@ def _check_paging(args: argparse.Namespace) -> None:
 
 def _case_list(base_url: str, args: argparse.Namespace) -> None:
     _check_paging(args)
+    query: dict = {"limit": args.limit, "offset": args.offset}
+    if args.status is not None:
+        query["status"] = args.status
 
     def action(base: str, token: str) -> None:
-        raw = _call(
-            base,
-            "GET",
-            "/api/v1/cases",
-            token=token,
-            query={"limit": args.limit, "offset": args.offset},
-        )
+        raw = _call(base, "GET", "/api/v1/cases", token=token, query=query)
         if args.json:
             _print_json(raw)
         else:
@@ -1669,6 +1677,9 @@ def build_parser() -> argparse.ArgumentParser:
     listing = case_commands.add_parser("list", help="List your cases, newest first")
     listing.add_argument("--limit", type=int, default=DEFAULT_PAGE_SIZE, help="Cases per page (1 to 200)")
     listing.add_argument("--offset", type=int, default=0, help="Number of cases to skip")
+    listing.add_argument(
+        "--status", choices=CASE_STATUS_CHOICES, default=None, help="Only cases with this status (default: all)"
+    )
     _add_auth_options(listing)
     listing.set_defaults(handler=_case_list)
 

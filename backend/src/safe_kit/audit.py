@@ -65,6 +65,10 @@ EVIDENCE_RELEASE_APPROVED = "evidence.release_approved"
 EVIDENCE_AUDIT_ACTIONS = frozenset(
     {EVIDENCE_UPLOADED, EVIDENCE_DOWNLOADED, EVIDENCE_REDACTED, EVIDENCE_RELEASE_APPROVED}
 )
+# Written for every successful read of a reporter contact. The row targets the case, so the case history shows it.
+REPORTER_CONTACT_READ = "reporter_contact.read"
+# Rows that only read a case. The case list's "last updated" time leaves them out, so reading is not a change.
+READ_ONLY_AUDIT_ACTIONS = frozenset({EVIDENCE_DOWNLOADED, REPORTER_CONTACT_READ})
 # Catalog (safe_kit.catalog). Written against the recommendation or the entry (target_type "catalog_recommendation" or
 # "catalog_entry"). Free text is never written here; the details hold identifiers, version numbers, and results only.
 CATALOG_RECOMMENDATION_ADD = "catalog.recommendation_added"

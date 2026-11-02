@@ -74,12 +74,12 @@ def test_a_reporter_sees_only_the_cases_it_created():
 def test_a_reporter_list_and_search_run_inside_the_reporters_scope(client, caller, monkeypatch):
     seen = {}
 
-    def fake_list(scope, limit, offset, q=None):
+    def fake_list(scope, limit, offset, q=None, **kwargs):
         seen["scope"], seen["q"] = scope, q
         return []
 
     monkeypatch.setattr(api, "list_visible_cases", fake_list)
-    monkeypatch.setattr(api, "count_visible_cases", lambda scope, q=None: 0)
+    monkeypatch.setattr(api, "count_visible_cases", lambda scope, q=None, **kwargs: 0)
     as_role(caller, REPORTER_ID, "reporter")
 
     response = client.get("/api/v1/cases", params={"q": "SAFE-2026"})

@@ -11,7 +11,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal, get_args
 from zoneinfo import ZoneInfo
 
 from safe_kit import audit
@@ -32,6 +32,9 @@ CALENDAR_HOLIDAYS: frozenset = frozenset()
 ASSIGNABLE_PERMISSION = "cases:assignable"
 REVIEW_OUTCOMES = frozenset({"pass", "fail", "insufficient_evidence", "not_applicable"})
 DEADLINE_STATUSES = frozenset({"open", "done", "not_applicable"})
+# The case status values the database stores (cases.status). The case list filters on them.
+CaseStatus = Literal["open", "closed"]
+CASE_STATUSES: tuple[str, ...] = get_args(CaseStatus)
 # A deadline task blocks closure unless it is done or explicitly not applicable.
 CLOSABLE_TASK_STATUSES = frozenset({"done", "not_applicable"})
 
@@ -142,6 +145,10 @@ class Case:
     close_reason: str | None = None
     # The reason of the latest reopening, from case_status_changes. Only find_visible_case fills it in.
     reopen_reason: str | None = None
+    # Only list_visible_cases fills these in. next_deadline is the earliest due_at of the open deadline tasks, or None
+    # when none is open. updated_at is the time of the latest change recorded in the audit log (see _UPDATED_AT_SQL).
+    next_deadline: datetime | None = None
+    updated_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -598,29 +605,75 @@ def _search_sql(q: str | None) -> tuple[str, tuple[Any, ...]]:
     )
 
 
-def list_visible_cases(scope: CaseScope, limit: int, offset: int, q: str | None = None) -> list[Case]:
+def _status_sql(status: str | None) -> tuple[str, tuple[Any, ...]]:
+    if status is None:
+        return "TRUE", ()
+    return "cases.status = %s", (status,)
+
+
+# The earliest due date of the case's open deadline tasks. Deleted tasks, done tasks and not-applicable tasks are
+# left out. The value is computed on every read and never stored.
+_NEXT_DEADLINE_SQL = (
+    "(SELECT min(dt.due_at) FROM deadline_tasks dt "
+    "WHERE dt.case_id = cases.id AND dt.status = 'open' AND NOT dt.is_deleted)"
+)
+
+# The latest audit row that changed the case: a row on the case itself, and when include_evidence is set (the caller
+# holds evidence:read), a row on one of its evidence items. Read-only rows are left out (audit.READ_ONLY_AUDIT_ACTIONS).
+# The case row's own updated_at is not used, because only closure and reopening write to the cases table. A case with
+# no such row falls back to created_at. The three placeholders are the read-only actions, include_evidence, and the
+# read-only actions again. See _updated_at_params.
+_UPDATED_AT_SQL = """
+    COALESCE(GREATEST(
+        (SELECT max(ae.created_at) FROM audit_events ae
+         WHERE ae.target_type = 'case' AND ae.target_id = cases.id::text AND NOT ae.is_deleted
+           AND ae.action <> ALL(%s::text[])),
+        CASE WHEN %s THEN (
+            SELECT max(ae.created_at) FROM audit_events ae
+            WHERE ae.target_type = 'evidence' AND ae.details->>'case_id' = cases.id::text AND NOT ae.is_deleted
+              AND ae.action <> ALL(%s::text[])
+        ) END
+    ), cases.created_at)
+"""
+
+
+def _updated_at_params(include_evidence: bool) -> tuple[Any, ...]:
+    read_only = sorted(audit.READ_ONLY_AUDIT_ACTIONS)
+    return (read_only, include_evidence, read_only)
+
+
+def list_visible_cases(
+    scope: CaseScope,
+    limit: int,
+    offset: int,
+    q: str | None = None,
+    status: str | None = None,
+    include_evidence: bool = False,
+) -> list[Case]:
     visibility, params = scope.visibility_sql()
     search, search_params = _search_sql(q)
+    status_clause, status_params = _status_sql(status)
     with connect() as conn:
         rows = conn.execute(
             f"""
-            SELECT {_CASE_COLUMNS} FROM cases
-            WHERE NOT is_deleted AND {visibility} AND {search}
+            SELECT {_CASE_COLUMNS}, {_NEXT_DEADLINE_SQL}, {_UPDATED_AT_SQL} FROM cases
+            WHERE NOT is_deleted AND {visibility} AND {search} AND {status_clause}
             ORDER BY created_at DESC, id
             LIMIT %s OFFSET %s
             """,
-            (*params, *search_params, limit, offset),
+            (*_updated_at_params(include_evidence), *params, *search_params, *status_params, limit, offset),
         ).fetchall()
-    return [_to_case(row) for row in rows]
+    return [replace(_to_case(row[:12]), next_deadline=row[12], updated_at=row[13]) for row in rows]
 
 
-def count_visible_cases(scope: CaseScope, q: str | None = None) -> int:
+def count_visible_cases(scope: CaseScope, q: str | None = None, status: str | None = None) -> int:
     visibility, params = scope.visibility_sql()
     search, search_params = _search_sql(q)
+    status_clause, status_params = _status_sql(status)
     with connect() as conn:
         row = conn.execute(
-            f"SELECT count(*) FROM cases WHERE NOT is_deleted AND {visibility} AND {search}",
-            (*params, *search_params),
+            f"SELECT count(*) FROM cases WHERE NOT is_deleted AND {visibility} AND {search} AND {status_clause}",
+            (*params, *search_params, *status_params),
         ).fetchone()
     return row[0]
 
