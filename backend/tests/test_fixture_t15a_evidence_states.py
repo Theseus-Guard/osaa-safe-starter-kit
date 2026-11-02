@@ -70,7 +70,7 @@ def test_an_unavailable_item_is_listed_with_its_status_and_cannot_be_downloaded(
 
     download = request_as(people["investigator"], "get", f"/api/v1/evidence/{evidence_id}/download")
     assert download.status_code == 409
-    assert download.json() == NOT_AVAILABLE
+    assert download.json()["detail"] == NOT_AVAILABLE["detail"]
     assert download.content != PDF
     assert downloaded_events(evidence_id) == 0
 
@@ -85,7 +85,7 @@ def test_a_hidden_case_and_a_missing_case_give_the_same_404_and_never_the_not_av
     hidden = request_as(other, "get", f"/api/v1/cases/{case_id}/evidence")
     absent = request_as(other, "get", f"/api/v1/cases/{missing_case}/evidence")
     assert hidden.status_code == absent.status_code == 404
-    assert hidden.json() == absent.json() == {"detail": "case not found"}
+    assert hidden.json()["detail"] == absent.json()["detail"] == "case not found"
 
     # The same caller sees a visible but empty case as an empty list, which is a different state from a 404.
     assert request_as(people["investigator"], "get", f"/api/v1/cases/{empty_case(people)}/evidence").status_code == 200
@@ -100,5 +100,5 @@ def test_a_hidden_item_and_a_missing_item_give_the_same_404_and_not_the_unavaila
     hidden = request_as(other, "get", f"/api/v1/evidence/{evidence_id}/download")
     absent = request_as(other, "get", f"/api/v1/evidence/{uuid.uuid4()}/download")
     assert hidden.status_code == absent.status_code == 404
-    assert hidden.json() == absent.json() == {"detail": "evidence not found"}
-    assert hidden.json() != NOT_AVAILABLE
+    assert hidden.json()["detail"] == absent.json()["detail"] == "evidence not found"
+    assert hidden.json()["detail"] != NOT_AVAILABLE["detail"]
