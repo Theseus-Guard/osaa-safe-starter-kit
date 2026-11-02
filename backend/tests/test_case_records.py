@@ -4,6 +4,7 @@ The rules are checked on plain values. The HTTP mapping is checked with the doma
 test_case_access.py. The database-backed flow is in test_case_records_db.py.
 """
 
+import uuid
 import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -48,6 +49,11 @@ CASE_ID = "99999999-9999-9999-9999-999999999999"
 DUTY_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 NOW = datetime(2026, 11, 1, 9, 0, tzinfo=UTC)
 RAW_TEXT = "Operator account name and a customer's phone number"
+
+
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
 
 
 def make_user(user_id, role):
@@ -429,17 +435,17 @@ def test_awareness_list_answers_404_for_a_case_the_caller_may_not_see(client, ca
 
 def test_reporter_cannot_record_an_awareness_event(client, caller):
     body = {"awareness_kind": "operator", "event_kind": "incident", "occurred_at": NOW.isoformat(), "basis": "b"}
-    assert client.post(f"/api/v1/cases/{CASE_ID}/awareness-events", json=body).status_code == 403
+    assert client.post(f"/api/v1/cases/{CASE_ID}/awareness-events", json=body, headers=idem()).status_code == 403
 
 
 def test_triager_records_an_event_and_only_read_all_callers_see_the_basis(client, caller, monkeypatch):
     event = one_awareness_event()[0]
-    monkeypatch.setattr(case_records_api, "record_awareness_event", lambda *args: (RecordOutcome.OK, event))
+    monkeypatch.setattr(case_records_api, "record_awareness_event", lambda *args, **kwargs: (RecordOutcome.OK, event))
     monkeypatch.setattr(case_records_api, "list_awareness_events", lambda case_id, scope: [event])
 
     as_role(caller, TRIAGER_ID, "triager")
     body = {"awareness_kind": "operator", "event_kind": "incident", "occurred_at": NOW.isoformat(), "basis": RAW_TEXT}
-    created = client.post(f"/api/v1/cases/{CASE_ID}/awareness-events", json=body)
+    created = client.post(f"/api/v1/cases/{CASE_ID}/awareness-events", json=body, headers=idem())
     assert created.status_code == 201
     assert created.json()["basis"] == RAW_TEXT
 
@@ -451,10 +457,10 @@ def test_triager_records_an_event_and_only_read_all_callers_see_the_basis(client
 
 
 def test_awareness_write_on_a_closed_case_answers_409(client, caller, monkeypatch):
-    monkeypatch.setattr(case_records_api, "record_awareness_event", lambda *args: (RecordOutcome.CLOSED, None))
+    monkeypatch.setattr(case_records_api, "record_awareness_event", lambda *args, **kwargs: (RecordOutcome.CLOSED, None))
     as_role(caller, TRIAGER_ID, "triager")
     body = {"awareness_kind": "operator", "event_kind": "incident", "occurred_at": NOW.isoformat(), "basis": "b"}
-    assert client.post(f"/api/v1/cases/{CASE_ID}/awareness-events", json=body).status_code == 409
+    assert client.post(f"/api/v1/cases/{CASE_ID}/awareness-events", json=body, headers=idem()).status_code == 409
 
 
 def test_impacts_are_listed_in_full_even_when_nothing_is_assessed(client, caller, monkeypatch):
@@ -469,14 +475,14 @@ def test_impacts_are_listed_in_full_even_when_nothing_is_assessed(client, caller
 def test_impact_put_refuses_an_unknown_area(client, caller):
     as_role(caller, TRIAGER_ID, "triager")
     body = {"severity": "low", "scope": "s"}
-    assert client.put(f"/api/v1/cases/{CASE_ID}/impacts/made_up", json=body).status_code == 422
+    assert client.put(f"/api/v1/cases/{CASE_ID}/impacts/made_up", json=body, headers=idem()).status_code == 422
 
 
 def test_impact_put_answers_404_for_an_invisible_case(client, caller, monkeypatch):
-    monkeypatch.setattr(case_records_api, "set_impact", lambda *args: (RecordOutcome.NOT_FOUND, None))
+    monkeypatch.setattr(case_records_api, "set_impact", lambda *args, **kwargs: (RecordOutcome.NOT_FOUND, None))
     as_role(caller, TRIAGER_ID, "triager")
     body = {"severity": "low", "scope": "s"}
-    assert client.put(f"/api/v1/cases/{CASE_ID}/impacts/scale", json=body).status_code == 404
+    assert client.put(f"/api/v1/cases/{CASE_ID}/impacts/scale", json=body, headers=idem()).status_code == 404
 
 
 def test_investigator_cannot_change_a_legal_duty(client, caller):
@@ -485,7 +491,7 @@ def test_investigator_cannot_change_a_legal_duty(client, caller):
 
 
 def test_legal_duty_patch_answers_404_for_an_unknown_duty(client, caller, monkeypatch):
-    monkeypatch.setattr(case_records_api, "update_legal_duty", lambda *args: (RecordOutcome.DUTY_NOT_FOUND, None))
+    monkeypatch.setattr(case_records_api, "update_legal_duty", lambda *args, **kwargs: (RecordOutcome.DUTY_NOT_FOUND, None))
     as_role(caller, TRIAGER_ID, "triager")
     assert client.patch(f"/api/v1/cases/{CASE_ID}/legal-duties/{DUTY_ID}", json={"status": "done"}).status_code == 404
 
@@ -513,10 +519,10 @@ def test_classification_put_answers_409_with_the_current_version(client, caller,
     monkeypatch.setattr(
         case_records_api,
         "update_classification",
-        lambda *args: (RecordOutcome.VERSION_CONFLICT, full_classification(version=3)),
+        lambda *args, **kwargs: (RecordOutcome.VERSION_CONFLICT, full_classification(version=3)),
     )
     as_role(caller, TRIAGER_ID, "triager")
-    response = client.put(f"/api/v1/cases/{CASE_ID}/classification", json={"expected_version": 1})
+    response = client.put(f"/api/v1/cases/{CASE_ID}/classification", json={"expected_version": 1}, headers=idem())
     assert response.status_code == 409
     assert response.json() == {
         "detail": {"status": "classification_version_conflict", "current_version": 3},
@@ -525,7 +531,7 @@ def test_classification_put_answers_409_with_the_current_version(client, caller,
 
 def test_investigator_cannot_store_a_classification(client, caller):
     as_role(caller, INVESTIGATOR_ID, "investigator")
-    assert client.put(f"/api/v1/cases/{CASE_ID}/classification", json={"expected_version": 0}).status_code == 403
+    assert client.put(f"/api/v1/cases/{CASE_ID}/classification", json={"expected_version": 0}, headers=idem()).status_code == 403
 
 
 def test_classification_put_is_refused_without_read_all_so_the_hidden_text_is_not_cleared(client, caller, monkeypatch):
@@ -535,7 +541,7 @@ def test_classification_put_is_refused_without_read_all_so_the_hidden_text_is_no
     monkeypatch.setattr(case_records_api, "update_classification", must_not_save)
     monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"cases:triage", "cases:read_own"}))
     as_role(caller, TRIAGER_ID, "triager")
-    response = client.put(f"/api/v1/cases/{CASE_ID}/classification", json={"expected_version": 0})
+    response = client.put(f"/api/v1/cases/{CASE_ID}/classification", json={"expected_version": 0}, headers=idem())
     assert response.status_code == 403
     assert response.json()["detail"] == "classification_requires_full_view"
 
@@ -546,7 +552,7 @@ def test_classification_put_refuses_the_case_wide_internal_option(client, caller
     )
     as_role(caller, TRIAGER_ID, "triager")
     body = {"expected_version": 0, "internal_incident_option": True}
-    assert client.put(f"/api/v1/cases/{CASE_ID}/classification", json=body).status_code == 422
+    assert client.put(f"/api/v1/cases/{CASE_ID}/classification", json=body, headers=idem()).status_code == 422
 
 
 def test_preliminary_report_is_for_read_all_callers_only(client, caller, monkeypatch):

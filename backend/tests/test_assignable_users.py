@@ -28,6 +28,11 @@ requires_database = pytest.mark.skipif(
 )
 
 
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
+
+
 def make_user(user_id, role):
     return User(
         id=user_id,
@@ -181,7 +186,7 @@ def create_case_via_api(reporter: str) -> str:
         json={
             "title": "Assignable users case",
             "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
-        },
+        }, headers=idem(),
     )
     assert response.status_code == 201, response.text
     return response.json()["id"]
@@ -242,7 +247,7 @@ def test_triager_with_cases_assign_is_not_listed_and_cannot_be_assigned(db_clien
     assert "cases:assign" in DEFAULT_ROLE_PERMISSIONS["triager"]
     assert "cases:assignable" not in DEFAULT_ROLE_PERMISSIONS["triager"]
     assert triager not in listed_ids(db_client, triager, case_id)
-    response = db_client(triager).post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": triager})
+    response = db_client(triager).post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": triager}, headers=idem())
     assert response.status_code == 422
     assert response.json() == {"detail": "assignee must be an investigator or reviewer"}
 
@@ -255,13 +260,13 @@ def test_assignability_follows_the_grant_not_the_role_name(db_client, granted):
     auditor = new_user("auditor")
     url = f"/api/v1/cases/{case_id}/assignments"
     assert auditor not in listed_ids(db_client, triager, case_id)
-    assert db_client(triager).post(url, json={"user_id": auditor}).status_code == 422
+    assert db_client(triager).post(url, json={"user_id": auditor}, headers=idem()).status_code == 422
     granted("auditor", True)
     assert auditor in listed_ids(db_client, triager, case_id)
-    assert db_client(triager).post(url, json={"user_id": auditor}).status_code == 201
+    assert db_client(triager).post(url, json={"user_id": auditor}, headers=idem()).status_code == 201
     granted("auditor", False)
     assert auditor not in listed_ids(db_client, triager, case_id)
-    assert db_client(triager).post(url, json={"user_id": new_user("auditor")}).status_code == 422
+    assert db_client(triager).post(url, json={"user_id": new_user("auditor")}, headers=idem()).status_code == 422
 
 
 @requires_database

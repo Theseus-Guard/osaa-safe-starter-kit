@@ -46,6 +46,11 @@ requires_database = pytest.mark.skipif(
 )
 
 
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
+
+
 class _Response:
     def __init__(self, status: int, body: bytes) -> None:
         self.status = status
@@ -90,6 +95,8 @@ def cli_bridge(monkeypatch, client):
         path = parts.path + (f"?{parts.query}" if parts.query else "")
         body = json.loads(request.data) if request.data else None
         headers = {"Authorization": request.get_header("Authorization")} if request.has_header("Authorization") else {}
+        if request.has_header("Idempotency-key"):
+            headers["Idempotency-Key"] = request.get_header("Idempotency-key")
         response = client.request(method, path, json=body, headers=headers)
         if response.status_code >= 400:
             raise urllib.error.HTTPError(
@@ -133,9 +140,9 @@ def test_case_created_through_the_cli_reads_back_identically_through_the_api(cli
 
 
 def test_list_of_the_callers_cases_is_the_same_through_the_api_and_the_cli(cli_bridge, caller, store, capsys):
-    cli_bridge.post("/api/v1/cases", json=valid_body())
+    cli_bridge.post("/api/v1/cases", json=valid_body(), headers=idem())
     caller["user"] = make_user(OTHER_ID, "reporter")
-    cli_bridge.post("/api/v1/cases", json=valid_body(title="Somebody else's case"))
+    cli_bridge.post("/api/v1/cases", json=valid_body(title="Somebody else's case"), headers=idem())
     caller["user"] = make_user(REPORTER_ID, "reporter")
 
     api_list = cli_bridge.get("/api/v1/cases?limit=50&offset=0")
@@ -150,7 +157,7 @@ def test_list_of_the_callers_cases_is_the_same_through_the_api_and_the_cli(cli_b
 
 def test_hidden_case_and_missing_case_look_the_same_in_the_api_and_the_cli(cli_bridge, caller, store, capsys):
     caller["user"] = make_user(OTHER_ID, "reporter")
-    hidden_id = cli_bridge.post("/api/v1/cases", json=valid_body()).json()["id"]
+    hidden_id = cli_bridge.post("/api/v1/cases", json=valid_body(), headers=idem()).json()["id"]
     caller["user"] = make_user(REPORTER_ID, "reporter")
     missing_id = str(uuid.uuid4())
 
@@ -232,4 +239,4 @@ def test_closed_case_is_not_served_as_open_after_the_close(triager_api):
     assert [item["status"] for item in listed.json()["items"] if item["id"] == case.id] == ["closed"]
     # A late review or a second close is refused with the closed state, not accepted against a stale open case.
     assert reviews.open_round(case.id, scope)[0] is RoundOutcome.CLOSED
-    assert client.post(f"/api/v1/cases/{case.id}/close", json={"reason": "again"}).status_code == 409
+    assert client.post(f"/api/v1/cases/{case.id}/close", json={"reason": "again"}, headers=idem()).status_code == 409

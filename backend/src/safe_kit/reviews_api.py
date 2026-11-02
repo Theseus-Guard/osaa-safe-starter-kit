@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from safe_kit.auth import permissions_of, require_any_permission, require_permission
 from safe_kit.case_records_api import CASE_READ_PERMISSIONS_FOR_RECORDS
 from safe_kit.cases import CaseScope
-from safe_kit.idempotency import KeyScope, fingerprint, valid_key
+from safe_kit.idempotency import KeyScope, checked_key, fingerprint, key_scope, valid_key
 from safe_kit.reviews import (
     MAX_EVIDENCE_REFERENCES,
     REASON_LIMIT,
@@ -53,6 +53,7 @@ LayerName = Literal[
 assert get_args(LayerName) == TEMPLATE_LAYERS
 
 OPEN_ROUTE = "/api/v1/reviews"
+LAYER_ROUTE = "/api/v1/reviews/{review_id}/layers/{layer}"
 CASE_NOT_FOUND = HTTPException(status_code=404, detail="case not found")
 CASE_CLOSED = HTTPException(status_code=409, detail="case is closed")
 ROUND_CLOSED = HTTPException(status_code=409, detail="review round is closed")
@@ -232,8 +233,18 @@ def set_review_layer(
     layer: LayerName,
     body: LayerUpdateRequest,
     actor: User = Depends(require_permission("reviews:write")),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> ReviewRoundResponse:
     scope = _scope(actor)
+    # Checked after the permission check, like the other side-effect routes.
+    scope_key = key_scope(
+        actor.id,
+        "PATCH",
+        LAYER_ROUTE,
+        checked_key(idempotency_key),
+        f"/api/v1/reviews/{review_id}/layers/{layer}",
+        body.model_dump(mode="json"),
+    )
     outcome, review = set_layer(
         str(review_id),
         layer,
@@ -242,6 +253,8 @@ def set_review_layer(
         [str(evidence_id) for evidence_id in body.evidence_ids],
         body.expected_revision,
         scope,
+        idempotency=scope_key,
+        render=lambda changed: _round_response(changed, scope, own_layer=layer).model_dump(mode="json"),
     )
     if outcome is RoundOutcome.NOT_FOUND:
         raise ROUND_NOT_FOUND

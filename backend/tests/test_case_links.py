@@ -4,6 +4,7 @@ The database tests (test_case_links_db.py) cover the uniqueness constraint, the 
 whole flow against PostgreSQL.
 """
 
+import uuid
 from datetime import UTC, datetime
 
 import pytest
@@ -20,6 +21,11 @@ TRIAGER_ID = "22222222-2222-2222-2222-222222222222"
 CASE_ID = "99999999-9999-9999-9999-999999999999"
 OTHER_ID = "88888888-8888-4888-8888-888888888888"
 NOW = datetime(2026, 11, 1, 9, 0, tzinfo=UTC)
+
+
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
 
 
 def make_user(user_id, role):
@@ -103,9 +109,9 @@ def link(**overrides) -> CaseLink:
 @pytest.mark.parametrize("role", ["reporter", "admin", "auditor"])
 def test_writes_need_cases_triage(client, caller, monkeypatch, role):
     as_role(caller, REPORTER_ID, role)
-    monkeypatch.setattr(case_links_api, "add_link", lambda *args: pytest.fail("the service must not be reached"))
-    monkeypatch.setattr(case_links_api, "remove_link", lambda *args: pytest.fail("the service must not be reached"))
-    assert client.post(f"/api/v1/cases/{CASE_ID}/links", json={"linked_case_id": OTHER_ID}).status_code == 403
+    monkeypatch.setattr(case_links_api, "add_link", lambda *args, **kwargs: pytest.fail("the service must not be reached"))
+    monkeypatch.setattr(case_links_api, "remove_link", lambda *args, **kwargs: pytest.fail("the service must not be reached"))
+    assert client.post(f"/api/v1/cases/{CASE_ID}/links", json={"linked_case_id": OTHER_ID}, headers=idem()).status_code == 403
     assert client.delete(f"/api/v1/cases/{CASE_ID}/links/{OTHER_ID}").status_code == 403
 
 
@@ -120,16 +126,16 @@ def test_writes_need_cases_triage(client, caller, monkeypatch, role):
 )
 def test_add_refusals(client, caller, monkeypatch, outcome, status, detail):
     as_role(caller, TRIAGER_ID, "triager")
-    monkeypatch.setattr(case_links_api, "add_link", lambda *args: (outcome, None))
-    response = client.post(f"/api/v1/cases/{CASE_ID}/links", json={"linked_case_id": OTHER_ID})
+    monkeypatch.setattr(case_links_api, "add_link", lambda *args, **kwargs: (outcome, None))
+    response = client.post(f"/api/v1/cases/{CASE_ID}/links", json={"linked_case_id": OTHER_ID}, headers=idem())
     assert response.status_code == status
     assert response.json() == {"detail": detail}
 
 
 def test_add_success_is_201_with_the_linked_case_id_and_title(client, caller, monkeypatch):
     as_role(caller, TRIAGER_ID, "triager")
-    monkeypatch.setattr(case_links_api, "add_link", lambda *args: (LinkOutcome.OK, link()))
-    response = client.post(f"/api/v1/cases/{CASE_ID}/links", json={"linked_case_id": OTHER_ID})
+    monkeypatch.setattr(case_links_api, "add_link", lambda *args, **kwargs: (LinkOutcome.OK, link()))
+    response = client.post(f"/api/v1/cases/{CASE_ID}/links", json={"linked_case_id": OTHER_ID}, headers=idem())
     assert response.status_code == 201
     assert response.json() == {
         "linked_case_id": OTHER_ID,
@@ -142,12 +148,12 @@ def test_add_passes_the_actor_and_the_scope_to_the_service(client, caller, monke
     as_role(caller, TRIAGER_ID, "triager")
     seen = {}
 
-    def fake_add(case_id, linked_case_id, actor, scope):
+    def fake_add(case_id, linked_case_id, actor, scope, **kwargs):
         seen.update(case_id=case_id, linked_case_id=linked_case_id, actor=actor, scope=scope)
         return LinkOutcome.OK, link()
 
     monkeypatch.setattr(case_links_api, "add_link", fake_add)
-    client.post(f"/api/v1/cases/{CASE_ID}/links", json={"linked_case_id": OTHER_ID})
+    client.post(f"/api/v1/cases/{CASE_ID}/links", json={"linked_case_id": OTHER_ID}, headers=idem())
     assert seen["case_id"] == CASE_ID
     assert seen["linked_case_id"] == OTHER_ID
     assert seen["actor"] == TRIAGER_ID
@@ -156,7 +162,7 @@ def test_add_passes_the_actor_and_the_scope_to_the_service(client, caller, monke
 
 def test_linked_case_id_must_be_a_uuid(client, caller):
     as_role(caller, TRIAGER_ID, "triager")
-    assert client.post(f"/api/v1/cases/{CASE_ID}/links", json={"linked_case_id": "not-a-uuid"}).status_code == 422
+    assert client.post(f"/api/v1/cases/{CASE_ID}/links", json={"linked_case_id": "not-a-uuid"}, headers=idem()).status_code == 422
 
 
 @pytest.mark.parametrize(
@@ -169,7 +175,7 @@ def test_linked_case_id_must_be_a_uuid(client, caller):
 )
 def test_remove_refusals(client, caller, monkeypatch, outcome, status, detail):
     as_role(caller, TRIAGER_ID, "triager")
-    monkeypatch.setattr(case_links_api, "remove_link", lambda *args: outcome)
+    monkeypatch.setattr(case_links_api, "remove_link", lambda *args, **kwargs: outcome)
     response = client.delete(f"/api/v1/cases/{CASE_ID}/links/{OTHER_ID}")
     assert response.status_code == status
     assert response.json() == {"detail": detail}
@@ -177,7 +183,7 @@ def test_remove_refusals(client, caller, monkeypatch, outcome, status, detail):
 
 def test_remove_success_is_204(client, caller, monkeypatch):
     as_role(caller, TRIAGER_ID, "triager")
-    monkeypatch.setattr(case_links_api, "remove_link", lambda *args: LinkOutcome.OK)
+    monkeypatch.setattr(case_links_api, "remove_link", lambda *args, **kwargs: LinkOutcome.OK)
     assert client.delete(f"/api/v1/cases/{CASE_ID}/links/{OTHER_ID}").status_code == 204
 
 
@@ -191,7 +197,7 @@ def test_reads_need_a_case_read_permission(client, caller, monkeypatch, role):
 @pytest.mark.parametrize("role", ["admin", "auditor", "disclosure_approver"])
 def test_roles_without_case_permissions_cannot_read_links(client, caller, monkeypatch, role):
     as_role(caller, REPORTER_ID, role)
-    monkeypatch.setattr(case_links_api, "list_links", lambda *args: pytest.fail("the service must not be reached"))
+    monkeypatch.setattr(case_links_api, "list_links", lambda *args, **kwargs: pytest.fail("the service must not be reached"))
     assert client.get(f"/api/v1/cases/{CASE_ID}/links").status_code == 403
 
 

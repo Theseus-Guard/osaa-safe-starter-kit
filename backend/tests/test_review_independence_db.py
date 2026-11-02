@@ -100,14 +100,14 @@ def create_case_via_api(db_client, reporter: str) -> str:
         json={
             "title": "Review independence database case",
             "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
-        },
+        }, headers=idem(),
     )
     assert response.status_code == 201, response.text
     return response.json()["id"]
 
 
 def assign(db_client, people: dict, case_id: str, user: str) -> None:
-    response = db_client(people["triager"]).post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": user})
+    response = db_client(people["triager"]).post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": user}, headers=idem())
     assert response.status_code == 201, response.text
 
 
@@ -142,7 +142,7 @@ def set_layer(db_client, people: dict, who: str, round_id: str, revision: int, o
     body = {"outcome": outcome, "expected_revision": revision}
     if reason is not None:
         body["reason"] = reason
-    return db_client(people[who]).patch(f"/api/v1/reviews/{round_id}/layers/model", json=body)
+    return db_client(people[who]).patch(f"/api/v1/reviews/{round_id}/layers/model", json=body, headers=idem())
 
 
 def count(sql: str, params: tuple) -> int:

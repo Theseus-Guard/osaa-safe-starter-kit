@@ -35,6 +35,7 @@ from safe_kit.db import connect
 from safe_kit.evidence_crypto import IntegrityError, open_sealed, seal, sha256_hex
 from safe_kit.evidence_keys import KeyProvider, KeyProviderError
 from safe_kit.evidence_storage import EvidenceStorage, ObjectNotFound, StorageError
+from safe_kit.idempotency import KeyReused, KeyScope, Replayed, check, remember
 
 DEFAULT_MAX_BYTES = 50 * 1024 * 1024
 MAX_FILENAME_LENGTH = 255
@@ -258,11 +259,16 @@ def create_evidence(
     storage: EvidenceStorage,
     provider: KeyProvider,
     scope: CaseScope,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[EvidenceItem], Any] | None = None,
 ) -> EvidenceItem:
     """Encrypt, store, verify, and record one evidence object. The caller has already checked size and media type.
 
     The case must be visible to scope when the pending row is inserted; otherwise CaseNotVisible is raised before
-    anything is stored.
+    anything is stored. With an idempotency scope, a replay raises Replayed before anything is stored, and the response
+    is stored with the item becoming available. A concurrent request with the same key that finishes first makes this
+    one raise Replayed at that point too; its pending row is then marked failed and its stored object is not used.
     The object is read back and checked with the same rules as a download before the row becomes available.
     Raises StorageError (StoreVerificationFailed when the read-back does not match) or KeyProviderError when the
     object cannot be stored or verified. The row is then marked failed. Raises UploadExpired when reconciliation
@@ -273,7 +279,7 @@ def create_evidence(
     sealed = seal(data, storage_key, provider)
     evidence_id = _insert_pending(
         case_id, uploader_id, name, media_type, len(data), storage_key, sealed.key_id,
-        sealed.wrapped_data_key, sealed.nonce, scope,
+        sealed.wrapped_data_key, sealed.nonce, scope, idempotency=idempotency,
     )
     try:
         storage.put(storage_key, sealed.ciphertext)
@@ -300,7 +306,13 @@ def create_evidence(
     except VerificationFailed as failure:
         _mark_failed(evidence_id, uploader_id, failure.reason)
         raise StoreVerificationFailed(failure.reason) from None
-    return _mark_available(evidence_id, uploader_id, plaintext_digest, ciphertext_digest)
+    try:
+        return _mark_available(
+            evidence_id, uploader_id, plaintext_digest, ciphertext_digest, idempotency=idempotency, render=render
+        )
+    except (Replayed, KeyReused):
+        _mark_failed(evidence_id, uploader_id, "duplicate_request")
+        raise
 
 
 def _insert_pending(
@@ -314,8 +326,10 @@ def _insert_pending(
     wrapped_data_key: bytes,
     nonce: bytes,
     scope: CaseScope,
+    idempotency: KeyScope | None = None,
 ) -> str:
     with connect() as conn:
+        check(conn, idempotency)
         # The same visibility rule as the API check, run on this connection so the check and the insert commit or
         # roll back together. A visibility change committed before this statement is seen here.
         if not is_visible_on(conn, case_id, scope):
@@ -333,8 +347,17 @@ def _insert_pending(
     return row[0]
 
 
-def _mark_available(evidence_id: str, uploader_id: str, sha_plaintext: str, sha_ciphertext: str) -> EvidenceItem:
+def _mark_available(
+    evidence_id: str,
+    uploader_id: str,
+    sha_plaintext: str,
+    sha_ciphertext: str,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[EvidenceItem], Any] | None = None,
+) -> EvidenceItem:
     with connect() as conn:
+        check(conn, idempotency)
         row = conn.execute(
             f"""
             UPDATE evidence_items
@@ -356,6 +379,9 @@ def _mark_available(evidence_id: str, uploader_id: str, sha_plaintext: str, sha_
             actor_id=uploader_id,
             details={"case_id": item.case_id},
         )
+        if idempotency is not None:
+            assert render is not None
+            remember(conn, idempotency, 201, render(item))
     return item
 
 

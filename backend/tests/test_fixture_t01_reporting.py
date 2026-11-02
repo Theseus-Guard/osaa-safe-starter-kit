@@ -25,6 +25,7 @@ Not testable yet, so not asserted here:
 The database tests use the helpers of tests/test_case_records_db.py and are skipped unless SAFE_TEST_DATABASE=1.
 """
 
+import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -59,6 +60,11 @@ FIVE_TRIGGERS = (
 TRIGGER_VALUES = (*FIVE_TRIGGERS, "none_applies")
 MIGRATED_REASON = "migrated: the case-wide internal incident option was set on this case"
 MIGRATION_PATH = Path(__file__).resolve().parents[1] / "migrations" / "0037_internal_option_per_task.sql"
+
+
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
 
 
 def classified(**changes) -> Classification:
@@ -235,7 +241,7 @@ def test_triggers_are_stored_without_duplicates_in_plan_order(triage_people):
     body = classification_body(0)
     body["triggers"] = ["harm_inaction_near_miss", "unauthorized_access_or_change", "harm_inaction_near_miss"]
 
-    saved = triager.put(f"/api/v1/cases/{case_id}/classification", json=body)
+    saved = triager.put(f"/api/v1/cases/{case_id}/classification", json=body, headers=idem())
 
     assert saved.status_code == 200, saved.text
     expected = ["unauthorized_access_or_change", "harm_inaction_near_miss"]
@@ -249,11 +255,11 @@ def test_none_applies_is_stored_alone_and_refused_with_another_trigger(triage_pe
     case_id = new_case(reporter)
     url = f"/api/v1/cases/{case_id}/classification"
 
-    refused = triager.put(url, json={**classification_body(0), "triggers": ["none_applies", "boundary_escape"]})
+    refused = triager.put(url, json={**classification_body(0), "triggers": ["none_applies", "boundary_escape"]}, headers=idem())
     assert refused.status_code == 422, refused.text
     assert triager.get(url).json()["version"] == 0
 
-    saved = triager.put(url, json={**classification_body(0), "triggers": ["none_applies", "none_applies"]})
+    saved = triager.put(url, json={**classification_body(0), "triggers": ["none_applies", "none_applies"]}, headers=idem())
     assert saved.status_code == 200, saved.text
     assert saved.json()["triggers"] == ["none_applies"]
     assert triager.get(url).json()["triggers"] == ["none_applies"]
@@ -272,7 +278,7 @@ def task_id_of(triager: ActingClient, case_id: str, kind: str) -> str:
 def mark_not_applicable(triager: ActingClient, case_id: str, kind: str, reason: str):
     return triager.patch(
         f"/api/v1/cases/{case_id}/deadlines/{task_id_of(triager, case_id, kind)}",
-        json={"status": "not_applicable", "reason": reason},
+        json={"status": "not_applicable", "reason": reason}, headers=idem(),
     )
 
 
@@ -309,7 +315,7 @@ def test_a_per_task_exception_needs_a_reason(triage_people):
     case_id = new_case(reporter)
     task_id = task_id_of(triager, case_id, "preliminary_safe_report")
 
-    refused = triager.patch(f"/api/v1/cases/{case_id}/deadlines/{task_id}", json={"status": "not_applicable"})
+    refused = triager.patch(f"/api/v1/cases/{case_id}/deadlines/{task_id}", json={"status": "not_applicable"}, headers=idem())
 
     assert refused.status_code == 422, refused.text
     assert task_states(triager, case_id)["preliminary_safe_report"][0] == "open"
@@ -336,10 +342,10 @@ def test_restoring_a_task_puts_it_back_to_the_status_it_had_before(triage_people
     task_id = task_id_of(triager, case_id, "preliminary_public_report")
     before = task_states(triager, case_id)
     # The task is done before it becomes not applicable, so restoring it must give done back, not open.
-    assert triager.patch(f"/api/v1/cases/{case_id}/deadlines/{task_id}", json={"status": "done"}).status_code == 200
+    assert triager.patch(f"/api/v1/cases/{case_id}/deadlines/{task_id}", json={"status": "done"}, headers=idem()).status_code == 200
     assert mark_not_applicable(triager, case_id, "preliminary_public_report", "not for the public").status_code == 200
 
-    restored = triager.post(f"/api/v1/cases/{case_id}/deadlines/{task_id}/restore")
+    restored = triager.post(f"/api/v1/cases/{case_id}/deadlines/{task_id}/restore", headers=idem())
 
     assert restored.status_code == 200, restored.text
     after = task_states(triager, case_id)
@@ -355,7 +361,7 @@ def test_restoring_the_default_not_applicable_advisory_returns_it_to_the_default
     assert mark_not_applicable(triager, case_id, "broader_advisory", "decided by the team").status_code == 200
     task_id = task_id_of(triager, case_id, "broader_advisory")
 
-    restored = triager.post(f"/api/v1/cases/{case_id}/deadlines/{task_id}/restore")
+    restored = triager.post(f"/api/v1/cases/{case_id}/deadlines/{task_id}/restore", headers=idem())
 
     assert restored.status_code == 200, restored.text
     assert task_states(triager, case_id)["broader_advisory"][:2] == ("not_applicable", BROADER_ADVISORY_CONDITION_REASON)
@@ -368,7 +374,7 @@ def test_restore_refuses_a_task_that_is_not_marked_not_applicable(triage_people)
     before = task_states(triager, case_id)
     task_id = task_id_of(triager, case_id, "affected_customers")
 
-    refused = triager.post(f"/api/v1/cases/{case_id}/deadlines/{task_id}/restore")
+    refused = triager.post(f"/api/v1/cases/{case_id}/deadlines/{task_id}/restore", headers=idem())
 
     assert refused.status_code == 409, refused.text
     assert refused.json() == {"detail": {"status": "deadline_not_marked_not_applicable"}}
@@ -380,12 +386,12 @@ def test_only_a_triager_may_restore_a_task_that_is_not_applicable(triage_people)
     reporter, triager = triage_people["reporter"], triage_people["triager"]
     case_id = new_case(reporter)
     investigator = ActingClient(new_user("investigator"))
-    assigned = triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": investigator.user_id})
+    assigned = triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": investigator.user_id}, headers=idem())
     assert assigned.status_code == 201, assigned.text
     assert mark_not_applicable(triager, case_id, "affected_customers", "no customer data").status_code == 200
     task_id = task_id_of(triager, case_id, "affected_customers")
 
-    refused = investigator.post(f"/api/v1/cases/{case_id}/deadlines/{task_id}/restore")
+    refused = investigator.post(f"/api/v1/cases/{case_id}/deadlines/{task_id}/restore", headers=idem())
 
     assert refused.status_code == 403, refused.text
     assert task_states(triager, case_id)["affected_customers"][0] == "not_applicable"

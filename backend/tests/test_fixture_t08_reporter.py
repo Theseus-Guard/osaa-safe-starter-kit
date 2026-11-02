@@ -49,6 +49,11 @@ from test_evidence_lifecycle import requires_database
 REPORTER_IDENTITY_FIELDS = {"reporter", "reporter_id", "reporter_user_id", "created_by", "contact", "reporter_contact"}
 
 
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
+
+
 def refuse(*args, **kwargs):
     raise AssertionError("the service must not run for this caller")
 
@@ -135,7 +140,7 @@ def open_report(reporter: ActingClient, contact: str) -> str:
             "title": "Reporter channel fixture",
             "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
             "contact": contact,
-        },
+        }, headers=idem(),
     )
     assert response.status_code == 201, response.text
     return response.json()["id"]

@@ -40,6 +40,11 @@ INVESTIGATOR = User(
 )
 
 
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
+
+
 class StorageSpy:
     """Records every object written. A refused upload must leave this empty."""
 
@@ -174,7 +179,7 @@ def test_upload_refused_at_insert_time_is_404_like_a_missing_case_and_stores_not
     case_id = str(uuid.uuid4())
     response = client.post(
         f"/api/v1/cases/{case_id}/evidence",
-        files={"file": ("scan.pdf", PDF, "application/pdf")},
+        files={"file": ("scan.pdf", PDF, "application/pdf")}, headers=idem(),
     )
     assert response.status_code == 404
     assert response.json() == {"detail": "case not found"}

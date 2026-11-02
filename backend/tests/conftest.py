@@ -94,6 +94,10 @@ class FakeTimezoneDatabase:
         if sql.startswith("INSERT INTO deadline_tasks"):
             self.deadline_rows.append(params)
             return _Result([(str(uuid.uuid4()),)])
+        if sql.startswith("SELECT id::text, fingerprint, response_status"):
+            return _Result([])  # no stored idempotency record: the request is new
+        if sql.startswith("INSERT INTO idempotency_keys"):
+            return _Result([])
         raise AssertionError(f"unexpected SQL in a test: {sql[:100]}")
 
 

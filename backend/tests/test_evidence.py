@@ -42,6 +42,11 @@ MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
 # --- helpers -----------------------------------------------------------------------------------------------------
 
 
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
+
+
 def write_kek(path: Path, raw: bytes | None = None, mode: int = 0o600) -> Path:
     path.write_bytes(raw if raw is not None else os.urandom(32))
     os.chmod(path, mode)
@@ -130,8 +135,8 @@ def client(monkeypatch, provider):
     return TestClient(app)
 
 
-def fake_create(calls: list):
-    def create(case_id, uploader_id, filename, media_type, data, storage, provider, scope):
+def fake_create(calls: list, **kwargs):
+    def create(case_id, uploader_id, filename, media_type, data, storage, provider, scope, **kwargs):
         calls.append((case_id, uploader_id, filename, media_type, len(data)))
         return evidence.EvidenceItem(
             id=str(uuid.uuid4()),
@@ -469,7 +474,7 @@ def test_size_limit_is_enforced_on_a_stream_without_content_length(client, monke
     response = client.post(
         f"/api/v1/cases/{uuid.uuid4()}/evidence",
         content=chunked(body),
-        headers={"Content-Type": content_type},
+        headers={**idem(), "Content-Type": content_type},
     )
     assert "content-length" not in {name.lower() for name in response.request.headers}
     assert response.status_code == 413
@@ -483,7 +488,7 @@ def test_body_far_over_the_limit_is_cut_off_while_reading(client, monkeypatch):
     response = client.post(
         f"/api/v1/cases/{uuid.uuid4()}/evidence",
         content=chunked(body, size=4096),
-        headers={"Content-Type": content_type},
+        headers={**idem(), "Content-Type": content_type},
     )
     assert response.status_code == 413
     assert calls == []
@@ -494,7 +499,7 @@ def test_declared_content_length_over_the_limit_is_refused_early(client, monkeyp
     monkeypatch.setattr(evidence, "create_evidence", fake_create(calls))
     body, content_type = multipart("huge.txt", "text/plain", b"a" * 500_000)
     response = client.post(
-        f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={"Content-Type": content_type},
+        f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={**idem(), "Content-Type": content_type},
     )
     assert response.status_code == 413
     assert calls == []
@@ -506,7 +511,7 @@ def test_file_within_the_limit_is_accepted_and_returns_metadata_only(client, mon
     data = PDF[:900]
     body, content_type = multipart("scan.pdf", "application/pdf", data)
     case_id = str(uuid.uuid4())
-    response = client.post(f"/api/v1/cases/{case_id}/evidence", content=chunked(body), headers={"Content-Type": content_type})
+    response = client.post(f"/api/v1/cases/{case_id}/evidence", content=chunked(body), headers={**idem(), "Content-Type": content_type})
     assert response.status_code == 201
     payload = response.json()
     assert payload["case_id"] == case_id and payload["status"] == "available"
@@ -521,7 +526,7 @@ def test_disallowed_media_type_is_415_and_nothing_is_stored(client, monkeypatch)
 
     monkeypatch.setattr(evidence, "create_evidence", must_not_run)
     body, content_type = multipart("tool.zip", "application/zip", b"PK\x03\x04 data")
-    response = client.post(f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={"Content-Type": content_type})
+    response = client.post(f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={**idem(), "Content-Type": content_type})
     assert response.status_code == 415
 
 
@@ -529,30 +534,30 @@ def test_missing_file_field_and_empty_file_are_rejected(client, monkeypatch):
     monkeypatch.setattr(evidence, "create_evidence", fake_create([]))
     body, content_type = multipart("empty.txt", "text/plain", b"")
     assert client.post(f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body,
-                       headers={"Content-Type": content_type}).status_code == 422
+                       headers={**idem(), "Content-Type": content_type}).status_code == 422
     plain = b"--X\r\nContent-Disposition: form-data; name=\"note\"\r\n\r\nhi\r\n--X--\r\n"
     assert client.post(f"/api/v1/cases/{uuid.uuid4()}/evidence", content=plain,
-                       headers={"Content-Type": "multipart/form-data; boundary=X"}).status_code == 422
+                       headers={**idem(), "Content-Type": "multipart/form-data; boundary=X"}).status_code == 422
 
 
 def test_upload_is_refused_when_no_key_is_configured(client, monkeypatch):
     monkeypatch.setattr(evidence_api, "_PROVIDER", None)
     body, content_type = multipart("scan.pdf", "application/pdf", PDF[:100])
-    response = client.post(f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={"Content-Type": content_type})
+    response = client.post(f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={**idem(), "Content-Type": content_type})
     assert response.status_code == 503
 
 
 def test_upload_to_a_case_the_caller_cannot_see_is_404(client, monkeypatch):
     monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope: False)
     body, content_type = multipart("scan.pdf", "application/pdf", PDF[:100])
-    response = client.post(f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={"Content-Type": content_type})
+    response = client.post(f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={**idem(), "Content-Type": content_type})
     assert response.status_code == 404
 
 
 def test_upload_needs_evidence_write(client, monkeypatch):
     monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"cases:read_own"}))
     body, content_type = multipart("scan.pdf", "application/pdf", PDF[:100])
-    response = client.post(f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={"Content-Type": content_type})
+    response = client.post(f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={**idem(), "Content-Type": content_type})
     assert response.status_code == 403
 
 
@@ -800,6 +805,6 @@ def test_assigned_investigator_reads_and_uploads_on_its_case(evidence_world):
     assert evidence.DOWNLOADED in [event["action"] for event in custody.json()]
     body, content_type = multipart("notes.pdf", "application/pdf", PDF[:100])
     upload = request_as(investigator, "post", f"/api/v1/cases/{case_id}/evidence", content=body,
-                        headers={"Content-Type": content_type})
+                        headers={**idem(), "Content-Type": content_type})
     assert upload.status_code == 201
     assert evidence_count(case_id) == 2

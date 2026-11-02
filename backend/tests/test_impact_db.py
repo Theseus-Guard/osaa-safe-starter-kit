@@ -83,7 +83,7 @@ def past(hours: int = 2) -> str:
 
 
 def new_case(reporter: ActingClient) -> str:
-    response = reporter.post("/api/v1/cases", json={"title": "Case", "awareness_time": past()})
+    response = reporter.post("/api/v1/cases", json={"title": "Case", "awareness_time": past()}, headers=idem())
     assert response.status_code == 201, response.text
     return response.json()["id"]
 

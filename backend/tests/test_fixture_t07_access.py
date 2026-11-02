@@ -58,6 +58,11 @@ EVIDENCE_READ_URLS = (
 )
 
 
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
+
+
 def refuse(*args, **kwargs):
     raise AssertionError("the service must not run for this caller")
 
@@ -125,7 +130,7 @@ def test_a_role_without_evidence_write_cannot_upload(client, caller, monkeypatch
     as_role(caller, REPORTER_ID, role)
     body, content_type = multipart("scan.pdf", "application/pdf", PDF[:100])
 
-    response = client.post(f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={"Content-Type": content_type})
+    response = client.post(f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={**idem(), "Content-Type": content_type})
 
     assert response.status_code == 403
 

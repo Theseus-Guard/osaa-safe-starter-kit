@@ -353,8 +353,12 @@ def _case_create(base_url: str, args: argparse.Namespace) -> None:
     awareness = _parse_awareness_time(args.awareness_time)
     payload = {"title": title.strip(), "awareness_time": awareness.isoformat()}
 
+    key = args.idempotency_key or str(uuid.uuid4())
+
     def action(base: str, token: str) -> None:
-        raw = _call(base, "POST", "/api/v1/cases", token=token, payload=payload)
+        raw = _call(
+            base, "POST", "/api/v1/cases", token=token, payload=payload, extra_headers={"Idempotency-Key": key}
+        )
         if args.json:
             _print_json(raw)
         else:
@@ -462,8 +466,17 @@ def _case_import(base_url: str, args: argparse.Namespace) -> None:
     if not isinstance(payload, dict):
         raise UsageError(f"{args.file} must hold a JSON object with import_format_version and records")
 
+    key = args.idempotency_key or str(uuid.uuid4())
+
     def action(base: str, token: str) -> None:
-        raw = _call(base, "POST", "/api/v1/cases/import", token=token, payload=payload)
+        raw = _call(
+            base,
+            "POST",
+            "/api/v1/cases/import",
+            token=token,
+            payload=payload,
+            extra_headers={"Idempotency-Key": key},
+        )
         summary = _json_object(raw)
         if args.json:
             _print_json(raw)
@@ -552,6 +565,7 @@ def _evidence_add(base_url: str, args: argparse.Namespace) -> None:
     # The media type is a hint only. The API checks it against the content and answers 415 when they differ.
     media_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
     body, content_type = _multipart_file("file", name, media_type, data)
+    key = args.idempotency_key or str(uuid.uuid4())
 
     def action(base: str, token: str) -> None:
         raw = _call(
@@ -562,6 +576,7 @@ def _evidence_add(base_url: str, args: argparse.Namespace) -> None:
             raw_body=body,
             content_type=content_type,
             messages=EVIDENCE_HTTP_MESSAGES,
+            extra_headers={"Idempotency-Key": key},
         )
         if args.json:
             _print_json(raw)
@@ -673,9 +688,11 @@ def _write_case(
     render=None,
 ) -> None:
     """One write request in its own login session. --json prints the API body; otherwise render prints a summary."""
+    # A POST, PUT or PATCH carries an Idempotency-Key. The key is made once per run, so a retry in the same run reuses it.
+    headers = None if method == "DELETE" else {"Idempotency-Key": getattr(args, "idempotency_key", None) or str(uuid.uuid4())}
 
     def action(base: str, token: str) -> None:
-        raw = _call(base, method, path, token=token, payload=payload, messages=messages)
+        raw = _call(base, method, path, token=token, payload=payload, messages=messages, extra_headers=headers)
         if getattr(args, "json", False):
             _print_json(raw)
         else:
@@ -1009,6 +1026,8 @@ def _review_conflict_revision(error: RequestFailed) -> int | None:
 def _review_record(base_url: str, args: argparse.Namespace) -> None:
     """Set one layer of a review round. Without --round, the open round of the case is used."""
     case_id = _case_id_arg(args.case_id)
+    # One key per run: a retry with --idempotency-key of an earlier run gets the first answer.
+    key = args.idempotency_key or str(uuid.uuid4())
     if args.revision < 1:
         raise UsageError("--revision must be 1 or more. Read it with: case review list CASE_ID")
     reason = args.reason if args.reason is not None else args.note
@@ -1039,6 +1058,7 @@ def _review_record(base_url: str, args: argparse.Namespace) -> None:
                 token=token,
                 payload=payload,
                 messages=REVIEW_MESSAGES,
+                extra_headers={"Idempotency-Key": key},
             )
         except RequestFailed as error:
             current = _review_conflict_revision(error)
@@ -1648,6 +1668,16 @@ def _report_show(base_url: str, args: argparse.Namespace) -> None:
     _with_session(base_url, args, action)
 
 
+def _add_idempotency_option(parser: argparse.ArgumentParser) -> None:
+    """--idempotency-key for a write. A new run gets a new key; pass the key of an earlier run to retry it safely."""
+    parser.add_argument(
+        "--idempotency-key",
+        metavar="KEY",
+        help="Idempotency-Key, 1 to 128 visible ASCII characters. Default: a new key for this run. "
+        "Reuse the key of an earlier run to retry it safely",
+    )
+
+
 def _add_auth_options(parser: argparse.ArgumentParser, *, json_output: bool = True) -> None:
     parser.add_argument("--username", help="Account name. Defaults to the SAFE_USERNAME environment variable")
     if json_output:
@@ -1671,6 +1701,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ISO8601",
         help="When you became aware, with a timezone, for example 2026-10-30T09:00:00Z",
     )
+    _add_idempotency_option(create)
     _add_auth_options(create)
     create.set_defaults(handler=_case_create)
 
@@ -1690,6 +1721,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     imported = case_commands.add_parser("import", help="Import case records from a JSON file in the project format")
     imported.add_argument("file", metavar="FILE", help='JSON file: {"import_format_version": 1, "records": [...]}')
+    _add_idempotency_option(imported)
     _add_auth_options(imported)
     imported.set_defaults(handler=_case_import)
     _add_case_update_commands(case_commands)
@@ -1705,6 +1737,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="File to upload: PDF, PNG, JPEG, plain text or JSON, up to 50 MiB by default",
     )
+    _add_idempotency_option(added)
     _add_auth_options(added)
     added.set_defaults(handler=_evidence_add)
 
@@ -1730,6 +1763,7 @@ def build_parser() -> argparse.ArgumentParser:
     task_update.add_argument("task_id", metavar="TASK_ID", help="Deadline task ID (UUID), from task list")
     task_update.add_argument("--status", required=True, choices=["open", "done", "not-applicable"], help="New status")
     task_update.add_argument("--reason", help="Why the deadline does not apply, 1 to 1000 characters (not-applicable only)")
+    _add_idempotency_option(task_update)
     _add_auth_options(task_update)
     task_update.set_defaults(handler=_task_update)
 
@@ -1738,6 +1772,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     task_restore.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     task_restore.add_argument("task_id", metavar="TASK_ID", help="Deadline task ID (UUID), from task list")
+    _add_idempotency_option(task_restore)
     _add_auth_options(task_restore)
     task_restore.set_defaults(handler=_task_restore)
     return parser
@@ -1749,18 +1784,21 @@ def _add_case_update_commands(case_commands) -> None:
     close = case_commands.add_parser("close", help="Close a case. It needs a review and every deadline task settled")
     close.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     close.add_argument("--reason", required=True, help="Why the case is closed (required)")
+    _add_idempotency_option(close)
     _add_auth_options(close)
     close.set_defaults(handler=_case_close)
 
     reopen = case_commands.add_parser("reopen", help="Reopen a closed case")
     reopen.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     reopen.add_argument("--reason", required=True, help="Why the case is reopened (required)")
+    _add_idempotency_option(reopen)
     _add_auth_options(reopen)
     reopen.set_defaults(handler=_case_reopen)
 
     assign = case_commands.add_parser("assign", help="Assign an active user whose role holds cases:assignable to a case")
     assign.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     assign.add_argument("--user-id", required=True, metavar="USER_ID", help="ID (UUID) of the user to assign")
+    _add_idempotency_option(assign)
     _add_auth_options(assign)
     assign.set_defaults(handler=_case_assign)
 
@@ -1775,6 +1813,7 @@ def _add_case_update_commands(case_commands) -> None:
     link_add = link_commands.add_parser("add", help="Link a case to another case you can see")
     link_add.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     link_add.add_argument("linked_case_id", metavar="LINKED_CASE_ID", help="Case ID (UUID) of the other case")
+    _add_idempotency_option(link_add)
     _add_auth_options(link_add)
     link_add.set_defaults(handler=_case_link_add)
     link_list = link_commands.add_parser("list", help="List the cases linked to one of your cases")
@@ -1828,6 +1867,7 @@ def _add_case_update_commands(case_commands) -> None:
     review_record.add_argument(
         "--revision", type=int, required=True, help="Revision of the round you read with 'review list'"
     )
+    _add_idempotency_option(review_record)
     _add_auth_options(review_record)
     review_record.set_defaults(handler=_review_record)
     review_conflict = review_commands.add_parser(
@@ -1925,6 +1965,7 @@ def _add_case_update_commands(case_commands) -> None:
     classification_set.add_argument(
         "--next-update-due-at", metavar="ISO8601", help="Next update due, with a timezone, for example 2026-11-02T09:00:00Z"
     )
+    _add_idempotency_option(classification_set)
     _add_auth_options(classification_set)
     classification_set.set_defaults(handler=_classification_set)
     classification_show = classification_commands.add_parser(
@@ -1945,6 +1986,7 @@ def _add_case_update_commands(case_commands) -> None:
     impact_set.add_argument("area", metavar="AREA", choices=IMPACT_AREAS, help="Impact area")
     impact_set.add_argument("--severity", required=True, choices=IMPACT_SEVERITIES, help="Severity")
     impact_set.add_argument("--scope", required=True, help="What is affected (required, up to 1000 characters)")
+    _add_idempotency_option(impact_set)
     _add_auth_options(impact_set)
     impact_set.set_defaults(handler=_impact_set)
 
@@ -1999,6 +2041,7 @@ def _add_case_update_commands(case_commands) -> None:
     legal_add.add_argument(
         "--due-at", required=True, metavar="ISO8601", help="When the duty falls due, with a timezone"
     )
+    _add_idempotency_option(legal_add)
     _add_auth_options(legal_add)
     legal_add.set_defaults(handler=_legal_duty_add)
 
@@ -2033,6 +2076,7 @@ def _add_case_update_commands(case_commands) -> None:
         "--occurred-at", required=True, metavar="ISO8601", help="When the event occurred, with a timezone"
     )
     awareness_add.add_argument("--basis", required=True, help="Basis for the event (required, up to 1000 characters)")
+    _add_idempotency_option(awareness_add)
     _add_auth_options(awareness_add)
     awareness_add.set_defaults(handler=_awareness_add)
 

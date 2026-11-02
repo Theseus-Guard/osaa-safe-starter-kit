@@ -130,13 +130,13 @@ class Ledger:
 def ledger(monkeypatch) -> Ledger:
     book = Ledger()
 
-    def insert_pending(case_id, uploader_id, name, media_type, size_bytes, storage_key, key_id, wrapped, nonce, scope):
+    def insert_pending(case_id, uploader_id, name, media_type, size_bytes, storage_key, key_id, wrapped, nonce, scope, **kwargs):
         evidence_id = str(uuid.uuid4())
         book.rows[evidence_id] = "pending"
         book.events.append("pending")
         return evidence_id
 
-    def mark_available(evidence_id, uploader_id, sha_plaintext, sha_ciphertext):
+    def mark_available(evidence_id, uploader_id, sha_plaintext, sha_ciphertext, **kwargs):
         if book.rows.get(evidence_id) != "pending":
             raise UploadExpired()
         book.rows[evidence_id] = "available"

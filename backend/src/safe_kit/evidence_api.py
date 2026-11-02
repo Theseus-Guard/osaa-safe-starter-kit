@@ -34,12 +34,14 @@ from safe_kit.auth import permissions_of, require_permission
 from safe_kit.cases import CaseScope, is_visible
 from safe_kit.evidence_keys import KeyProvider, KeyProviderError, key_provider_from_env
 from safe_kit.evidence_storage import StorageError, storage_from_env
-from safe_kit.idempotency import KeyScope, fingerprint, valid_key
+from safe_kit.evidence_crypto import sha256_hex
+from safe_kit.idempotency import KeyScope, checked_key, fingerprint, key_scope, valid_key
 from safe_kit.users import User
 
 EVIDENCE_READ = "evidence:read"
 EVIDENCE_WRITE = "evidence:write"
 DERIVATIVES_ROUTE = "/api/v1/evidence/{evidence_id}/derivatives"
+UPLOAD_ROUTE = "/api/v1/cases/{case_id}/evidence"
 
 # Refusals of a redaction, as (HTTP status, detail). The detail of a 422 names the rule that was broken.
 REFUSAL_DETAILS: dict[str, tuple[int, str]] = {
@@ -193,11 +195,17 @@ async def upload_evidence(
     request: Request,
     case_id: uuid.UUID,
     actor: User = Depends(require_permission(EVIDENCE_WRITE)),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> EvidenceResponse:
-    """Multipart upload, field name "file". The body is read with a size limit; the file is encrypted before storage."""
+    """Multipart upload, field name "file". The body is read with a size limit; the file is encrypted before storage.
+
+    An Idempotency-Key is required. The fingerprint covers the file digest, the file name and the media type, so the
+    same key with the same file gets the first answer, and the same key with another file is refused with 409.
+    """
     provider = _key_provider()
     if not await run_in_threadpool(is_visible, str(case_id), _scope(actor)):
         raise HTTPException(status_code=404, detail="case not found")
+    key = checked_key(idempotency_key)
     filename, content_type, data = await _read_file_field(request, evidence.max_bytes_from_env())
     if not data:
         raise HTTPException(status_code=422, detail="file is empty")
@@ -205,6 +213,14 @@ async def upload_evidence(
         media_type = evidence.check_media_type(content_type, data)
     except evidence.UnsupportedMediaType:
         raise HTTPException(status_code=415, detail="media type is not allowed") from None
+    scope_key = key_scope(
+        actor.id,
+        "POST",
+        UPLOAD_ROUTE,
+        key,
+        request.url.path,
+        {"file_sha256": sha256_hex(data), "filename": filename, "media_type": media_type},
+    )
     try:
         item = await run_in_threadpool(
             evidence.create_evidence,
@@ -216,6 +232,8 @@ async def upload_evidence(
             storage_from_env(),
             provider,
             _scope(actor),
+            idempotency=scope_key,
+            render=lambda created: _response(created).model_dump(mode="json"),
         )
     except evidence.CaseNotVisible:
         # The case stopped being visible after the check above; refused the same way as a missing case.

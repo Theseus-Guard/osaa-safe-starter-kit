@@ -19,6 +19,7 @@ so no field is dropped silently. Evidence items and the other sections wait for 
 import hashlib
 import json
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,6 +32,7 @@ from psycopg.types.json import Jsonb
 from safe_kit import audit, cases, system_timezone
 from safe_kit.cases import CaseScope
 from safe_kit.db import connect
+from safe_kit.idempotency import KeyScope, check, remember
 from safe_kit.system_timezone import TimezoneNotConfigured
 
 IMPORT_FORMAT_VERSION = 1
@@ -162,17 +164,33 @@ def prepare_record(record: Any, now: datetime) -> PreparedRecord:
     )
 
 
-def import_records(records: list[Any], scope: CaseScope) -> list[RecordResult]:
+def import_records(
+    records: list[Any],
+    scope: CaseScope,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[list[RecordResult]], Any] | None = None,
+) -> list[RecordResult]:
     """Import the records one at a time and report each result. The caller becomes the creator of every new case.
 
     A duplicate or conflict names the existing case only when the caller may see it. Otherwise the result carries the
     outcome alone, so an import cannot be used to learn the ids of another reporter's case.
+
+    With an idempotency scope, the key lock and the stored response belong to one transaction that stays open for the
+    whole batch. Each record keeps its own transaction, as before, and a record that is already stored is reported as a
+    duplicate by source case id. So a batch cut short by a crash is safe to send again, although its response is not
+    stored until the batch ends.
     """
     with connect() as conn:
+        check(conn, idempotency)
         if system_timezone.read_current(conn) is None:
             raise TimezoneNotConfigured()
-    now = datetime.now(UTC)
-    return [_import_one(index, record, scope, now) for index, record in enumerate(records)]
+        now = datetime.now(UTC)
+        results = [_import_one(index, record, scope, now) for index, record in enumerate(records)]
+        if idempotency is not None:
+            assert render is not None
+            remember(conn, idempotency, 200, render(results))
+    return results
 
 
 def _import_one(index: int, record: Any, scope: CaseScope, now: datetime) -> RecordResult:

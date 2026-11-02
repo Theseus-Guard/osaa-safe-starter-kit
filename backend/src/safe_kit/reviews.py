@@ -29,8 +29,10 @@ from safe_kit.idempotency import (
     KeyLookup,
     KeyScope,
     StoredResponse,
+    check,
     lock_scope,
     lookup,
+    remember,
     store,
 )
 from safe_kit.review_independence import has_declared_conflict, has_withdrawn
@@ -230,12 +232,18 @@ def set_layer(
     evidence_ids: list[str],
     expected_revision: int,
     scope: CaseScope,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[Round], Any] | None = None,
 ) -> tuple[RoundOutcome, Round | None]:
     """Set one layer of a round.
 
     A request that changes nothing stores nothing, writes no audit row, and keeps the revision. Otherwise the layer
     and the round revision change in one transaction. On a revision conflict the current round is returned, and the
     caller may read only its revision from it.
+
+    With an idempotency scope the key is checked first (Replayed or KeyReused is raised), and a successful request,
+    changed or not, stores render(round) in the same transaction.
     """
     if outcome not in LAYER_OUTCOMES or layer not in TEMPLATE_LAYERS:
         raise ValueError("unknown outcome or layer")
@@ -243,6 +251,7 @@ def set_layer(
         return RoundOutcome.REASON_REQUIRED, None
     unique_evidence = list(dict.fromkeys(evidence_ids))
     with connect() as conn:
+        check(conn, idempotency)
         head = conn.execute(
             "SELECT case_id::text FROM review_rounds WHERE id = %s AND NOT is_deleted",
             (round_id,),
@@ -303,7 +312,11 @@ def set_layer(
                 sorted(old_evidence or []), sorted(unique_evidence)
             )
         if not changes:
-            return RoundOutcome.OK, _load_rounds(conn, "id = %s", (round_id,))[0]
+            unchanged = _load_rounds(conn, "id = %s", (round_id,))[0]
+            if idempotency is not None:
+                assert render is not None
+                remember(conn, idempotency, 200, render(unchanged))
+            return RoundOutcome.OK, unchanged
         conn.execute(
             """
             UPDATE review_layers
@@ -330,4 +343,7 @@ def set_layer(
             },
         )
         updated = _load_rounds(conn, "id = %s", (round_id,))[0]
+        if idempotency is not None:
+            assert render is not None
+            remember(conn, idempotency, 200, render(updated))
     return RoundOutcome.OK, updated

@@ -17,7 +17,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
 
 from safe_kit.auth import permissions_of, require_any_permission, require_permission
@@ -41,6 +41,7 @@ from safe_kit.case_records import (
     update_legal_duty,
 )
 from safe_kit.cases import CaseScope
+from safe_kit.idempotency import KeyScope, checked_key, key_scope
 from safe_kit.users import User
 
 TEXT_LIMIT = 1000
@@ -53,6 +54,17 @@ CASE_NOT_FOUND = HTTPException(status_code=404, detail="case not found")
 CASE_CLOSED = HTTPException(status_code=409, detail="case is closed")
 
 case_records_router = APIRouter(tags=["case record"])
+
+
+def _key_scope(actor: User, method: str, route: str, path: str, idempotency_key: str | None, body: BaseModel) -> KeyScope:
+    """The idempotency scope of a write. Checked after the permission check, so a caller without it learns nothing."""
+    return key_scope(actor.id, method, route, checked_key(idempotency_key), path, body.model_dump(mode="json"))
+
+
+AWARENESS_ROUTE = "/api/v1/cases/{case_id}/awareness-events"
+IMPACT_ROUTE = "/api/v1/cases/{case_id}/impacts/{area}"
+LEGAL_DUTIES_ROUTE = "/api/v1/cases/{case_id}/legal-duties"
+CLASSIFICATION_ROUTE = "/api/v1/cases/{case_id}/classification"
 
 
 def _scope(actor: User) -> CaseScope:
@@ -155,10 +167,21 @@ def add_case_awareness_event(
     case_id: uuid.UUID,
     body: AwarenessEventRequest,
     actor: User = Depends(require_permission("cases:triage")),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> AwarenessEventResponse:
     scope = _scope(actor)
+    scope_key = _key_scope(
+        actor, "POST", AWARENESS_ROUTE, f"/api/v1/cases/{case_id}/awareness-events", idempotency_key, body
+    )
     outcome, event = record_awareness_event(
-        str(case_id), body.awareness_kind, body.event_kind, body.occurred_at, body.basis, scope
+        str(case_id),
+        body.awareness_kind,
+        body.event_kind,
+        body.occurred_at,
+        body.basis,
+        scope,
+        idempotency=scope_key,
+        render=lambda created: _awareness_response(created, scope).model_dump(mode="json"),
     )
     if outcome is RecordOutcome.NOT_FOUND:
         raise CASE_NOT_FOUND
@@ -222,9 +245,21 @@ def set_case_impact(
     ],
     body: ImpactRequest,
     actor: User = Depends(require_permission("cases:triage")),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> ImpactResponse:
     scope = _scope(actor)
-    outcome, impact = set_impact(str(case_id), area, body.severity, body.scope, scope)
+    scope_key = _key_scope(
+        actor, "PUT", IMPACT_ROUTE, f"/api/v1/cases/{case_id}/impacts/{area}", idempotency_key, body
+    )
+    outcome, impact = set_impact(
+        str(case_id),
+        area,
+        body.severity,
+        body.scope,
+        scope,
+        idempotency=scope_key,
+        render=lambda saved: _impact_response(saved, scope).model_dump(mode="json"),
+    )
     if outcome is RecordOutcome.NOT_FOUND:
         raise CASE_NOT_FOUND
     if outcome is RecordOutcome.CLOSED:
@@ -347,8 +382,12 @@ def add_case_legal_duty(
     case_id: uuid.UUID,
     body: LegalDutyRequest,
     actor: User = Depends(require_permission("cases:triage")),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> LegalDutyResponse:
     scope = _scope(actor)
+    scope_key = _key_scope(
+        actor, "POST", LEGAL_DUTIES_ROUTE, f"/api/v1/cases/{case_id}/legal-duties", idempotency_key, body
+    )
     outcome, duty = add_legal_duty(
         str(case_id),
         body.kind,
@@ -357,6 +396,8 @@ def add_case_legal_duty(
         body.jurisdiction,
         body.due_at,
         scope,
+        idempotency=scope_key,
+        render=lambda created: _duty_response(created, scope).model_dump(mode="json"),
     )
     if outcome is RecordOutcome.NOT_FOUND:
         raise CASE_NOT_FOUND
@@ -487,12 +528,16 @@ def update_case_classification(
     case_id: uuid.UUID,
     body: ClassificationRequest,
     actor: User = Depends(require_permission("cases:triage")),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> ClassificationResponse:
     """Store the classification as the next version. The body holds every field; a field not sent is cleared."""
     scope = _scope(actor)
     # The free-text fields are hidden from callers without cases:read_all, so their save would clear them. Refuse it.
     if not scope.read_all:
         raise HTTPException(status_code=403, detail="classification_requires_full_view")
+    scope_key = _key_scope(
+        actor, "PUT", CLASSIFICATION_ROUTE, f"/api/v1/cases/{case_id}/classification", idempotency_key, body
+    )
     values: dict[str, Any] = {
         "triggers": tuple(body.triggers),
         "event_kind": body.event_kind,
@@ -505,7 +550,14 @@ def update_case_classification(
         "evidence_gap_plan": body.evidence_gap_plan,
         "next_update_due_at": body.next_update_due_at,
     }
-    outcome, classification = update_classification(str(case_id), body.expected_version, values, scope)
+    outcome, classification = update_classification(
+        str(case_id),
+        body.expected_version,
+        values,
+        scope,
+        idempotency=scope_key,
+        render=lambda saved: _classification_response(str(case_id), saved, scope).model_dump(mode="json"),
+    )
     if outcome is RecordOutcome.NOT_FOUND:
         raise CASE_NOT_FOUND
     if outcome is RecordOutcome.CLOSED:

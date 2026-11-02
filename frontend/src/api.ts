@@ -413,23 +413,28 @@ export function getCase(caseId: string): Promise<CaseDetail> {
   return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}`);
 }
 
+// Every state-changing request sends a new Idempotency-Key, so a repeated submit returns the first answer.
+function idempotencyHeaders(): Record<string, string> {
+  return { "Idempotency-Key": crypto.randomUUID() };
+}
+
 export function createCase(body: CaseCreateBody): Promise<CaseDetail> {
-  return request<CaseDetail>("/cases", { method: "POST", json: body });
+  return request<CaseDetail>("/cases", { method: "POST", json: body, headers: idempotencyHeaders() });
 }
 
 // Reporter intake. Returns the same shape as createCase. The contact is stored for the independent reporting owner and never returned.
 export function createReport(body: ReportCreateBody): Promise<CaseDetail> {
-  return request<CaseDetail>("/reports", { method: "POST", json: body });
+  return request<CaseDetail>("/reports", { method: "POST", json: body, headers: idempotencyHeaders() });
 }
 
 // The reason is stored on the case and shown after closure.
 export function closeCase(caseId: string, reason: string): Promise<CaseDetail> {
-  return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}/close`, { method: "POST", json: { reason } });
+  return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}/close`, { method: "POST", json: { reason }, headers: idempotencyHeaders() });
 }
 
 // Needs cases:close, the same permission as closing. The reason is required and stored with the case.
 export function reopenCase(caseId: string, reason: string): Promise<CaseDetail> {
-  return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}/reopen`, { method: "POST", json: { reason } });
+  return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}/reopen`, { method: "POST", json: { reason }, headers: idempotencyHeaders() });
 }
 
 // The reason is required for not_applicable and rejected for every other status.
@@ -442,6 +447,7 @@ export function updateDeadline(
   return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}/deadlines/${encodeURIComponent(taskId)}`, {
     method: "PATCH",
     json: { status, reason },
+    headers: idempotencyHeaders(),
   });
 }
 
@@ -449,7 +455,7 @@ export function updateDeadline(
 export function restoreDeadline(caseId: string, taskId: string): Promise<CaseDetail> {
   return request<CaseDetail>(
     `/cases/${encodeURIComponent(caseId)}/deadlines/${encodeURIComponent(taskId)}/restore`,
-    { method: "POST" },
+    { method: "POST", headers: idempotencyHeaders() },
   );
 }
 
@@ -520,6 +526,7 @@ export function setReviewLayer(roundId: string, layer: string, body: ReviewLayer
   return request<ReviewRound>(`/reviews/${encodeURIComponent(roundId)}/layers/${encodeURIComponent(layer)}`, {
     method: "PATCH",
     json: body,
+    headers: idempotencyHeaders(),
   });
 }
 
@@ -637,6 +644,7 @@ export function addAssignment(caseId: string, userId: string): Promise<Assignmen
   return request<Assignment>(`/cases/${encodeURIComponent(caseId)}/assignments`, {
     method: "POST",
     json: { user_id: userId },
+    headers: idempotencyHeaders(),
   });
 }
 
@@ -677,6 +685,7 @@ export function addCaseLink(caseId: string, linkedCaseId: string): Promise<CaseL
   return request<CaseLink>(`/cases/${encodeURIComponent(caseId)}/links`, {
     method: "POST",
     json: { linked_case_id: linkedCaseId },
+    headers: idempotencyHeaders(),
   });
 }
 
@@ -758,7 +767,7 @@ export function listEvidence(caseId: string, limit: number, offset: number): Pro
 export function uploadEvidence(caseId: string, file: File): Promise<EvidenceItem> {
   const form = new FormData();
   form.append("file", file);
-  return request<EvidenceItem>(`/cases/${encodeURIComponent(caseId)}/evidence`, { method: "POST", form });
+  return request<EvidenceItem>(`/cases/${encodeURIComponent(caseId)}/evidence`, { method: "POST", form, headers: idempotencyHeaders() });
 }
 
 // Each successful download is recorded in the custody log before the bytes are returned.
@@ -809,6 +818,7 @@ export function addAwarenessEvent(caseId: string, body: AwarenessEventCreateBody
   return request<AwarenessEvent>(`/cases/${encodeURIComponent(caseId)}/awareness-events`, {
     method: "POST",
     json: body,
+    headers: idempotencyHeaders(),
   });
 }
 
@@ -848,6 +858,7 @@ export function setImpact(
   return request<ImpactAssessment>(`/cases/${encodeURIComponent(caseId)}/impacts/${encodeURIComponent(area)}`, {
     method: "PUT",
     json: body,
+    headers: idempotencyHeaders(),
   });
 }
 
@@ -893,7 +904,7 @@ export function listLegalDuties(caseId: string): Promise<LegalDuty[]> {
 }
 
 export function addLegalDuty(caseId: string, body: LegalDutyCreateBody): Promise<LegalDuty> {
-  return request<LegalDuty>(`/cases/${encodeURIComponent(caseId)}/legal-duties`, { method: "POST", json: body });
+  return request<LegalDuty>(`/cases/${encodeURIComponent(caseId)}/legal-duties`, { method: "POST", json: body, headers: idempotencyHeaders() });
 }
 
 export function updateLegalDuty(caseId: string, dutyId: string, changes: LegalDutyChanges): Promise<LegalDuty> {
@@ -951,7 +962,7 @@ export function getClassification(caseId: string): Promise<Classification> {
 }
 
 export function updateClassification(caseId: string, body: ClassificationUpdateBody): Promise<Classification> {
-  return request<Classification>(`/cases/${encodeURIComponent(caseId)}/classification`, { method: "PUT", json: body });
+  return request<Classification>(`/cases/${encodeURIComponent(caseId)}/classification`, { method: "PUT", json: body, headers: idempotencyHeaders() });
 }
 
 // Risk impact values. Reads need a case-read permission. A save needs cases:triage and an open case (409 when closed).

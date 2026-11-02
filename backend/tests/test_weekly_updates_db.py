@@ -4,6 +4,7 @@ Every test here is marked "database". They need SAFE_TEST_DATABASE=1 and the SAF
 applied (see test_database.py). They create rows and never remove them, so use a throwaway database.
 """
 
+import uuid
 import json
 import os
 from datetime import UTC, datetime, timedelta
@@ -31,6 +32,11 @@ VALIDATOR = Draft202012Validator(
 START = datetime(2026, 11, 2, 9, 0, tzinfo=UTC)
 WEEK = timedelta(days=7)
 SCOPE_SECRET = "Customer records SECRET-SCOPE-TEXT"
+
+
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
 
 
 @pytest.fixture(autouse=True)
@@ -62,7 +68,7 @@ def people():
 
 def set_impact(triager: ActingClient, case_id: str, area: str = "severity", severity: str = "high") -> None:
     response = triager.put(
-        f"/api/v1/cases/{case_id}/impacts/{area}", json={"severity": severity, "scope": SCOPE_SECRET}
+        f"/api/v1/cases/{case_id}/impacts/{area}", json={"severity": severity, "scope": SCOPE_SECRET}, headers=idem()
     )
     assert response.status_code == 200, response.text
 

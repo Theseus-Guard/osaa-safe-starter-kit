@@ -28,6 +28,11 @@ from test_evidence_lifecycle import PDF, read_all  # noqa: F401 - sample PDF and
 from test_evidence_lifecycle import ledger, provider  # noqa: F401 - fixtures from the evidence lifecycle tests
 
 
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
+
+
 def signing_key_text() -> str:
     return Path(os.environ["SAFE_JWT_KEY_FILE"]).read_text(encoding="utf-8").strip()
 
@@ -154,7 +159,7 @@ def test_archive_bytes_declared_as_pdf_are_refused_and_nothing_is_stored(upload_
     body, content_type = multipart("report.pdf", "application/pdf", ZIP_BYTES)
 
     response = upload_client.post(
-        f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={"Content-Type": content_type},
+        f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={**idem(), "Content-Type": content_type},
     )
 
     assert response.status_code == 415
@@ -168,7 +173,7 @@ def test_archive_declared_as_an_archive_is_refused_before_storage(upload_client,
     body, content_type = multipart("bundle.zip", "application/zip", ZIP_BYTES)
 
     response = upload_client.post(
-        f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={"Content-Type": content_type},
+        f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers={**idem(), "Content-Type": content_type},
     )
 
     assert response.status_code == 415
@@ -188,7 +193,7 @@ def test_archive_like_or_traversal_name_is_kept_as_a_plain_display_name(raw_name
     stored_names: list[str] = []
     real_insert = evidence._insert_pending
 
-    def record_name(case_id, uploader_id, name, *rest):
+    def record_name(case_id, uploader_id, name, *rest, **kwargs):
         stored_names.append(name)
         return real_insert(case_id, uploader_id, name, *rest)
 
