@@ -244,6 +244,15 @@ export async function login(username: string, password: string): Promise<void> {
   startSession();
 }
 
+// Public: the server says whether it runs in demo mode with the synthetic dataset. The demo banner depends on it only.
+export interface DemoStatus {
+  demo: boolean;
+}
+
+export function demoStatus(): Promise<DemoStatus> {
+  return request<DemoStatus>("/demo/status");
+}
+
 export function me(): Promise<Me> {
   return request<Me>("/auth/me");
 }

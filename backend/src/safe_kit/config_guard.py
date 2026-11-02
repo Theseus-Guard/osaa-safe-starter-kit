@@ -107,3 +107,21 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         refresh_ttl_minutes=required_int(env, "SAFE_REFRESH_TTL_MINUTES", maximum=MAX_TTL_MINUTES),
         session_max_hours=required_int(env, "SAFE_SESSION_MAX_HOURS", maximum=MAX_SESSION_HOURS),
     )
+
+
+def is_demo(env: Mapping[str, str]) -> bool:
+    """True only when the environment passes the startup guard in demo mode with the synthetic dataset.
+
+    It never raises: an environment the guard refuses is simply not demo. Demo features (the demo seed, demo sign-in)
+    check this, so they follow the same rules as the process start, and production never passes it.
+    """
+    try:
+        settings = load_settings(env)
+    except ConfigError:
+        return False
+    return settings.mode == MODE_DEMO and settings.dataset == SYNTHETIC_DEMO_DATASET
+
+
+def is_loopback(address: str | None) -> bool:
+    """True when a client address is a loopback address. The API takes it from the socket peer, not from a header."""
+    return address in LOOPBACK_HOSTS
