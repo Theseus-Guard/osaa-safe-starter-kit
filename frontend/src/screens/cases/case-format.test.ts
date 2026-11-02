@@ -5,8 +5,10 @@ import {
   evidenceStatusLabel,
   formatBytes,
   historyActionLabel,
+  formatRiskScore,
   humanize,
   missingFieldLabel,
+  parseImpactValue,
   recordText,
   triggerLabel,
 } from "./case-format";
@@ -91,5 +93,32 @@ describe("describeDetails", () => {
       "Kind: weekly_update",
       'Extra: {"a":1}',
     ]);
+  });
+});
+
+describe("formatRiskScore", () => {
+  it("shows one decimal place", () => {
+    expect(formatRiskScore(3)).toBe("3.0");
+    expect(formatRiskScore(3.7)).toBe("3.7");
+    expect(formatRiskScore(1.7)).toBe("1.7");
+  });
+
+  it("shows Not assessed while the score is null", () => {
+    expect(formatRiskScore(null)).toBe("Not assessed");
+  });
+});
+
+describe("parseImpactValue", () => {
+  it("accepts the digits 1 to 5", () => {
+    expect(parseImpactValue("1")).toEqual({ value: 1 });
+    expect(parseImpactValue("5")).toEqual({ value: 5 });
+  });
+
+  it("reads an empty choice as not set", () => {
+    expect(parseImpactValue("")).toEqual({ value: null });
+  });
+
+  it.each(["0", "6", "-1", "2.5", "3.0", " 3", "three"])("refuses %s", (text) => {
+    expect(parseImpactValue(text)).toHaveProperty("error");
   });
 });

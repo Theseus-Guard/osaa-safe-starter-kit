@@ -5,12 +5,23 @@ answers only the statements those modules issue, matched by their SQL text, and 
 """
 
 import itertools
+import os
 import uuid
 from datetime import UTC, datetime
 
 import pytest
 
-from safe_kit import cases, system_timezone
+from safe_kit import api, cases, system_timezone
+
+
+@pytest.fixture(autouse=True)
+def impact_values_without_database(monkeypatch) -> None:
+    """Case responses read the impact values from the database. Without a database, the API tests see no values, so
+    every risk score is not set. Database tests (SAFE_TEST_DATABASE=1) keep the real query, and the impact tests
+    replace it themselves when they need values."""
+    if os.environ.get("SAFE_TEST_DATABASE") == "1":
+        return
+    monkeypatch.setattr(api, "current_scores_for_cases", lambda case_ids: {})
 
 
 class _Result:

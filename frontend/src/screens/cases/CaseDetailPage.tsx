@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useState } from "react";
-import { CaseDetail, getCase } from "../../api";
+import { CaseDetail, ImpactScores, getCase } from "../../api";
 import { describeError } from "../../messages";
 import { caseAbilities } from "../../permissions";
 import { CaseAssignments } from "./CaseAssignments";
@@ -15,6 +15,7 @@ import { CaseLegalDuties } from "./CaseLegalDuties";
 import { CasePreliminaryReport } from "./CasePreliminaryReport";
 import { CaseReporterContact } from "./CaseReporterContact";
 import { CaseReview } from "./CaseReview";
+import { CaseRiskScore } from "./CaseRiskScore";
 import { Timestamp } from "@/components/timestamp";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -60,6 +61,21 @@ export function CaseDetailPage({ caseId, permissions }: Props) {
     setHistoryRevision((value) => value + 1);
   }
 
+  // A saved impact value updates the header at once. The change is audited, so the history reloads too.
+  function applyRisk(saved: ImpactScores) {
+    setDetail(
+      (current) =>
+        current && {
+          ...current,
+          risk_score: saved.risk_score,
+          impact_c: saved.c,
+          impact_b: saved.b,
+          impact_a: saved.a,
+        },
+    );
+    setHistoryRevision((value) => value + 1);
+  }
+
   const closed = detail?.status === "closed";
 
   return (
@@ -95,6 +111,13 @@ export function CaseDetailPage({ caseId, permissions }: Props) {
                 </Detail>
                 <Detail label="Calendar version">{detail.calendar_version}</Detail>
               </dl>
+              <CaseRiskScore
+                caseId={detail.id}
+                risk={detail}
+                closed={closed}
+                canWrite={abilities.canWriteRecords}
+                onSaved={applyRisk}
+              />
             </CardContent>
           </Card>
 

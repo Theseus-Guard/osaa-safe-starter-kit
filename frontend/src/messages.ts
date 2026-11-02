@@ -36,6 +36,8 @@ const MESSAGES: Record<string, string> = {
   "case is not closed": "This case is not closed, so it cannot be reopened.",
   classification_version_conflict:
     "The classification was changed by someone else. Reload it, check the current version and save again.",
+  impact_version_conflict:
+    "The impact values were changed by someone else. Reload them, check the current version and save again.",
   reporter_contact_not_grantable: "The reporter contact permission cannot be granted to any role.",
   reporting_owner_fixed: "The reporting_owner role is fixed. Its permissions cannot be changed.",
   reporter_contact_window_closed:
