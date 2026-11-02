@@ -51,6 +51,7 @@ from safe_kit.cases import (
     deadline_tasks_for,
 )
 from safe_kit.db import connect
+from if_match import task_if_match
 from test_case_records_db import ActingClient, classification_body, new_case, new_user
 from test_evidence_lifecycle import requires_database
 
@@ -357,10 +358,11 @@ def task_id_of(triager: ActingClient, case_id: str, kind: str) -> str:
 
 
 def mark_not_applicable(triager: ActingClient, case_id: str, kind: str, reason: str):
+    url = f"/api/v1/cases/{case_id}/deadlines/{task_id_of(triager, case_id, kind)}"
     return triager.patch(
-        f"/api/v1/cases/{case_id}/deadlines/{task_id_of(triager, case_id, kind)}",
+        url,
         json={"status": "not_applicable", "reason": reason},
-        headers=idem(),
+        headers={**idem(), **task_if_match(triager, url)},
     )
 
 
@@ -446,11 +448,12 @@ def test_restoring_a_task_puts_it_back_to_the_status_it_had_before(triage_people
     task_id = task_id_of(triager, case_id, "preliminary_public_report")
     before = task_states(triager, case_id)
     # The task is done before it becomes not applicable, so restoring it must give done back, not open.
+    done_url = f"/api/v1/cases/{case_id}/deadlines/{task_id}"
     assert (
         triager.patch(
-            f"/api/v1/cases/{case_id}/deadlines/{task_id}",
+            done_url,
             json={"status": "done"},
-            headers=idem(),
+            headers={**idem(), **task_if_match(triager, done_url)},
         ).status_code
         == 200
     )

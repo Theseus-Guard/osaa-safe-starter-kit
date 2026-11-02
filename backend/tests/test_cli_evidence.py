@@ -44,6 +44,7 @@ CASE_BODY = {
             "due_at": "2026-11-01T09:00:00Z",
             "status": "pending",
             "not_applicable_reason": None,
+            "revision": 3,
         },
         {
             "id": None,
@@ -51,6 +52,7 @@ CASE_BODY = {
             "due_at": "2026-11-03T09:00:00Z",
             "status": "not_applicable",
             "not_applicable_reason": "no external party",
+            "revision": None,
         },
     ],
 }
@@ -115,6 +117,7 @@ class FakeAPI:
                 "query": urllib.parse.parse_qs(parts.query),
                 "authorization": request.get_header("Authorization"),
                 "content_type": request.get_header("Content-type"),
+                "if_match": request.get_header("If-match"),
                 "data": request.data,
             }
         )
@@ -401,17 +404,29 @@ def test_task_list_prints_the_deadline_tasks_of_the_case(api, capsys):
     assert code == 0 and err == ""
     lines = out.splitlines()
     assert lines[0] == "Deadline tasks for case SAFE-2026-000001:"
-    assert lines[1].split() == ["ID", "KIND", "DUE", "(UTC)", "STATUS", "NOTE"]
+    assert lines[1].split() == [
+        "ID",
+        "KIND",
+        "DUE",
+        "(UTC)",
+        "STATUS",
+        "REVISION",
+        "NOTE",
+    ]
     assert (
         "dddddddd-1111-4222-8333-444444444444" in lines[2]
         and "initial_notice" in lines[2]
     )
     assert "2026-11-01T09:00:00Z" in lines[2] and "pending" in lines[2]
+    # The revision column is what 'task update --revision' takes.
+    assert lines[2].split()[-1] == "3"
     assert (
         lines[3].split()[0] == "-"
         and "not_applicable" in lines[3]
         and "no external party" in lines[3]
     )
+    # A task that is not stored yet has no ID and no revision.
+    assert lines[3].split()[4] == "-"
 
 
 def test_task_list_uses_the_case_request_and_ends_the_session(api, capsys):
@@ -460,7 +475,7 @@ def test_task_list_with_a_bad_case_id_is_a_usage_error_without_any_request(api, 
 TASK_PATH = f"/api/v1/cases/{CASE_ID}/deadlines/dddddddd-1111-4222-8333-444444444444"
 
 
-def task_update_args(*extra: str) -> tuple[str, ...]:
+def task_update_args(*extra: str, revision: str = "3") -> tuple[str, ...]:
     return (
         "task",
         "update",
@@ -468,6 +483,8 @@ def task_update_args(*extra: str) -> tuple[str, ...]:
         "dddddddd-1111-4222-8333-444444444444",
         "--username",
         "ines",
+        "--revision",
+        revision,
         *extra,
     )
 
@@ -497,6 +514,47 @@ def test_task_update_open_sends_no_reason(api, capsys):
     assert code == 0, err
     (patch,) = [call for call in api.calls if call["method"] == "PATCH"]
     assert json.loads(patch["data"]) == {"status": "open", "reason": None}
+
+
+def test_task_update_sends_the_revision_read_as_if_match(api, capsys):
+    api.route("PATCH", TASK_PATH, body=CASE_BODY)
+    code, _, err = run(capsys, *task_update_args("--status", "open", revision="7"))
+    assert code == 0, err
+    (patch,) = [call for call in api.calls if call["method"] == "PATCH"]
+    assert patch["if_match"] == '"7"'
+
+
+def test_task_update_without_a_revision_is_a_usage_error_before_any_request(
+    api, capsys
+):
+    code, _, err = run(
+        capsys,
+        "task",
+        "update",
+        CASE_ID,
+        "dddddddd-1111-4222-8333-444444444444",
+        "--status",
+        "open",
+        "--username",
+        "ines",
+    )
+    assert code == 2
+    assert "--revision" in err
+    assert api.calls == []
+
+
+def test_task_update_with_a_stale_revision_names_the_current_one(api, capsys):
+    api.route(
+        "PATCH",
+        TASK_PATH,
+        status=412,
+        body={"detail": {"status": "precondition_failed", "current_revision": 4}},
+    )
+    code, out, err = run(capsys, *task_update_args("--status", "open", revision="3"))
+    assert code == 1
+    assert out == ""
+    assert "current revision is 4" in err
+    assert "--revision 4" in err
 
 
 @pytest.mark.parametrize(

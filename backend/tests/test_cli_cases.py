@@ -872,6 +872,7 @@ DUTY_BODY = {
     "status": "open",
     "created_by": "alice",
     "created_at": CASE_UPDATED_AT,
+    "revision": 3,
 }
 AWARENESS_BODY = {
     "id": "cccccccc-dddd-4eee-8fff-000000000003",
@@ -1060,7 +1061,17 @@ COMMAND_CASES = [
         id="legal-duty-add",
     ),
     pytest.param(
-        ("case", "legal-duty", "update", CASE_ID, DUTY_ID, "--status", "done"),
+        (
+            "case",
+            "legal-duty",
+            "update",
+            CASE_ID,
+            DUTY_ID,
+            "--status",
+            "done",
+            "--revision",
+            "3",
+        ),
         "PATCH",
         DUTY_PATH,
         {"status": "done"},
@@ -1372,6 +1383,8 @@ def test_duty_id_must_be_a_uuid_before_any_request(api, capsys):
         "not-a-duty",
         "--status",
         "done",
+        "--revision",
+        "3",
         "--username",
         "alice",
     )
@@ -1382,11 +1395,38 @@ def test_duty_id_must_be_a_uuid_before_any_request(api, capsys):
 
 def test_legal_duty_update_without_a_field_is_a_usage_error(api, capsys):
     code, out, err = run(
-        capsys, "case", "legal-duty", "update", CASE_ID, DUTY_ID, "--username", "alice"
+        capsys,
+        "case",
+        "legal-duty",
+        "update",
+        CASE_ID,
+        DUTY_ID,
+        "--revision",
+        "3",
+        "--username",
+        "alice",
     )
     assert code == 2
     assert api.calls == []
     assert "give at least one field" in err
+
+
+def test_legal_duty_update_without_a_revision_is_a_usage_error(api, capsys):
+    code, out, err = run(
+        capsys,
+        "case",
+        "legal-duty",
+        "update",
+        CASE_ID,
+        DUTY_ID,
+        "--status",
+        "done",
+        "--username",
+        "alice",
+    )
+    assert code == 2
+    assert api.calls == []
+    assert "--revision" in err
 
 
 def test_legal_duty_update_sends_only_the_fields_given(api, capsys):
@@ -1402,6 +1442,8 @@ def test_legal_duty_update_sends_only_the_fields_given(api, capsys):
         "2026-11-05T12:00:00+03:00",
         "--jurisdiction",
         "",
+        "--revision",
+        "3",
         "--username",
         "alice",
     )
@@ -1411,6 +1453,36 @@ def test_legal_duty_update_sends_only_the_fields_given(api, capsys):
         "due_at": "2026-11-05T12:00:00+03:00",
         "jurisdiction": "",
     }
+    # The revision read from the duty list travels as If-Match (D-16).
+    sent = {name.lower(): value for name, value in api.calls[1]["headers"].items()}
+    assert sent["if-match"] == '"3"'
+
+
+def test_legal_duty_update_with_a_stale_revision_names_the_current_one(api, capsys):
+    api.route(
+        "PATCH",
+        DUTY_PATH,
+        status=412,
+        body={"detail": {"status": "precondition_failed", "current_revision": 5}},
+    )
+    code, out, err = run(
+        capsys,
+        "case",
+        "legal-duty",
+        "update",
+        CASE_ID,
+        DUTY_ID,
+        "--status",
+        "done",
+        "--revision",
+        "3",
+        "--username",
+        "alice",
+    )
+    assert code == 1
+    assert out == ""
+    assert "current revision is 5" in err
+    assert "--revision 5" in err
 
 
 @pytest.mark.parametrize(
@@ -2178,6 +2250,7 @@ LEGAL_DUTIES_BODY = [
         "status": "open",
         "created_by": "alice",
         "created_at": "2026-11-01T08:00:00Z",
+        "revision": 3,
     }
 ]
 AWARENESS_LIST_BODY = [

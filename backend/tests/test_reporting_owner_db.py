@@ -17,6 +17,7 @@ from safe_kit.rbac import RoleOutcome, list_role_permissions, set_role_permissio
 # Fixtures and helpers are imported from the sibling test module and requested by name, which pyflakes reports as a
 # redefinition. That is the intended use here.
 # ruff: noqa: F401, F811
+from if_match import user_if_match
 from test_reporter_channel import (
     CONTACT,
     contact_audit_rows,
@@ -161,7 +162,9 @@ def test_admin_assigns_the_reporting_owner_role_and_the_change_is_audited(db_cli
     target = new_user("auditor")
 
     response = db_client(admin).patch(
-        f"/api/v1/users/{target}", json={"role": "reporting_owner"}
+        f"/api/v1/users/{target}",
+        json={"role": "reporting_owner"},
+        headers=user_if_match(db_client(admin), target),
     )
 
     assert response.status_code == 200

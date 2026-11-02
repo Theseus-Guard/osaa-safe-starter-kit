@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from safe_kit import api, auth, users
 from safe_kit.db import connect
+from if_match import task_if_match
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("SAFE_TEST_DATABASE") != "1",
@@ -317,10 +318,11 @@ def test_updated_at_moves_to_the_latest_change():
     )
 
     task_id = task_id_of(triager, case_id, "affected_customers")
+    url = f"/api/v1/cases/{case_id}/deadlines/{task_id}"
     response = triager.patch(
-        f"/api/v1/cases/{case_id}/deadlines/{task_id}",
+        url,
         json={"status": "done"},
-        headers=idem(),
+        headers={**idem(), **task_if_match(triager, url)},
     )
     assert response.status_code == 200, response.text
 

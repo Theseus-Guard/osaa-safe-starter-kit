@@ -26,6 +26,7 @@ const TASKS: DeadlineTask[] = [
     due_at: "2026-11-02T06:00:00Z",
     status: "open",
     not_applicable_reason: null,
+    revision: 2,
   },
   {
     id: "task-2",
@@ -33,6 +34,7 @@ const TASKS: DeadlineTask[] = [
     due_at: "2026-11-08T06:00:00Z",
     status: "done",
     not_applicable_reason: null,
+    revision: 1,
   },
 ];
 
@@ -91,7 +93,7 @@ describe("CaseDeadlines", () => {
     const openRow = screen.getByText("Preliminary safe report").closest("tr") as HTMLElement;
     await user.click(openRow.querySelector("button") as HTMLButtonElement);
 
-    expect(update).toHaveBeenCalledWith("case-1", "task-1", "done", undefined);
+    expect(update).toHaveBeenCalledWith("case-1", "task-1", "done", undefined, 2);
     await waitFor(() => expect(onChanged).toHaveBeenCalledWith(updated));
     expect(toast.success).toHaveBeenCalledWith("Preliminary safe report is now done.");
   });
@@ -135,7 +137,7 @@ describe("CaseDeadlines", () => {
     await user.click(screen.getByRole("button", { name: "Confirm" }));
 
     await waitFor(() =>
-      expect(update).toHaveBeenCalledWith("case-1", "task-1", "not_applicable", "Not a reportable incident"),
+      expect(update).toHaveBeenCalledWith("case-1", "task-1", "not_applicable", "Not a reportable incident", 2),
     );
   });
 
@@ -224,7 +226,7 @@ describe("CaseDeadlines", () => {
     expect(within(openRow()).getByRole("button", { name: "Mark done" })).toBeEnabled();
 
     await user.click(within(openRow()).getByRole("button", { name: "Mark done" }));
-    expect(update).toHaveBeenCalledWith("case-1", "task-1", "done", undefined);
+    expect(update).toHaveBeenCalledWith("case-1", "task-1", "done", undefined, 2);
   });
 
   it("shows the recorded reason for a not-applicable task", () => {

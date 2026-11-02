@@ -39,6 +39,7 @@ from safe_kit.cases import (
 )
 from safe_kit.db import connect
 from safe_kit.migrate import main as migrate
+from if_match import task_if_match
 from test_case_records_db import ActingClient, new_user, past
 from test_evidence_lifecycle import requires_database
 from test_case_records import full_classification, full_impacts
@@ -405,19 +406,20 @@ def test_each_timeline_change_writes_one_audit_row_and_a_repeat_writes_none(
     assert audit_count(audit.CASE_LEGAL_DUTY_ADD, case_id) == 1
 
     task_id = triager.get(f"/api/v1/cases/{case_id}").json()["deadlines"][0]["id"]
+    url = f"/api/v1/cases/{case_id}/deadlines/{task_id}"
     assert (
         triager.patch(
-            f"/api/v1/cases/{case_id}/deadlines/{task_id}",
+            url,
             json={"status": "done"},
-            headers=idem(),
+            headers={**idem(), **task_if_match(triager, url)},
         ).status_code
         == 200
     )
     assert audit_count(audit.CASE_DEADLINE_UPDATE, case_id) == 1
     triager.patch(
-        f"/api/v1/cases/{case_id}/deadlines/{task_id}",
+        url,
         json={"status": "done"},
-        headers=idem(),
+        headers={**idem(), **task_if_match(triager, url)},
     )
     assert audit_count(audit.CASE_DEADLINE_UPDATE, case_id) == 1
 
@@ -442,7 +444,12 @@ def test_the_broader_advisory_starts_not_applicable_and_a_triager_may_open_it(
     assert "weekly_update" not in tasks
     url = f"/api/v1/cases/{case_id}/deadlines/{tasks['broader_advisory']['id']}"
     assert (
-        triager.patch(url, json={"status": "open"}, headers=idem()).status_code == 200
+        triager.patch(
+            url,
+            json={"status": "open"},
+            headers={**idem(), **task_if_match(triager, url)},
+        ).status_code
+        == 200
     )
     assert tasks_by_kind(triager, case_id)["broader_advisory"]["status"] == "open"
 
@@ -467,7 +474,9 @@ def test_an_exception_applies_to_one_task_only_needs_a_reason_and_is_audited_onc
     reason = "the partner informed the customers"
     assert (
         triager.patch(
-            url, json={"status": "not_applicable", "reason": reason}, headers=idem()
+            url,
+            json={"status": "not_applicable", "reason": reason},
+            headers={**idem(), **task_if_match(triager, url)},
         ).status_code
         == 200
     )
@@ -487,7 +496,9 @@ def test_an_exception_applies_to_one_task_only_needs_a_reason_and_is_audited_onc
     # The same request changes nothing and writes no audit row.
     assert (
         triager.patch(
-            url, json={"status": "not_applicable", "reason": reason}, headers=idem()
+            url,
+            json={"status": "not_applicable", "reason": reason},
+            headers={**idem(), **task_if_match(triager, url)},
         ).status_code
         == 200
     )

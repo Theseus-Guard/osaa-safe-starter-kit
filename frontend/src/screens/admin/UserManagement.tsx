@@ -67,7 +67,7 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
     setBusy(true);
     setActionError(null);
     try {
-      await updateUser(user.id, changes);
+      await updateUser(user.id, changes, user.revision);
       toast.success(success);
       onChanged();
     } catch (caught) {

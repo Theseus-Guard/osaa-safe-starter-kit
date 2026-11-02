@@ -671,7 +671,9 @@ def test_legal_duty_patch_answers_404_for_an_unknown_duty(client, caller, monkey
     as_role(caller, TRIAGER_ID, "triager")
     assert (
         client.patch(
-            f"/api/v1/cases/{CASE_ID}/legal-duties/{DUTY_ID}", json={"status": "done"}
+            f"/api/v1/cases/{CASE_ID}/legal-duties/{DUTY_ID}",
+            json={"status": "done"},
+            headers={"If-Match": '"1"'},
         ).status_code
         == 404
     )

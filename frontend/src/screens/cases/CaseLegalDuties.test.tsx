@@ -31,6 +31,7 @@ const DUTY: LegalDuty = {
   status: "open",
   created_by: "user-1",
   created_at: "2026-11-01T06:00:00Z",
+  revision: 4,
 };
 
 const BASE_PROPS = {
@@ -88,7 +89,7 @@ describe("CaseLegalDuties", () => {
 
     await user.click(await screen.findByRole("button", { name: "Mark done" }));
 
-    expect(update).toHaveBeenCalledWith("case-1", "duty-1", { status: "done" });
+    expect(update).toHaveBeenCalledWith("case-1", "duty-1", { status: "done" }, 4);
     expect(await screen.findByRole("button", { name: "Set open" })).toBeInTheDocument();
     expect(toast.success).toHaveBeenCalledWith("Statutory duty is now done.");
   });

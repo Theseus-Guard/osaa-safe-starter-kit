@@ -469,7 +469,7 @@ describe("endpoints", () => {
     ["updateProfile", (a) => a.updateProfile({ first_name: "Ada" }), "PATCH", "/api/v1/auth/profile"],
     ["updateUserProfile", (a) => a.updateUserProfile("user-2", { title: "" }), "PATCH", "/api/v1/users/user-2/profile"],
     ["listUsers", (a) => a.listUsers(10, 20), "GET", "/api/v1/users?limit=10&offset=20"],
-    ["updateUser", (a) => a.updateUser("user-2", { is_active: false }), "PATCH", "/api/v1/users/user-2"],
+    ["updateUser", (a) => a.updateUser("user-2", { is_active: false }, 5), "PATCH", "/api/v1/users/user-2"],
     ["resetUserPassword", (a) => a.resetUserPassword("user-2", "example-temporary"), "POST", "/api/v1/users/user-2/password"],
     ["listRoles", (a) => a.listRoles(), "GET", "/api/v1/rbac/roles"],
     ["listPermissions", (a) => a.listPermissions(), "GET", "/api/v1/rbac/permissions"],
@@ -633,13 +633,25 @@ describe("case and evidence endpoints", () => {
   it("sends the reason only for a not-applicable deadline", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, {})).mockResolvedValueOnce(jsonResponse(200, {}));
 
-    await api.updateDeadline("case-1", "task-1", "done");
-    await api.updateDeadline("case-1", "task-1", "not_applicable", "Does not apply");
+    await api.updateDeadline("case-1", "task-1", "done", undefined, 2);
+    await api.updateDeadline("case-1", "task-1", "not_applicable", "Does not apply", 3);
 
     expect(urlOf(0)).toBe("/api/v1/cases/case-1/deadlines/task-1");
     expect(methodOf(0)).toBe("PATCH");
-    expect(bodyOf(0)).toEqual({ status: "done" });
+    expect(bodyOf(0)).toEqual({ status: "done", reason: undefined });
     expect(bodyOf(1)).toEqual({ status: "not_applicable", reason: "Does not apply" });
+    expect(headersOf(0).get("If-Match")).toBe('"2"');
+    expect(headersOf(1).get("If-Match")).toBe('"3"');
+  });
+
+  it("sends the legal duty and account revisions as If-Match", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {})).mockResolvedValueOnce(jsonResponse(200, {}));
+
+    await api.updateLegalDuty("case-1", "duty-1", { status: "done" }, 4);
+    await api.updateUser("user-2", { is_active: false }, 5);
+
+    expect(headersOf(0).get("If-Match")).toBe('"4"');
+    expect(headersOf(1).get("If-Match")).toBe('"5"');
   });
 
   it("restores a deadline task with a POST to its restore route and no body", async () => {

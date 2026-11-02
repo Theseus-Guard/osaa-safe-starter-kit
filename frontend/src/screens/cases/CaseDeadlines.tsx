@@ -34,10 +34,11 @@ export function CaseDeadlines({ caseId, deadlines, closed, canUpdate, canMarkNot
   const [reason, setReason] = useState("");
 
   async function change(task: DeadlineTask, status: DeadlineStatus, why?: string) {
-    if (task.id === null) return;
+    if (task.id === null || task.revision === null) return;
     setBusyTaskId(task.id);
     try {
-      const updated = await updateDeadline(caseId, task.id, status, why);
+      // The revision is the one this row was read with. A change made by someone else since then answers 412.
+      const updated = await updateDeadline(caseId, task.id, status, why, task.revision);
       setReasonFor(null);
       setReason("");
       toast.success(`${humanize(task.kind)} is now ${humanize(status).toLowerCase()}.`);

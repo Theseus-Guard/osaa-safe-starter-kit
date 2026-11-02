@@ -28,6 +28,7 @@ from test_case_import import example_record, envelope
 from test_evidence import MemoryStorage, write_kek
 from safe_kit.evidence_keys import LocalFileKeyProvider
 from error_body import without_request_id
+from if_match import task_if_match
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("SAFE_TEST_DATABASE") != "1",
@@ -66,6 +67,9 @@ class Actor:
         assert user is not None
         api.app.dependency_overrides[auth.current_user] = lambda: user
         return self.client.request(method, url, **kwargs)
+
+    def get(self, url: str, **kwargs):
+        return self.send("GET", url, **kwargs)
 
     def ok(self, method: str, url: str, expect: int, **kwargs) -> dict:
         extra = kwargs.pop("headers", {})
@@ -126,11 +130,13 @@ def assign(world: World, case_id: str, user_id: str) -> None:
 
 def settle_deadlines(world: World, case: dict) -> None:
     for task in case["deadlines"]:
+        url = f"/api/v1/cases/{case['id']}/deadlines/{task['id']}"
         world.triager.ok(
             "PATCH",
-            f"/api/v1/cases/{case['id']}/deadlines/{task['id']}",
+            url,
             200,
             json={"status": "done"},
+            headers=task_if_match(world.triager, url),
         )
 
 
@@ -385,6 +391,8 @@ def scenario_deadline(world: World) -> Scenario:
         200,
         body={"status": "done"},
         other_body={"status": "open"},
+        # The task's revision as the case response carries it. Both requests send it.
+        if_match=f'"{task["revision"]}"',
     )
 
 
@@ -392,11 +400,13 @@ def scenario_restore(world: World) -> Scenario:
     case = open_case(world)
     first, second = case["deadlines"][0], case["deadlines"][1]
     for task in (first, second):
+        url = f"/api/v1/cases/{case['id']}/deadlines/{task['id']}"
         world.triager.ok(
             "PATCH",
-            f"/api/v1/cases/{case['id']}/deadlines/{task['id']}",
+            url,
             200,
             json={"status": "not_applicable", "reason": "Not needed here"},
+            headers=task_if_match(world.triager, url),
         )
     return Scenario(
         world.triager,
@@ -484,18 +494,26 @@ def test_a_refused_request_stores_no_key_so_the_retry_with_the_same_key_succeeds
     case = open_case(world)
     key = new_key()
     # The task does not exist: refused with 404, nothing stored.
+    missing_url = f"/api/v1/cases/{case['id']}/deadlines/{uuid.uuid4()}"
     refused = world.triager.send(
         "PATCH",
-        f"/api/v1/cases/{case['id']}/deadlines/{uuid.uuid4()}",
-        headers={"Idempotency-Key": key},
+        missing_url,
+        headers={
+            "Idempotency-Key": key,
+            **task_if_match(world.triager, missing_url),
+        },
         json={"status": "done"},
     )
     assert refused.status_code == 404
     task = case["deadlines"][0]
+    task_url = f"/api/v1/cases/{case['id']}/deadlines/{task['id']}"
     retry = world.triager.send(
         "PATCH",
-        f"/api/v1/cases/{case['id']}/deadlines/{task['id']}",
-        headers={"Idempotency-Key": key},
+        task_url,
+        headers={
+            "Idempotency-Key": key,
+            **task_if_match(world.triager, task_url),
+        },
         json={"status": "done"},
     )
     assert retry.status_code == 200, retry.text

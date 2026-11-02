@@ -778,21 +778,23 @@ def _print_tasks(case: dict) -> None:
     if not tasks:
         print(f"No deadline tasks for case {case['reference']}.")
         return
-    rows = [("ID", "KIND", "DUE (UTC)", "STATUS", "NOTE")]
+    # The REVISION column is the value for --revision in 'case task update'.
+    rows = [("ID", "KIND", "DUE (UTC)", "STATUS", "REVISION", "NOTE")]
     rows += [
         (
             task["id"] or "-",
             task["kind"],
             task["due_at"],
             task["status"],
+            str(task["revision"]) if task["revision"] is not None else "-",
             task["not_applicable_reason"] or "",
         )
         for task in tasks
     ]
-    widths = [max(len(row[column]) for row in rows) for column in range(4)]
+    widths = [max(len(row[column]) for row in rows) for column in range(5)]
     print(f"Deadline tasks for case {case['reference']}:")
     for row in rows:
-        cells = [row[column].ljust(widths[column]) for column in range(4)] + [row[4]]
+        cells = [row[column].ljust(widths[column]) for column in range(5)] + [row[5]]
         print("  ".join(cells).rstrip())
 
 
@@ -887,7 +889,25 @@ TASK_UPDATE_MESSAGES = {
     404: "case or deadline task not found, or its case is not available to your account",
     409: "the case is closed, so its deadlines cannot change",
     400: "the reason is missing or too long: a not applicable deadline needs a reason of 1 to 1000 characters",
+    412: "the deadline task changed since you read it, so nothing was saved. Run 'case task list' again",
 }
+
+
+def _precondition_revision(error: RequestFailed) -> int | None:
+    """The current revision from a stale-write 412 of a deadline task or legal duty, or None for any other failure."""
+    detail = error.detail
+    if (
+        error.status != 412
+        or not isinstance(detail, dict)
+        or detail.get("status") != "precondition_failed"
+    ):
+        return None
+    revision = detail.get("current_revision")
+    if isinstance(revision, int) and not isinstance(revision, bool):
+        return revision
+    return None
+
+
 TASK_RESTORE_MESSAGES = {
     403: "forbidden: only a triager can restore a deadline that is not applicable",
     404: "case or deadline task not found, or its case is not available to your account",
@@ -913,18 +933,33 @@ def _task_update(base_url: str, args: argparse.Namespace) -> None:
         raise UsageError("--reason is required when --status is not-applicable")
     if status != "not_applicable" and args.reason is not None:
         raise UsageError("--reason is only allowed with --status not-applicable")
-    _write_case(
-        base_url,
-        args,
-        "PATCH",
-        f"/api/v1/cases/{case_id}/deadlines/{task_id}",
-        payload={
-            "status": status,
-            "reason": reason if status == "not_applicable" else None,
-        },
-        messages=TASK_UPDATE_MESSAGES,
-        render=_render_tasks_change("Deadline task updated."),
-    )
+    if args.revision < 1:
+        raise UsageError(
+            "--revision must be 1 or more. Read it with: case task list CASE_ID"
+        )
+    try:
+        _write_case(
+            base_url,
+            args,
+            "PATCH",
+            f"/api/v1/cases/{case_id}/deadlines/{task_id}",
+            payload={
+                "status": status,
+                "reason": reason if status == "not_applicable" else None,
+            },
+            messages=TASK_UPDATE_MESSAGES,
+            render=_render_tasks_change("Deadline task updated."),
+            if_match=args.revision,
+        )
+    except RequestFailed as error:
+        current = _precondition_revision(error)
+        if current is None:
+            raise
+        # Nothing was saved. The command never retries: the user reads the tasks again and runs it again.
+        raise RequestFailed(
+            f"the deadline task changed, so nothing was saved. Its current revision is {current}. Run "
+            f"'case task list {case_id}' to check it, then run this command again with --revision {current}"
+        ) from None
 
 
 def _task_restore(base_url: str, args: argparse.Namespace) -> None:
@@ -952,8 +987,12 @@ def _write_case(
     payload: dict | None = None,
     messages: dict[int, str] | None = None,
     render=None,
+    if_match: int | None = None,
 ) -> None:
-    """One write request in its own login session. --json prints the API body; otherwise render prints a summary."""
+    """One write request in its own login session. --json prints the API body; otherwise render prints a summary.
+
+    if_match is the revision the caller read. It is sent as the quoted If-Match value (D-16).
+    """
     # A POST, PUT or PATCH carries an Idempotency-Key. The key is made once per run, so a retry in the same run reuses it.
     headers = (
         None
@@ -963,6 +1002,8 @@ def _write_case(
             or str(uuid.uuid4())
         }
     )
+    if if_match is not None:
+        headers = {**(headers or {}), "If-Match": f'"{if_match}"'}
 
     def action(base: str, token: str) -> None:
         raw = _call(
@@ -1064,6 +1105,7 @@ def _render_duty(heading: str):
         print(f"  Jurisdiction:     {duty['jurisdiction'] or '-'}")
         print(f"  Due (UTC):        {duty['due_at']}")
         print(f"  Status:           {duty['status']}")
+        print(f"  Revision:         {duty['revision']}")
 
     return render
 
@@ -1141,6 +1183,7 @@ LEGAL_DUTY_MESSAGES = {
 LEGAL_DUTY_UPDATE_MESSAGES = {
     404: "case or legal duty not found",
     409: "the case is closed, so its legal duties cannot change",
+    412: "the legal duty changed since you read it, so nothing was saved. Run 'case legal-duty list' again",
 }
 AWARENESS_MESSAGES = {
     404: "case not found",
@@ -1939,15 +1982,30 @@ def _legal_duty_update(base_url: str, args: argparse.Namespace) -> None:
         raise UsageError(
             "give at least one field to change: --description, --source-reference, --jurisdiction, --due-at or --status"
         )
-    _write_case(
-        base_url,
-        args,
-        "PATCH",
-        f"/api/v1/cases/{case_id}/legal-duties/{duty_id}",
-        payload=changes,
-        messages=LEGAL_DUTY_UPDATE_MESSAGES,
-        render=_render_duty("Legal duty updated."),
-    )
+    if args.revision < 1:
+        raise UsageError(
+            "--revision must be 1 or more. Read it with: case legal-duty list CASE_ID"
+        )
+    try:
+        _write_case(
+            base_url,
+            args,
+            "PATCH",
+            f"/api/v1/cases/{case_id}/legal-duties/{duty_id}",
+            payload=changes,
+            messages=LEGAL_DUTY_UPDATE_MESSAGES,
+            render=_render_duty("Legal duty updated."),
+            if_match=args.revision,
+        )
+    except RequestFailed as error:
+        current = _precondition_revision(error)
+        if current is None:
+            raise
+        # Nothing was saved. The command never retries: the user reads the duties again and runs it again.
+        raise RequestFailed(
+            f"the legal duty changed, so nothing was saved. Its current revision is {current}. Run "
+            f"'case legal-duty list {case_id}' to check it, then run this command again with --revision {current}"
+        ) from None
 
 
 def _awareness_add(base_url: str, args: argparse.Namespace) -> None:
@@ -2082,12 +2140,14 @@ def _legal_duty_list(base_url: str, args: argparse.Namespace) -> None:
         if not duties:
             print("No legal duties recorded for this case.")
             return
+        # The REVISION column is the value for --revision in 'case legal-duty update'.
         rows = [
             (
                 "ID",
                 "KIND",
                 "STATUS",
                 "DUE (UTC)",
+                "REVISION",
                 "JURISDICTION",
                 "SOURCE REFERENCE",
                 "DESCRIPTION",
@@ -2099,6 +2159,7 @@ def _legal_duty_list(base_url: str, args: argparse.Namespace) -> None:
                 duty["kind"],
                 duty["status"],
                 duty["due_at"],
+                str(duty["revision"]),
                 _free_text(duty["jurisdiction"], full_view),
                 _free_text(duty["source_reference"], full_view),
                 _free_text(duty["description"], full_view),
@@ -2929,6 +2990,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--reason",
         help="Why the deadline does not apply, 1 to 1000 characters (not-applicable only)",
     )
+    task_update.add_argument(
+        "--revision",
+        type=int,
+        required=True,
+        help="Revision of the task you read with 'task list'",
+    )
     _add_idempotency_option(task_update)
     _add_auth_options(task_update)
     task_update.set_defaults(handler=_task_update)
@@ -3686,6 +3753,12 @@ def _add_case_update_commands(case_commands) -> None:
     )
     legal_update.add_argument(
         "--status", choices=LEGAL_DUTY_STATUSES, help="open or done"
+    )
+    legal_update.add_argument(
+        "--revision",
+        type=int,
+        required=True,
+        help="Revision of the legal duty you read with 'legal-duty list'",
     )
     _add_auth_options(legal_update)
     legal_update.set_defaults(handler=_legal_duty_update)

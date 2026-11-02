@@ -62,13 +62,36 @@ def task_state(task_id: str) -> tuple:
         ).fetchone()
 
 
+def task_revision(task_id: str) -> int:
+    """The stored revision of a deadline task. A task that does not exist answers 1, which the refusal ignores."""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT revision FROM deadline_tasks WHERE id = %s", (task_id,)
+        ).fetchone()
+    return row[0] if row else 1
+
+
+def update_deadline_now(case_id, task_id, status, reason, scope, may_mark):
+    """update_deadline with the task's current revision, for calls that are not about revisions. Returns the outcome."""
+    outcome, _ = cases.update_deadline(
+        case_id,
+        task_id,
+        status,
+        reason,
+        scope,
+        may_mark,
+        task_revision(task_id),
+    )
+    return outcome
+
+
 def finish_all_tasks(case_id: str, scope: CaseScope) -> None:
     for task in cases.find_visible_case(case_id, scope).deadlines:
         # A task that starts not applicable (the conditional advisory) is left as it is: closure accepts it.
         if task.status == "not_applicable":
             continue
         assert (
-            cases.update_deadline(case_id, task.id, "done", None, scope, False)
+            update_deadline_now(case_id, task.id, "done", None, scope, False)
             is Outcome.OK
         )
 
@@ -195,7 +218,7 @@ def test_deadline_task_moves_between_open_done_and_not_applicable():
 
     # A reporter may set done, and a reason given for a status other than not_applicable is dropped.
     assert (
-        cases.update_deadline(case.id, task.id, "done", "ignored", scope, False)
+        update_deadline_now(case.id, task.id, "done", "ignored", scope, False)
         is Outcome.OK
     )
     assert task_state(task.id) == ("done", None)
@@ -211,13 +234,13 @@ def test_deadline_task_moves_between_open_done_and_not_applicable():
     ]
 
     # Only a triager may mark a task not applicable.
-    assert cases.update_deadline(
+    assert update_deadline_now(
         case.id, task.id, "not_applicable", "no reason", scope, False
     ) is (Outcome.NOT_APPLICABLE_FORBIDDEN)
     assert task_state(task.id) == ("done", None)
 
     assert (
-        cases.update_deadline(
+        update_deadline_now(
             case.id, task.id, "not_applicable", "reason text 123", scope, True
         )
         is Outcome.OK
@@ -237,7 +260,7 @@ def test_deadline_task_moves_between_open_done_and_not_applicable():
     # Repeating the same request changes nothing and writes no audit row.
     count = len(audit_rows(case.id, audit.CASE_DEADLINE_UPDATE))
     assert (
-        cases.update_deadline(
+        update_deadline_now(
             case.id, task.id, "not_applicable", "reason text 123", scope, True
         )
         is Outcome.OK
@@ -246,12 +269,12 @@ def test_deadline_task_moves_between_open_done_and_not_applicable():
 
     # Leaving not_applicable needs the same permission, and clears the reason.
     assert (
-        cases.update_deadline(case.id, task.id, "open", None, scope, False)
+        update_deadline_now(case.id, task.id, "open", None, scope, False)
         is Outcome.NOT_APPLICABLE_FORBIDDEN
     )
     assert task_state(task.id) == ("not_applicable", "reason text 123")
     assert (
-        cases.update_deadline(case.id, task.id, "open", None, scope, True) is Outcome.OK
+        update_deadline_now(case.id, task.id, "open", None, scope, True) is Outcome.OK
     )
     assert task_state(task.id) == ("open", None)
     assert audit_rows(case.id, audit.CASE_DEADLINE_UPDATE)[-1][1] == {
@@ -269,6 +292,30 @@ def test_deadline_task_moves_between_open_done_and_not_applicable():
     )
 
 
+def test_a_deadline_change_needs_the_task_revision_and_raises_it_once():
+    owner = new_user()
+    scope = CaseScope(owner, read_own=True)
+    case = cases.create_case("Revisions", a_while_ago(), created_by=owner)
+    task = case.deadlines[0]
+    assert task.revision == 1
+
+    assert cases.update_deadline(case.id, task.id, "done", None, scope, False, 1) == (
+        Outcome.OK,
+        2,
+    )
+    # The same request again names the old revision: refused, nothing changes.
+    assert cases.update_deadline(case.id, task.id, "open", None, scope, False, 1) == (
+        Outcome.REVISION_MISMATCH,
+        2,
+    )
+    assert task_state(task.id) == ("done", None)
+    # A request that changes nothing keeps the revision.
+    assert cases.update_deadline(case.id, task.id, "done", None, scope, False, 2) == (
+        Outcome.OK,
+        2,
+    )
+
+
 def test_deadline_update_refuses_unknown_tasks_other_cases_tasks_and_invisible_cases():
     owner = new_user()
     stranger = new_user()
@@ -278,17 +325,17 @@ def test_deadline_update_refuses_unknown_tasks_other_cases_tasks_and_invisible_c
     foreign_task = other_case.deadlines[0]
 
     assert (
-        cases.update_deadline(case.id, str(uuid.uuid4()), "done", None, scope, False)
+        update_deadline_now(case.id, str(uuid.uuid4()), "done", None, scope, False)
         is Outcome.TASK_NOT_FOUND
     )
     assert (
-        cases.update_deadline(case.id, foreign_task.id, "done", None, scope, False)
+        update_deadline_now(case.id, foreign_task.id, "done", None, scope, False)
         is Outcome.TASK_NOT_FOUND
     )
     assert task_state(foreign_task.id) == ("open", None)
 
     stranger_scope = CaseScope(stranger, read_own=True)
-    assert cases.update_deadline(
+    assert update_deadline_now(
         case.id, case.deadlines[0].id, "done", None, stranger_scope, False
     ) is (Outcome.NOT_FOUND)
     assert task_state(case.deadlines[0].id) == ("open", None)
@@ -317,14 +364,13 @@ def test_closed_case_refuses_deadline_changes_until_it_is_reopened():
 
     task = case.deadlines[0]
     assert (
-        cases.update_deadline(case.id, task.id, "open", None, triage, True)
+        update_deadline_now(case.id, task.id, "open", None, triage, True)
         is Outcome.CLOSED
     )
     assert task_state(task.id) == ("done", None)
 
     assert cases.reopen_case(case.id, "Reopened for the test", triage) is Outcome.OK
     assert (
-        cases.update_deadline(case.id, task.id, "open", None, triage, True)
-        is Outcome.OK
+        update_deadline_now(case.id, task.id, "open", None, triage, True) is Outcome.OK
     )
     assert task_state(task.id) == ("open", None)
