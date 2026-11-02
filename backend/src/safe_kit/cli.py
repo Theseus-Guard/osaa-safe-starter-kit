@@ -5,6 +5,7 @@ import getpass
 import json
 import mimetypes
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -56,6 +57,12 @@ CLASSIFICATION_TRIGGERS = (
     "none_applies",
 )
 EVENT_KINDS = ("incident", "near_miss", "blocked_attempt")
+# Model record values, the same as safe_kit.model_records and the API.
+# Identifiers are letters, digits and . _ : / @ + -.
+REASONING_MODES = ("disabled", "enabled", "unknown")
+REASONING_EFFORTS = ("low", "medium", "high", "max")
+REASONING_BUDGET_LIMIT = 10_000_000
+MODEL_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}")
 IMPACT_AREAS = (
     "affected_people_groups",
     "severity",
@@ -1042,6 +1049,148 @@ def _case_link_remove(base_url: str, args: argparse.Namespace) -> None:
     )
 
 
+MODEL_RECORD_MESSAGES = {
+    403: "forbidden: recording needs evidence:write and evidence:read, and the case must be visible to you",
+    404: "case, evidence item or review round not found",
+    409: "the case is closed, so no model record can be recorded",
+    422: "the model record was refused: check the identifiers and the reasoning options",
+}
+MODEL_LIST_MESSAGES = {404: "case not found"}
+MODEL_REVOKE_MESSAGES = {
+    403: "forbidden: revoking needs evidence:write and evidence:read, and the case must be visible to you",
+    404: "case or model record not found",
+    409: "the case is closed, or the model record is already revoked",
+    422: "the revocation was refused: give a reason of 1 to 1000 characters",
+}
+
+
+def _model_identifier(text: str, option: str) -> str:
+    if MODEL_IDENTIFIER.fullmatch(text) is None:
+        raise UsageError(f"{option} may use only letters, digits and . _ : / @ + - (up to 200 characters)")
+    return text
+
+
+def _model_record_links(args: argparse.Namespace) -> tuple[str | None, str | None]:
+    evidence = _uuid_arg(args.evidence_item, "--evidence-item") if args.evidence_item else None
+    review_round = _uuid_arg(args.review_round, "--review-round") if args.review_round else None
+    return evidence, review_round
+
+
+def _model_record_reasoning(args: argparse.Namespace) -> dict:
+    if args.reasoning_mode != "enabled" and (args.reasoning_effort or args.reasoning_budget_tokens is not None):
+        raise UsageError("--reasoning-effort and --reasoning-budget-tokens need --reasoning-mode enabled")
+    if args.reasoning_budget_tokens is not None and not 1 <= args.reasoning_budget_tokens <= REASONING_BUDGET_LIMIT:
+        raise UsageError(f"--reasoning-budget-tokens must be between 1 and {REASONING_BUDGET_LIMIT}")
+    return {
+        "mode": args.reasoning_mode,
+        "effort": args.reasoning_effort,
+        "budget_tokens": args.reasoning_budget_tokens,
+    }
+
+
+def _print_model_record(record: dict) -> None:
+    config = record["configuration"]
+    reasoning = config["reasoning"]
+    effort = f", effort {reasoning['effort']}" if reasoning["effort"] else ""
+    budget = f", budget {reasoning['budget_tokens']} tokens" if reasoning["budget_tokens"] else ""
+    if record["evidence_item_id"]:
+        linked = f"evidence item {record['evidence_item_id']}"
+    elif record["review_round_id"]:
+        linked = f"review round {record['review_round_id']}"
+    else:
+        linked = "the case"
+    print(f"  Record ID:        {record['record_id']} (version {record['version']})")
+    print(f"  Model:            {config['model_name']} {config['model_version']}")
+    print(f"  Runtime:          {config['runtime']}")
+    print(f"  Provider alias:   {config['provider_alias']}")
+    print(f"  Reasoning:        {reasoning['mode']}{effort}{budget}")
+    print(f"  Concerns:         {linked}")
+    print(f"  Recorded (UTC):   {record['recorded_at']}")
+    if record["revoked"]:
+        reason = record["revocation_reason"] or "(reason not shown for your account)"
+        print(f"  Status:           revoked at {record['revoked_at']}: {reason}")
+    else:
+        print("  Status:           current")
+
+
+def _render_model_record_added(raw: bytes) -> None:
+    print("Model record saved.")
+    _print_model_record(_json_object(raw))
+
+
+def _model_record_add(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+    evidence, review_round = _model_record_links(args)
+    if evidence and review_round:
+        raise UsageError("--evidence-item and --review-round cannot be used together")
+    payload = {
+        "model_name": _model_identifier(args.model_name, "--model-name"),
+        "model_version": _model_identifier(args.model_version, "--model-version"),
+        "runtime": _model_identifier(args.runtime, "--runtime"),
+        "provider_alias": _model_identifier(args.provider_alias, "--provider-alias"),
+        "reasoning": _model_record_reasoning(args),
+        "evidence_item_id": evidence,
+        "review_round_id": review_round,
+    }
+    _write_case(
+        base_url,
+        args,
+        "POST",
+        f"/api/v1/cases/{case_id}/model-records",
+        payload=payload,
+        messages=MODEL_RECORD_MESSAGES,
+        render=_render_model_record_added,
+    )
+
+
+def _render_model_record_revoked(raw: bytes) -> None:
+    print("Model record revoked. It stays readable for audit and is no longer the current configuration.")
+    _print_model_record(_json_object(raw))
+
+
+def _model_record_list(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+    query = {"current_only": "true"} if args.current_only else None
+
+    def action(base: str, token: str) -> None:
+        raw = _call(
+            base,
+            "GET",
+            f"/api/v1/cases/{case_id}/model-records",
+            token=token,
+            query=query,
+            messages=MODEL_LIST_MESSAGES,
+        )
+        if args.json:
+            _print_json(raw)
+            return
+        records = _json_list(raw)
+        if not records:
+            print("No model records.")
+        for record in records:
+            _print_model_record(record)
+            print()
+
+    _with_session(base_url, args, action)
+
+
+def _model_record_revoke(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+    record_id = _uuid_arg(args.record_id, "RECORD_ID")
+    reason = args.reason.strip()
+    if not reason:
+        raise UsageError("--reason must not be blank")
+    _write_case(
+        base_url,
+        args,
+        "POST",
+        f"/api/v1/cases/{case_id}/model-records/{record_id}/revoke",
+        payload={"reason": reason},
+        messages=MODEL_REVOKE_MESSAGES,
+        render=_render_model_record_revoked,
+    )
+
+
 def _review_open(base_url: str, args: argparse.Namespace) -> None:
     case_id = _case_id_arg(args.case_id)
     # The key makes a repeated run safe: the same key and the same case return the first round. Pass the key of an
@@ -1908,6 +2057,57 @@ def _add_case_update_commands(case_commands) -> None:
     link_remove.add_argument("linked_case_id", metavar="LINKED_CASE_ID", help="Case ID (UUID) of the linked case")
     _add_auth_options(link_remove, json_output=False)
     link_remove.set_defaults(handler=_case_link_remove)
+    model = case_commands.add_parser(
+        "model", help="Record, list and revoke the model, runtime and reasoning configuration"
+    )
+    model_commands = model.add_subparsers(dest="model_command", required=True)
+    model_record = model_commands.add_parser(
+        "record",
+        help="Record the configuration of an agent run. Identifiers only: no prompt and no reasoning text",
+    )
+    model_record.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    model_record.add_argument("--model-name", required=True, help="Model name, up to 200 characters")
+    model_record.add_argument("--model-version", required=True, help="Model version, up to 200 characters")
+    model_record.add_argument("--runtime", required=True, help="Runtime name and version, up to 200 characters")
+    model_record.add_argument("--provider-alias", required=True, help="Provider alias, up to 200 characters")
+    model_record.add_argument(
+        "--reasoning-mode",
+        required=True,
+        choices=REASONING_MODES,
+        help="Whether reasoning was on: " + ", ".join(REASONING_MODES),
+    )
+    model_record.add_argument(
+        "--reasoning-effort", choices=REASONING_EFFORTS, help="Effort, only with --reasoning-mode enabled"
+    )
+    model_record.add_argument(
+        "--reasoning-budget-tokens",
+        type=int,
+        metavar="N",
+        help="Token budget, only with --reasoning-mode enabled",
+    )
+    model_record.add_argument(
+        "--evidence-item", metavar="EVIDENCE_ID", help="Link to one evidence item of the case (UUID)"
+    )
+    model_record.add_argument("--review-round", metavar="ROUND_ID", help="Link to one review round of the case (UUID)")
+    _add_idempotency_option(model_record)
+    _add_auth_options(model_record)
+    model_record.set_defaults(handler=_model_record_add)
+    model_list = model_commands.add_parser(
+        "list", help="List the model records of a case. Revoked records are shown unless --current-only is given"
+    )
+    model_list.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    model_list.add_argument("--current-only", action="store_true", help="Leave out revoked records")
+    _add_auth_options(model_list)
+    model_list.set_defaults(handler=_model_record_list)
+    model_revoke = model_commands.add_parser(
+        "revoke", help="Revoke a model record with a reason. The record stays readable for audit"
+    )
+    model_revoke.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    model_revoke.add_argument("record_id", metavar="RECORD_ID", help="Model record ID (UUID)")
+    model_revoke.add_argument("--reason", required=True, help="Why the record is revoked, up to 1000 characters")
+    _add_idempotency_option(model_revoke)
+    _add_auth_options(model_revoke)
+    model_revoke.set_defaults(handler=_model_record_revoke)
 
     review = case_commands.add_parser(
         "review",

@@ -1472,6 +1472,11 @@ from safe_kit.case_links_api import case_links_router  # noqa: E402
 
 app.include_router(case_links_router)
 
+# Model record endpoints: the model, runtime and reasoning configuration of an agent run (plans/03 T05).
+from safe_kit.model_records_api import model_records_router  # noqa: E402
+
+app.include_router(model_records_router)
+
 # Risk endpoints: the C, B and A impact values of a case and its risk score (see safe_kit.impact_api).
 app.include_router(impact_router)
 

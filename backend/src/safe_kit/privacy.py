@@ -426,6 +426,22 @@ CATALOG: tuple[TableEntry, ...] = (
         created_column="created_at",
     ),
     TableEntry(
+        table="model_records",
+        description="Versions of the model, runtime, provider alias and reasoning configuration recorded for an agent run, and revocations of them.",
+        category="case",
+        contains_personal_data=True,
+        personal_fields=(
+            "created_by (links to a person)",
+            "revocation_reason (free text, may name people)",
+        ),
+        purpose="Showing which configuration produced an agent run, so the run can be replayed, and which configuration is no longer current.",
+        retention="Kept with its case and evidence. Versions are never edited. Follows the case retention once it is defined.",
+        retention_defined=False,
+        security="Listed through the owning case (evidence:read). The revocation reason is returned only to callers with cases:read_all. Written by holders of evidence:write; each change is audited.",
+        deletion_mode="Soft delete (is_deleted, deleted_at). The application never removes rows.",
+        created_column="created_at",
+    ),
+    TableEntry(
         table="case_impact_scores",
         description="Versions of the Confidentiality, Integrity and Availability impact values of a case. The risk score is computed from them.",
         category="case",
