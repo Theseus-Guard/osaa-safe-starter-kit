@@ -3,6 +3,7 @@
 import getpass
 import io
 import json
+import re
 import urllib.error
 import urllib.parse
 from datetime import UTC, datetime, timedelta
@@ -37,6 +38,8 @@ SUMMARY = {
     "awareness_time": "2026-10-30T09:00:00Z",
     "status": "open",
     "created_at": "2026-10-31T10:00:00Z",
+    "next_deadline": "2026-11-02T09:00:00Z",
+    "updated_at": "2026-11-01T08:15:00Z",
     "risk_score": None,
     "impact_c": None,
     "impact_b": None,
@@ -258,6 +261,71 @@ def test_list_rejects_out_of_range_paging_without_a_request(api, capsys, argv):
     code, out, err = run(capsys, "case", "list", "--username", "alice", *argv)
     assert code == 2
     assert api.calls == []
+
+
+@pytest.mark.parametrize("status", cli.CASE_STATUS_CHOICES)
+def test_list_sends_the_status_filter(api, capsys, status):
+    api.route("GET", "/api/v1/cases", body={"items": [SUMMARY], "total": 1, "limit": 20, "offset": 0})
+    code, out, err = run(capsys, "case", "list", "--status", status, "--username", "alice")
+    assert code == 0
+    assert api.calls[1]["query"] == {"limit": ["20"], "offset": ["0"], "status": [status]}
+
+
+def test_list_without_a_status_sends_no_status_parameter(api, capsys):
+    api.route("GET", "/api/v1/cases", body={"items": [], "total": 0, "limit": 20, "offset": 0})
+    run(capsys, "case", "list", "--username", "alice")
+    assert "status" not in api.calls[1]["query"]
+
+
+def test_list_refuses_an_unknown_status_without_a_request(api, capsys):
+    code, out, err = run(capsys, "case", "list", "--status", "archived", "--username", "alice")
+    assert code == 2
+    assert api.calls == []
+    assert "archived" in err
+
+
+def test_status_choices_are_the_case_statuses_of_the_backend():
+    from safe_kit import cases
+
+    assert cli.CASE_STATUS_CHOICES == cases.CASE_STATUSES
+
+
+def test_list_prints_the_next_deadline_and_the_last_update(api, capsys):
+    hidden = {**SUMMARY, "reference": "SAFE-2026-000002", "next_deadline": None, "updated_at": "2026-11-02T07:00:00Z"}
+    page = {"items": [SUMMARY, hidden], "total": 2, "limit": 20, "offset": 0}
+    api.route("GET", "/api/v1/cases", body=page)
+    code, out, err = run(capsys, "case", "list", "--username", "alice")
+    assert code == 0
+    header, first, second, footer = out.splitlines()[:4]
+    # Cells are separated by at least two spaces. The title is last, so it may contain single spaces.
+    assert re.split(r"\s{2,}", header.strip()) == [
+        "REFERENCE",
+        "STATUS",
+        "AWARENESS (UTC)",
+        "NEXT DEADLINE (UTC)",
+        "LAST UPDATED (UTC)",
+        "RISK",
+        "TITLE",
+    ]
+    assert re.split(r"\s{2,}", first.strip()) == [
+        "SAFE-2026-000001",
+        "open",
+        "2026-10-30T09:00:00Z",
+        "2026-11-02T09:00:00Z",
+        "2026-11-01T08:15:00Z",
+        "Not assessed",
+        "Phishing campaign",
+    ]
+    assert re.split(r"\s{2,}", second.strip()) == [
+        "SAFE-2026-000002",
+        "open",
+        "2026-10-30T09:00:00Z",
+        "None",
+        "2026-11-02T07:00:00Z",
+        "Not assessed",
+        "Phishing campaign",
+    ]
+    assert footer == "Showing 1-2 of 2"
 
 
 # --- show ---

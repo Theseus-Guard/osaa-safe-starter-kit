@@ -1,4 +1,5 @@
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -90,14 +91,15 @@ def client(caller):
 
 @pytest.fixture
 def store(monkeypatch):
-    state = {"cases": {}, "created": []}
+    state = {"cases": {}, "created": [], "list_calls": []}
 
     def fake_create(title, awareness_time, created_by):
         # The first case gets CASE_ID, the others their own id, so several users can each have a case.
         case_id = CASE_ID if not state["cases"] else str(uuid.uuid4())
+        number = len(state["cases"]) + 1
         case = Case(
             id=case_id,
-            reference="SAFE-2026-000001",
+            reference=f"SAFE-2026-{number:06d}",
             title=title,
             awareness_time=awareness_time,
             status="open",
@@ -106,6 +108,7 @@ def store(monkeypatch):
             created_at=datetime(2026, 11, 1, tzinfo=UTC),
             created_by=created_by,
             deadlines=deadline_tasks_for(awareness_time, calendar_for("Europe/Istanbul")),
+            updated_at=datetime(2026, 11, 1, tzinfo=UTC),
         )
         state["created"].append((title, awareness_time, created_by))
         state["cases"][case_id] = case
@@ -118,12 +121,21 @@ def store(monkeypatch):
         case = state["cases"].get(case_id)
         return case if case is not None and visible(case, scope) else None
 
-    def fake_list(scope, limit, offset, q=None):
-        mine = [case for case in state["cases"].values() if visible(case, scope)]
+    def matches(case, q, status):
+        # The same rules as the SQL: q is a case-insensitive part of the reference, or the start of the ID.
+        if status is not None and case.status != status:
+            return False
+        if q and q.lower() not in case.reference.lower() and not case.id.startswith(q.lower()):
+            return False
+        return True
+
+    def fake_list(scope, limit, offset, q=None, status=None, include_evidence=False):
+        state["list_calls"].append({"q": q, "status": status, "include_evidence": include_evidence})
+        mine = [case for case in state["cases"].values() if visible(case, scope) and matches(case, q, status)]
         return mine[offset : offset + limit]
 
-    def fake_count(scope, q=None):
-        return sum(1 for case in state["cases"].values() if visible(case, scope))
+    def fake_count(scope, q=None, status=None):
+        return sum(1 for case in state["cases"].values() if visible(case, scope) and matches(case, q, status))
 
     monkeypatch.setattr(api, "create_case", fake_create)
     monkeypatch.setattr(api, "find_visible_case", fake_find)
@@ -210,6 +222,110 @@ def test_list_paging_bounds_are_enforced(client, store):
     assert client.get("/api/v1/cases?limit=0").status_code == 422
     assert client.get("/api/v1/cases?limit=201").status_code == 422
     assert client.get("/api/v1/cases?offset=-1").status_code == 422
+
+
+def set_fields(store, case_id, **fields):
+    store["cases"][case_id] = replace(store["cases"][case_id], **fields)
+
+
+def test_list_filters_by_status(client, store):
+    first = client.post("/api/v1/cases", json=valid_body(title="First")).json()["id"]
+    client.post("/api/v1/cases", json=valid_body(title="Second"))
+    set_fields(store, first, status="closed")
+
+    closed = client.get("/api/v1/cases?status=closed").json()
+    assert closed["total"] == 1
+    assert [item["id"] for item in closed["items"]] == [first]
+    opened = client.get("/api/v1/cases?status=open").json()
+    assert opened["total"] == 1
+    assert [item["title"] for item in opened["items"]] == ["Second"]
+    assert client.get("/api/v1/cases").json()["total"] == 2
+
+
+@pytest.mark.parametrize("value", ["archived", "OPEN", "all", ""])
+def test_list_refuses_an_unknown_status_with_422(client, store, value):
+    response = client.get("/api/v1/cases", params={"status": value})
+    assert response.status_code == 422
+    assert store["list_calls"] == []
+
+
+def test_status_combines_with_search_and_paging(client, store):
+    ids = [client.post("/api/v1/cases", json=valid_body(title=title)).json()["id"] for title in ("Alpha", "Beta", "Gamma", "Delta")]
+    set_fields(store, ids[0], status="closed")
+    set_fields(store, ids[2], status="closed")
+
+    only_beta = client.get("/api/v1/cases?status=open&q=SAFE-2026-000002").json()
+    assert only_beta["total"] == 1
+    assert [item["title"] for item in only_beta["items"]] == ["Beta"]
+    # Beta is open but Alpha is the one with reference 000001: the status and the search must both hold.
+    assert client.get("/api/v1/cases?status=closed&q=SAFE-2026-000002").json()["total"] == 0
+    page = client.get("/api/v1/cases?status=open&q=SAFE-2026-00000&limit=1&offset=1").json()
+    assert page["total"] == 2
+    assert len(page["items"]) == 1
+    assert page["offset"] == 1
+
+
+def test_list_items_carry_the_next_deadline_and_the_last_update(client, store):
+    case_id = client.post("/api/v1/cases", json=valid_body()).json()["id"]
+    set_fields(
+        store,
+        case_id,
+        next_deadline=datetime(2026, 11, 9, 9, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 11, 2, 8, 30, tzinfo=UTC),
+    )
+    item = client.get("/api/v1/cases").json()["items"][0]
+    assert item["next_deadline"] == "2026-11-09T09:00:00Z"
+    assert item["updated_at"] == "2026-11-02T08:30:00Z"
+
+
+def test_list_item_has_a_null_next_deadline_when_no_task_is_open(client, store):
+    case_id = client.post("/api/v1/cases", json=valid_body()).json()["id"]
+    set_fields(store, case_id, next_deadline=None, updated_at=None)
+    item = client.get("/api/v1/cases").json()["items"][0]
+    assert item["next_deadline"] is None
+    # With no recorded change, the last update is the creation time.
+    assert item["updated_at"] == "2026-11-01T00:00:00Z"
+
+
+def test_list_items_keep_their_fields_and_add_only_the_two_new_ones(client, store):
+    client.post("/api/v1/cases", json=valid_body())
+    item = client.get("/api/v1/cases").json()["items"][0]
+    assert set(item) == {
+        "id",
+        "reference",
+        "title",
+        "awareness_time",
+        "status",
+        "created_at",
+        "next_deadline",
+        "updated_at",
+        "risk_score",
+        "impact_c",
+        "impact_b",
+        "impact_a",
+    }
+
+
+def test_list_does_not_leak_a_case_the_caller_cannot_see_or_its_deadline(client, caller, store):
+    caller["user"] = make_user(OTHER_ID, "reporter")
+    other_case = client.post("/api/v1/cases", json=valid_body(title="Not yours")).json()["id"]
+    set_fields(store, other_case, next_deadline=datetime(2026, 12, 24, 9, 0, tzinfo=UTC))
+    caller["user"] = make_user(REPORTER_ID, "reporter")
+
+    response = client.get("/api/v1/cases?status=open")
+    assert response.json()["total"] == 0
+    assert response.json()["items"] == []
+    assert other_case not in response.text
+    assert "2026-12-24" not in response.text
+
+
+def test_list_passes_the_status_and_the_evidence_right_to_the_query(client, caller, store):
+    client.get("/api/v1/cases?status=open")
+    assert store["list_calls"][-1] == {"q": None, "status": "open", "include_evidence": False}
+
+    caller["user"] = make_user(OTHER_ID, "investigator")  # holds evidence:read
+    client.get("/api/v1/cases")
+    assert store["list_calls"][-1] == {"q": None, "status": None, "include_evidence": True}
 
 
 def test_case_records_the_system_timezone_in_effect_and_computes_deadlines_in_it(timezone_db):

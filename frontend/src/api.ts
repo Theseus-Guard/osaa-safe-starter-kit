@@ -350,6 +350,10 @@ export interface RiskFields {
   impact_a: number | null;
 }
 
+// The case statuses the backend stores and accepts in the case list status filter (safe_kit.cases.CaseStatus).
+export const CASE_STATUSES = ["open", "closed"] as const;
+export type CaseStatus = (typeof CASE_STATUSES)[number];
+
 export interface CaseSummary extends RiskFields {
   id: string;
   reference: string;
@@ -357,6 +361,10 @@ export interface CaseSummary extends RiskFields {
   awareness_time: string;
   status: string;
   created_at: string;
+  // The earliest due date of the case's open deadline tasks, or null when none is open.
+  next_deadline: string | null;
+  // The time of the case's latest change.
+  updated_at: string;
 }
 
 export interface CaseDetail extends RiskFields {
@@ -393,10 +401,12 @@ export interface ReportCreateBody extends CaseCreateBody {
 }
 
 // q matches the case reference (partial, case-insensitive) or the case UUID prefix. Omitted or blank q lists every visible case.
-export function listCases(limit: number, offset: number, q?: string): Promise<CasePage> {
+// status narrows the list to one case status. Omitted means every status.
+export function listCases(limit: number, offset: number, q?: string, status?: CaseStatus): Promise<CasePage> {
   const term = q?.trim() ?? "";
   const search = term === "" ? "" : `&q=${encodeURIComponent(term)}`;
-  return request<CasePage>(`/cases?limit=${limit}&offset=${offset}${search}`);
+  const filter = status === undefined ? "" : `&status=${encodeURIComponent(status)}`;
+  return request<CasePage>(`/cases?limit=${limit}&offset=${offset}${search}${filter}`);
 }
 
 export function getCase(caseId: string): Promise<CaseDetail> {

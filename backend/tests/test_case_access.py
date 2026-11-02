@@ -233,12 +233,12 @@ def test_unknown_or_invisible_case_is_404_on_every_read(client, caller, monkeypa
 def test_list_is_built_from_the_callers_scope(client, caller, monkeypatch):
     seen = {}
 
-    def fake_list(scope, limit, offset, q=None):
+    def fake_list(scope, limit, offset, q=None, **kwargs):
         seen["scope"] = scope
         return []
 
     monkeypatch.setattr(api, "list_visible_cases", fake_list)
-    monkeypatch.setattr(api, "count_visible_cases", lambda scope, q=None: 0)
+    monkeypatch.setattr(api, "count_visible_cases", lambda scope, q=None, **kwargs: 0)
     as_role(caller, TRIAGER_ID, "triager")
     assert client.get("/api/v1/cases").status_code == 200
     assert seen["scope"] == CaseScope(user_id=TRIAGER_ID, read_all=True, read_assigned=True)

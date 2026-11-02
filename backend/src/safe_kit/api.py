@@ -37,6 +37,7 @@ from safe_kit.cases import (
     Assignment,
     Case,
     CaseScope,
+    CaseStatus,
     Outcome,
     assign_member,
     case_history,
@@ -648,6 +649,10 @@ class CaseSummary(BaseModel):
     awareness_time: datetime
     status: str
     created_at: datetime
+    # The earliest due date of the case's open deadline tasks. Null when no task is open.
+    next_deadline: datetime | None
+    # The time of the case's latest change, from the audit log. Equals created_at when nothing has changed since.
+    updated_at: datetime
     # Risk (safe_kit.impact), as in CaseResponse.
     risk_score: float | None
     impact_c: int | None
@@ -809,6 +814,9 @@ def _case_summary(case: Case, scores: ImpactScores | None) -> CaseSummary:
         awareness_time=case.awareness_time,
         status=case.status,
         created_at=case.created_at,
+        next_deadline=case.next_deadline,
+        # list_visible_cases always sets updated_at; created_at is the fallback for a case built without it.
+        updated_at=case.updated_at or case.created_at,
         **risk_fields(scores),
     )
 
@@ -952,16 +960,22 @@ def list_cases(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     q: str | None = Query(default=None, max_length=100),
+    # Omitted means every status. Any other value is refused with 422 (the Literal type).
+    status: CaseStatus | None = Query(default=None),
     actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS)),
 ) -> CasePage:
-    # q matches the reference (partial) or the id prefix. It only narrows the cases the caller may already see.
+    # q matches the reference (partial) or the id prefix. status and q both narrow the cases the caller may already see.
+    permissions = permissions_of(actor)
     scope = _scope(actor)
     search = q.strip() if q is not None else None
-    page_cases = list_visible_cases(scope, limit, offset, q=search)
+    include_evidence = "evidence:read" in permissions
+    page_cases = list_visible_cases(
+        scope, limit, offset, q=search, status=status, include_evidence=include_evidence
+    )
     scores = current_scores_for_cases(case.id for case in page_cases)
     return CasePage(
         items=[_case_summary(case, scores.get(case.id)) for case in page_cases],
-        total=count_visible_cases(scope, q=search),
+        total=count_visible_cases(scope, q=search, status=status),
         limit=limit,
         offset=offset,
     )

@@ -7,6 +7,11 @@ export function humanize(value: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+// A deadline is overdue when its due time is before now. now is a parameter, so the rule is tested without a clock.
+export function isOverdue(dueAt: string, now: Date): boolean {
+  return new Date(dueAt).getTime() < now.getTime();
+}
+
 const HISTORY_ACTION_LABELS: Record<string, string> = {
   "case.create": "Case created",
   "case.closed": "Case closed",

@@ -331,8 +331,8 @@ def test_a_stale_version_is_a_409_with_the_current_version(actor, client, monkey
 
 
 def test_the_case_list_carries_the_risk_score_and_the_three_values(actor, client, monkeypatch):
-    monkeypatch.setattr(api, "list_visible_cases", lambda scope, limit, offset, q=None: [case()])
-    monkeypatch.setattr(api, "count_visible_cases", lambda scope, q=None: 1)
+    monkeypatch.setattr(api, "list_visible_cases", lambda scope, limit, offset, **kwargs: [case()])
+    monkeypatch.setattr(api, "count_visible_cases", lambda scope, **kwargs: 1)
     monkeypatch.setattr(api, "current_scores_for_cases", lambda case_ids: {CASE_ID: scores()})
     item = client.get("/api/v1/cases").json()["items"][0]
     assert item["risk_score"] == 3.7
@@ -343,8 +343,8 @@ def test_the_case_list_carries_the_risk_score_and_the_three_values(actor, client
 
 
 def test_a_case_without_values_has_null_risk_fields_in_the_list(actor, client, monkeypatch):
-    monkeypatch.setattr(api, "list_visible_cases", lambda scope, limit, offset, q=None: [case()])
-    monkeypatch.setattr(api, "count_visible_cases", lambda scope, q=None: 1)
+    monkeypatch.setattr(api, "list_visible_cases", lambda scope, limit, offset, **kwargs: [case()])
+    monkeypatch.setattr(api, "count_visible_cases", lambda scope, **kwargs: 1)
     monkeypatch.setattr(api, "current_scores_for_cases", lambda case_ids: {})
     item = client.get("/api/v1/cases").json()["items"][0]
     assert item["risk_score"] is None

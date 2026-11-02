@@ -8,11 +8,22 @@ import {
   formatRiskScore,
   riskLevelLabel,
   humanize,
+  isOverdue,
   missingFieldLabel,
   parseImpactValue,
   recordText,
   triggerLabel,
 } from "./case-format";
+
+describe("isOverdue", () => {
+  const now = new Date("2026-11-02T12:00:00Z");
+
+  it("is true only when the due time is before now", () => {
+    expect(isOverdue("2026-11-02T11:59:59Z", now)).toBe(true);
+    expect(isOverdue("2026-11-02T12:00:00Z", now)).toBe(false);
+    expect(isOverdue("2026-11-03T00:00:00Z", now)).toBe(false);
+  });
+});
 
 describe("case record labels", () => {
   it("labels each R01 trigger in plain words", () => {

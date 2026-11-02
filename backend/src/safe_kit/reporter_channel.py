@@ -26,7 +26,7 @@ from safe_kit.cases import Case, CaseScope, HistoryEntry
 from safe_kit.db import connect
 
 # Written for every successful read of a reporter contact. The row targets the case, so the case history shows it.
-REPORTER_CONTACT_READ = "reporter_contact.read"
+REPORTER_CONTACT_READ = audit.REPORTER_CONTACT_READ
 
 # How long after a closure the reporter contact can still be read. The clock is the database clock, as is the
 # changed_at of case_status_changes, which holds the closure time.
