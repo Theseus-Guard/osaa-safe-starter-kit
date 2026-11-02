@@ -731,12 +731,15 @@ def list_entries(
     return entries, next_cursor
 
 
-def public_export() -> dict[str, Any]:
+def public_export(actor_id: str) -> dict[str, Any]:
     """A public derivative of the catalog: every entry with its public history. Never a restricted reference or digest.
 
     It reads the public columns only (see _load_versions with with_restricted=False), and it omits the internal fields:
     the creator and checker identifiers, the evidence path, the recommendation, and the run identifier. It carries no
     export time, so two calls over an unchanged catalog give the same document (schemas/catalog-export.v0.json).
+
+    The export writes one audit row (audit.CATALOG_EXPORT) in the same transaction as the reads. Its details hold the
+    schema version and the entry count only, never entry text.
     """
     with connect() as conn:
         entry_ids = [
@@ -746,22 +749,34 @@ def public_export() -> dict[str, Any]:
             ).fetchall()
         ]
         versions = _load_versions(conn, "TRUE", (), with_restricted=False)
-    history: dict[str, list[Version]] = defaultdict(list)
-    for version in versions:
-        history[version.entry_id].append(version)
-    entries = []
-    for entry_id in entry_ids:
-        entry_versions = history.get(entry_id)
-        if not entry_versions:
-            continue
-        current = entry_versions[-1]
-        entries.append(
-            {
-                "id": entry_id,
-                "status": current.status,
-                "version": current.version,
-                "versions": [_public_version(version) for version in entry_versions],
-            }
+        history: dict[str, list[Version]] = defaultdict(list)
+        for version in versions:
+            history[version.entry_id].append(version)
+        entries = []
+        for entry_id in entry_ids:
+            entry_versions = history.get(entry_id)
+            if not entry_versions:
+                continue
+            current = entry_versions[-1]
+            entries.append(
+                {
+                    "id": entry_id,
+                    "status": current.status,
+                    "version": current.version,
+                    "versions": [
+                        _public_version(version) for version in entry_versions
+                    ],
+                }
+            )
+        audit.record(
+            conn,
+            audit.CATALOG_EXPORT,
+            "catalog",
+            actor_id=actor_id,
+            details={
+                "schema_version": CATALOG_EXPORT_SCHEMA_VERSION,
+                "entry_count": len(entries),
+            },
         )
     return {
         "catalog_export_schema_version": CATALOG_EXPORT_SCHEMA_VERSION,

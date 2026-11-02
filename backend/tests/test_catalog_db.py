@@ -15,8 +15,9 @@ import pytest
 from fastapi.testclient import TestClient
 from jsonschema import Draft202012Validator
 
-from safe_kit import api, auth, catalog_api, users
+from safe_kit import api, audit, auth, catalog_api, users
 from safe_kit.catalog import (
+    CATALOG_EXPORT_SCHEMA_VERSION,
     CatalogOutcome,
     add_recommendation,
     change_entry,
@@ -476,7 +477,7 @@ def test_the_public_export_has_no_hidden_link_or_digest_and_the_database_does_ho
         ).fetchone()[0]
     assert stored >= 1  # the hidden reference is held in the database
 
-    export = public_export()
+    export = public_export(reviewer)
     text = json.dumps(export)
     for secret in (
         HIDDEN_LINK,
@@ -670,3 +671,44 @@ def test_the_export_repeats_exactly_and_shows_the_stored_current_version():
 def test_the_export_endpoint_refuses_a_role_without_catalog_read():
     reporter = new_user("reporter")
     assert as_user(reporter).get("/api/v1/catalog/export").status_code == 403
+
+
+def catalog_export_rows(actor_id: str) -> list[tuple]:
+    with connect() as conn:
+        return conn.execute(
+            "SELECT target_type, target_id, details FROM audit_events "
+            "WHERE action = %s AND actor_id = %s AND NOT is_deleted ORDER BY created_at, id",
+            (audit.CATALOG_EXPORT, actor_id),
+        ).fetchall()
+
+
+@requires_database
+def test_each_export_writes_exactly_one_audit_row_with_the_version_and_the_count():
+    reviewer = new_user("reviewer")
+    auditor = new_user("auditor")
+    created = entry(reviewer)
+
+    first = as_user(auditor).get("/api/v1/catalog/export")
+    assert first.status_code == 200
+    [(target_type, target_id, details)] = catalog_export_rows(auditor)
+    assert (target_type, target_id) == ("catalog", None)
+    entries = first.json()["catalog_export"]["entries"]
+    assert details == {
+        "schema_version": CATALOG_EXPORT_SCHEMA_VERSION,
+        "entry_count": len(entries),
+    }
+    assert created.id in {item["id"] for item in entries}
+    # The audit row holds no entry text.
+    assert created.current.title not in json.dumps(details)
+
+    second = as_user(auditor).get("/api/v1/catalog/export")
+    assert second.status_code == 200
+    assert len(catalog_export_rows(auditor)) == 2
+
+
+@requires_database
+def test_a_refused_export_writes_no_audit_row():
+    reporter = new_user("reporter")
+    response = as_user(reporter).get("/api/v1/catalog/export")
+    assert response.status_code == 403
+    assert catalog_export_rows(reporter) == []

@@ -723,6 +723,8 @@ class _RecordingConnection:
             return _Rows([(entry_id,) for entry_id in self.entry_ids])
         if "FROM catalog_versions v" in normalised:
             return _Rows(self.version_rows)
+        if normalised.startswith("INSERT INTO audit_events"):
+            return _Rows([])
         raise AssertionError(f"unexpected statement in the export: {normalised[:120]}")
 
 
@@ -780,12 +782,20 @@ def test_the_public_export_never_reads_restricted_references_and_omits_internal_
     connection = _RecordingConnection([ENTRY_ID], rows)
     monkeypatch.setattr(catalog, "connect", lambda: _Connect(connection))
 
-    export = catalog.public_export()
+    export = catalog.public_export(USER_ID)
     text = json.dumps(export)
 
     assert not any(
         "catalog_restricted_references" in statement
         for statement in connection.statements
+    )
+    # The export writes its audit row on the same connection as the reads.
+    assert (
+        sum(
+            statement.startswith("INSERT INTO audit_events")
+            for statement in connection.statements
+        )
+        == 1
     )
     assert HIDDEN_LINK not in text
     assert digest_of(HIDDEN_LINK) not in text

@@ -1411,22 +1411,70 @@ def test_legal_duty_update_without_a_field_is_a_usage_error(api, capsys):
     assert "give at least one field" in err
 
 
-def test_legal_duty_update_without_a_revision_is_a_usage_error(api, capsys):
-    code, out, err = run(
-        capsys,
+def legal_duty_update_without_revision(*extra: str) -> tuple[str, ...]:
+    return (
         "case",
         "legal-duty",
         "update",
         CASE_ID,
         DUTY_ID,
-        "--status",
-        "done",
         "--username",
         "alice",
+        *extra,
     )
-    assert code == 2
-    assert api.calls == []
-    assert "--revision" in err
+
+
+def test_legal_duty_update_without_a_revision_reads_the_current_one_and_sends_it(
+    api, capsys
+):
+    api.route("GET", LEGAL_DUTIES_PATH, body=[DUTY_BODY])
+    api.route("PATCH", DUTY_PATH, body=DUTY_BODY)
+    code, out, err = run(
+        capsys, *legal_duty_update_without_revision("--status", "done")
+    )
+    assert code == 0, err
+    assert api.paths() == [
+        ("POST", "/api/v1/auth/token"),
+        ("GET", LEGAL_DUTIES_PATH),
+        ("PATCH", DUTY_PATH),
+        ("POST", "/api/v1/auth/logout"),
+    ]
+    # The revision the duty list shows (3) travels as If-Match.
+    sent = {name.lower(): value for name, value in api.calls[2]["headers"].items()}
+    assert sent["if-match"] == '"3"'
+
+
+def test_legal_duty_update_without_a_revision_of_a_duty_not_listed_sends_nothing(
+    api, capsys
+):
+    api.route("GET", LEGAL_DUTIES_PATH, body=[])
+    code, out, err = run(
+        capsys, *legal_duty_update_without_revision("--status", "done")
+    )
+    assert code == 1
+    assert out == ""
+    assert "legal duty not found" in err
+    assert not any(call["method"] == "PATCH" for call in api.calls)
+
+
+def test_legal_duty_update_without_a_revision_that_changes_meanwhile_says_so(
+    api, capsys
+):
+    api.route("GET", LEGAL_DUTIES_PATH, body=[DUTY_BODY])
+    api.route(
+        "PATCH",
+        DUTY_PATH,
+        status=412,
+        body={"detail": {"status": "precondition_failed", "current_revision": 5}},
+    )
+    code, out, err = run(
+        capsys, *legal_duty_update_without_revision("--status", "done")
+    )
+    assert code == 1
+    assert out == ""
+    assert "changed after this command read it, so nothing was saved" in err
+    assert "case legal-duty list" in err
+    assert "--revision" not in err
 
 
 def test_legal_duty_update_sends_only_the_fields_given(api, capsys):

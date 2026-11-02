@@ -778,7 +778,7 @@ def _print_tasks(case: dict) -> None:
     if not tasks:
         print(f"No deadline tasks for case {case['reference']}.")
         return
-    # The REVISION column is the value for --revision in 'case task update'.
+    # The REVISION column is the value for --revision in 'case task update' (optional there: it is read when left out).
     rows = [("ID", "KIND", "DUE (UTC)", "STATUS", "REVISION", "NOTE")]
     rows += [
         (
@@ -923,8 +923,40 @@ def _render_tasks_change(heading: str):
     return render
 
 
+def _listed_revision(rows: list, row_id: str, not_found: str) -> int:
+    """The revision of the row with row_id in a list response. A row that is not listed stops the command before any write."""
+    for row in rows:
+        if isinstance(row, dict) and row.get("id") == row_id:
+            revision = row.get("revision")
+            if isinstance(revision, int) and not isinstance(revision, bool):
+                return revision
+            raise RequestFailed("unexpected response from the server")
+    raise RequestFailed(not_found)
+
+
+def _task_revision(base: str, token: str, case_id: str, task_id: str) -> int:
+    """The current revision of one deadline task. The case response lists the tasks, as 'case task list' reads them."""
+    case = _json_object(
+        _call(
+            base,
+            "GET",
+            f"/api/v1/cases/{case_id}",
+            token=token,
+            messages=READ_MESSAGES,
+        )
+    )
+    return _listed_revision(
+        case["deadlines"],
+        task_id,
+        "deadline task not found, or its case is not available to your account",
+    )
+
+
 def _task_update(base_url: str, args: argparse.Namespace) -> None:
-    """Set one deadline task to open, done or not applicable. Only one task changes; due dates never change."""
+    """Set one deadline task to open, done or not applicable. Only one task changes; due dates never change.
+
+    Without --revision, the current revision is read in the same session and sent as If-Match.
+    """
     case_id = _case_id_arg(args.case_id)
     task_id = _uuid_arg(args.task_id, "TASK_ID")
     status = args.status.replace("-", "_")
@@ -933,10 +965,11 @@ def _task_update(base_url: str, args: argparse.Namespace) -> None:
         raise UsageError("--reason is required when --status is not-applicable")
     if status != "not_applicable" and args.reason is not None:
         raise UsageError("--reason is only allowed with --status not-applicable")
-    if args.revision < 1:
+    if args.revision is not None and args.revision < 1:
         raise UsageError(
-            "--revision must be 1 or more. Read it with: case task list CASE_ID"
+            "--revision must be 1 or more. Read it with: case task list CASE_ID, or leave it out"
         )
+    stated = args.revision is not None
     try:
         _write_case(
             base_url,
@@ -950,12 +983,20 @@ def _task_update(base_url: str, args: argparse.Namespace) -> None:
             messages=TASK_UPDATE_MESSAGES,
             render=_render_tasks_change("Deadline task updated."),
             if_match=args.revision,
+            read_if_match=None
+            if stated
+            else (lambda base, token: _task_revision(base, token, case_id, task_id)),
         )
     except RequestFailed as error:
         current = _precondition_revision(error)
         if current is None:
             raise
         # Nothing was saved. The command never retries: the user reads the tasks again and runs it again.
+        if not stated:
+            raise RequestFailed(
+                f"the deadline task changed after this command read it, so nothing was saved. Run "
+                f"'case task list {case_id}' to check it, then run this command again"
+            ) from None
         raise RequestFailed(
             f"the deadline task changed, so nothing was saved. Its current revision is {current}. Run "
             f"'case task list {case_id}' to check it, then run this command again with --revision {current}"
@@ -988,10 +1029,13 @@ def _write_case(
     messages: dict[int, str] | None = None,
     render=None,
     if_match: int | None = None,
+    read_if_match=None,
 ) -> None:
     """One write request in its own login session. --json prints the API body; otherwise render prints a summary.
 
-    if_match is the revision the caller read. It is sent as the quoted If-Match value (D-16).
+    if_match is the revision the caller read. It is sent as the quoted If-Match value (D-16). When it is None and
+    read_if_match is given, read_if_match(base, token) runs inside the same session, just before the write, and its
+    result is sent instead.
     """
     # A POST, PUT or PATCH carries an Idempotency-Key. The key is made once per run, so a retry in the same run reuses it.
     headers = (
@@ -1006,6 +1050,10 @@ def _write_case(
         headers = {**(headers or {}), "If-Match": f'"{if_match}"'}
 
     def action(base: str, token: str) -> None:
+        call_headers = headers
+        if read_if_match is not None:
+            current = read_if_match(base, token)
+            call_headers = {**(headers or {}), "If-Match": f'"{current}"'}
         raw = _call(
             base,
             method,
@@ -1013,7 +1061,7 @@ def _write_case(
             token=token,
             payload=payload,
             messages=messages,
-            extra_headers=headers,
+            extra_headers=call_headers,
         )
         if getattr(args, "json", False):
             _print_json(raw)
@@ -1982,10 +2030,11 @@ def _legal_duty_update(base_url: str, args: argparse.Namespace) -> None:
         raise UsageError(
             "give at least one field to change: --description, --source-reference, --jurisdiction, --due-at or --status"
         )
-    if args.revision < 1:
+    if args.revision is not None and args.revision < 1:
         raise UsageError(
-            "--revision must be 1 or more. Read it with: case legal-duty list CASE_ID"
+            "--revision must be 1 or more. Read it with: case legal-duty list CASE_ID, or leave it out"
         )
+    stated = args.revision is not None
     try:
         _write_case(
             base_url,
@@ -1996,16 +2045,42 @@ def _legal_duty_update(base_url: str, args: argparse.Namespace) -> None:
             messages=LEGAL_DUTY_UPDATE_MESSAGES,
             render=_render_duty("Legal duty updated."),
             if_match=args.revision,
+            read_if_match=None
+            if stated
+            else (lambda base, token: _duty_revision(base, token, case_id, duty_id)),
         )
     except RequestFailed as error:
         current = _precondition_revision(error)
         if current is None:
             raise
         # Nothing was saved. The command never retries: the user reads the duties again and runs it again.
+        if not stated:
+            raise RequestFailed(
+                f"the legal duty changed after this command read it, so nothing was saved. Run "
+                f"'case legal-duty list {case_id}' to check it, then run this command again"
+            ) from None
         raise RequestFailed(
             f"the legal duty changed, so nothing was saved. Its current revision is {current}. Run "
             f"'case legal-duty list {case_id}' to check it, then run this command again with --revision {current}"
         ) from None
+
+
+def _duty_revision(base: str, token: str, case_id: str, duty_id: str) -> int:
+    """The current revision of one legal duty, read from the same list 'case legal-duty list' shows."""
+    duties = _json_list(
+        _call(
+            base,
+            "GET",
+            f"/api/v1/cases/{case_id}/legal-duties",
+            token=token,
+            messages=READ_MESSAGES,
+        )
+    )
+    return _listed_revision(
+        duties,
+        duty_id,
+        "legal duty not found, or its case is not available to your account",
+    )
 
 
 def _awareness_add(base_url: str, args: argparse.Namespace) -> None:
@@ -2140,7 +2215,7 @@ def _legal_duty_list(base_url: str, args: argparse.Namespace) -> None:
         if not duties:
             print("No legal duties recorded for this case.")
             return
-        # The REVISION column is the value for --revision in 'case legal-duty update'.
+        # The REVISION column is the value for --revision in 'case legal-duty update' (optional there: it is read when left out).
         rows = [
             (
                 "ID",
@@ -3020,8 +3095,7 @@ def build_parser() -> argparse.ArgumentParser:
     task_update.add_argument(
         "--revision",
         type=int,
-        required=True,
-        help="Revision of the task you read with 'task list'",
+        help="Revision of the task you read with 'task list'. Optional: without it, the current revision is read first",
     )
     _add_idempotency_option(task_update)
     _add_auth_options(task_update)
@@ -3797,8 +3871,7 @@ def _add_case_update_commands(case_commands) -> None:
     legal_update.add_argument(
         "--revision",
         type=int,
-        required=True,
-        help="Revision of the legal duty you read with 'legal-duty list'",
+        help="Revision of the legal duty you read with 'legal-duty list'. Optional: without it, the current revision is read first",
     )
     _add_auth_options(legal_update)
     legal_update.set_defaults(handler=_legal_duty_update)

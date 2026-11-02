@@ -90,6 +90,9 @@ CATALOG_ENTRY_CORRECTION = "catalog.entry_corrected"
 CATALOG_ENTRY_DISPUTE = "catalog.entry_disputed"
 CATALOG_ENTRY_WITHDRAWAL = "catalog.entry_withdrawn"
 CATALOG_ENTRY_SUPERSESSION = "catalog.entry_superseded"
+# Written on every catalog export (safe_kit.catalog.public_export), against the catalog as a whole (target_type "catalog",
+# no target ID). Details hold the export schema version and the entry count only, never entry text.
+CATALOG_EXPORT = "catalog.exported"
 # Disclosure packages (safe_kit.disclosure). Written against the version (target_type "disclosure_version"). Recipient and
 # purpose are free text and are never written here; the details hold identifiers, the digest, and counts only.
 DISCLOSURE_VERSION_CREATE = "disclosure.version_created"
