@@ -13,7 +13,9 @@ Access rules:
   answers 404, the same as a missing one.
 - Writes need disclosures:approve or disclosures:prepare. A caller with disclosures:approve records a notice on the
   normal path. A caller with only disclosures:prepare may record one only on the manual path: manual_fallback is true
-  and a fallback_reason is given. Otherwise the answer is 403 with manual_fallback_required.
+  and a fallback_reason is given. Otherwise the answer is 403 with manual_fallback_required. Whatever the path, the
+  person who prepared the version gets 403 with preparer_cannot_record: the sender of a notice is independent of the
+  preparer.
 - Every POST needs an Idempotency-Key (plans/f0/api-draft.md section 3.4). A repeated request with the same key and body
   returns the first answer and writes nothing.
 
@@ -176,6 +178,7 @@ _REFUSALS: dict[Outcome, tuple[int, dict[str, Any] | str]] = {
     Outcome.RELEASE_TRACE_MISSING: (409, {"status": "release_trace_missing"}),
     Outcome.TIME_OUT_OF_RANGE: (422, {"status": "time_out_of_range"}),
     Outcome.REPEAT_REASON_REQUIRED: (422, {"status": "repeat_reason_required"}),
+    Outcome.PREPARER_IS_RECORDER: (403, {"status": "preparer_cannot_record"}),
 }
 
 

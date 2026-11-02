@@ -24,6 +24,8 @@ Rules:
   record is refused, so a repeated request never creates a duplicate by itself.
 - Manual fallback: a person who may prepare packages but does not hold disclosures:approve records with manual_fallback
   and a fallback_reason. The reason is required. Deadlines are not changed by a notice.
+- Independence: the person who prepared a version may not record a notice of it, on the normal or the manual path. The
+  refusal is written before any release attempt, so nothing is stored for it.
 - Internal reminders are not external notices. Nothing in the deadline or weekly update code writes to this table, and a
   notice has no link to a deadline task.
 - Each change is a new revision of the same notice (migration 0042). The rows are insert-only and are never deleted.
@@ -67,6 +69,8 @@ class Outcome(Enum):
     NOT_FOUND = "not_found"
     VERSION_NOT_FOUND = "version_not_found"
     NOTICE_NOT_FOUND = "notice_not_found"
+    # The caller prepared the version, so the caller may not record its notice (independence of the sender).
+    PREPARER_IS_RECORDER = "preparer_cannot_record"
     CLOSED = "closed"
     # The release check of the version failed (see disclosure.ReleaseOutcome).
     NOT_APPROVED = "version_not_approved"
@@ -355,6 +359,8 @@ def record_notice(
             version = disclosure.load_version_on(conn, case_id, version_id)
             if version is None:
                 return Result(Outcome.VERSION_NOT_FOUND)
+            if version.created_by == scope.user_id:
+                return Result(Outcome.PREPARER_IS_RECORDER)
             # The release path: the attempt is written first, and every refusal after this point closes it as refused.
             attempt = disclosure.open_release_attempt(
                 conn, version, disclosure.RELEASE_PURPOSE_NOTICE, scope.user_id

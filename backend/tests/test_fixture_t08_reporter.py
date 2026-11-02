@@ -206,3 +206,21 @@ def test_the_admin_cannot_grant_the_contact_permission_to_another_role(channel_p
         assert response.status_code == 409
     finally:
         set_role_permissions("triager", before)
+
+
+@requires_database
+def test_the_handler_assigned_to_the_case_cannot_read_the_reporter_contact(channel_people):
+    """T08-A: the primary handler sees the case, but not the reporter's contact or identity, and the refused read is not
+    audited as a read. The handler is the one who is party to the event: nothing in the case response names the reporter."""
+    contact = "fixture-contact-" + uuid.uuid4().hex[:8]
+    case_id = open_report(channel_people["reporter"], contact)
+    handler = ActingClient(channel_people["investigator_id"])
+    assign_investigator(channel_people["triager"], case_id, channel_people["investigator_id"])
+    assert handler.get(f"/api/v1/cases/{case_id}").status_code == 200
+
+    audited_before = contact_audit_rows(case_id)
+    refused = handler.get(f"/api/v1/reports/{case_id}/contact")
+    assert refused.status_code == 403
+    assert contact not in refused.text
+    assert contact_audit_rows(case_id) == audited_before
+    assert not REPORTER_IDENTITY_FIELDS & set(handler.get(f"/api/v1/cases/{case_id}").json())
