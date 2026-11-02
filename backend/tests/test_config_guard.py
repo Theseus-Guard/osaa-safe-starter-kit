@@ -148,17 +148,13 @@ def test_compose_sets_the_token_settings_for_api_and_worker(service):
     assert 'SAFE_SESSION_MAX_HOURS: "12"' in text
 
 
-def test_compose_publishes_the_api_on_loopback_only():
+def test_compose_does_not_publish_the_api():
+    # The gateway is the only entry point. The API is attached to backend, which is internal, so a published port
+    # would not be reachable anyway; test_demo_egress.py checks the published ports of the whole file.
     compose = (Path(__file__).resolve().parents[2] / "compose.yaml").read_text(encoding="utf-8")
     api_block = compose.split("\n  api:\n", 1)[1].split("\n  worker:\n", 1)[0]
-    published = []
-    for line in api_block.split("    ports:\n", 1)[1].splitlines():
-        if not line.startswith("      - "):
-            break
-        published.append(line[len("      - "):].strip().strip('"'))
 
-    assert published
-    assert all(entry.startswith("127.0.0.1:") for entry in published), published
+    assert "    ports:" not in api_block
 
 
 def test_compose_demo_api_binds_the_published_address_to_loopback():
@@ -169,7 +165,8 @@ def test_compose_demo_api_binds_the_published_address_to_loopback():
     assert "SAFE_MODE: demo" in api_block
 
 
-def test_compose_api_trusts_only_the_gateway_address_on_a_fixed_edge_subnet():
+def test_compose_api_trusts_only_the_gateway_address_on_a_fixed_backend_subnet():
+    # The API sees the gateway as its peer on backend (the gateway's edge address is only used by the host side).
     compose = (Path(__file__).resolve().parents[2] / "compose.yaml").read_text(encoding="utf-8")
     api_block = compose.split("\n  api:\n", 1)[1].split("\n  worker:\n", 1)[0]
     gateway_block = compose.split("\n  gateway:\n", 1)[1].split("\n  cli:\n", 1)[0]
@@ -177,8 +174,10 @@ def test_compose_api_trusts_only_the_gateway_address_on_a_fixed_edge_subnet():
     match = re.search(r'SAFE_TRUSTED_PROXIES: "([^"]*)"', api_block)
     assert match, "the api service must set SAFE_TRUSTED_PROXIES"
     trusted = match.group(1)
-    assert trusted == "172.28.0.10"
+    assert trusted == "172.29.0.10"
+    assert "ipv4_address: 172.29.0.10" in gateway_block
     assert "ipv4_address: 172.28.0.10" in gateway_block
+    assert "subnet: 172.29.0.0/24" in compose
     assert "subnet: 172.28.0.0/24" in compose
 
 
