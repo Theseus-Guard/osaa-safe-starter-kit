@@ -1,0 +1,25 @@
+# Demo overlay, used only by scripts/demo.sh:
+#   docker compose -p safe-demo -f compose.yaml -f compose.demo.yaml ...
+# It gives the demo its own image names, so that building the demo never moves the dev tags, and it mounts the host
+# credential directory into the API container for the one-time seed (python -m safe_kit.demo_seed seed). The production
+# stack does not use this file.
+
+services:
+  migrate:
+    image: safe-demo-app:local
+  api:
+    image: safe-demo-app:local
+    environment:
+      SAFE_DEMO_CREDENTIAL_DIR: /run/safe-demo
+    volumes:
+      # The host path is set by scripts/demo.sh. The directory is owned by the operator; the script hands it to the
+      # container user for the seed and takes it back afterwards.
+      - type: bind
+        source: ${SAFE_DEMO_CREDENTIAL_DIR:?scripts/demo.sh sets SAFE_DEMO_CREDENTIAL_DIR}
+        target: /run/safe-demo
+  worker:
+    image: safe-demo-app:local
+  cli:
+    image: safe-demo-app:local
+  gateway:
+    image: safe-demo-gateway:local

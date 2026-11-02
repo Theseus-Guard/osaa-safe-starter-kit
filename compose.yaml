@@ -3,7 +3,8 @@ name: safe-starter-kit
 # Startup order: db -> db-roles (role setup, idempotent) -> migrate (migration owner) -> api, worker; gateway after api.
 # Each runtime service uses its own database role and its own secret file. The bootstrap superuser (POSTGRES_USER)
 # is used only by db and db-roles.
-# Network split: "backend" is internal (no external egress, DB port not published); "edge" is only for the gateway.
+# Network split: "backend" is internal (no route to the host or to other networks, nothing published) and holds every
+# service except the gateway. "edge" is attached to the gateway only; it is the one network with a route out and in.
 
 x-app: &app
   build:
@@ -94,8 +95,8 @@ services:
     command: ["uvicorn", "safe_kit.api:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       <<: *db-target
-      # Demo mode: SAFE_BIND_HOST is the published host address (loopback only). The process itself listens on
-      # 0.0.0.0 inside the container so that the gateway can reach it.
+      # Demo mode: SAFE_BIND_HOST must be a loopback address for the startup guard. Nothing publishes this port; the
+      # process listens on 0.0.0.0 inside the container so that the gateway (on backend) can reach it.
       SAFE_MODE: demo
       SAFE_BIND_HOST: 127.0.0.1
       SAFE_DATASET: synthetic-demo
@@ -111,25 +112,22 @@ services:
       SAFE_ACCESS_TTL_MINUTES: "60"
       SAFE_REFRESH_TTL_MINUTES: "60"
       SAFE_SESSION_MAX_HOURS: "12"
-      # The gateway's fixed address on the edge network (see networks below). The API reads X-Forwarded-For only from
+      # The gateway's fixed address on the backend network (see networks below). The API reads X-Forwarded-For only from
       # this address. Client address chain for a browser on the host (safe_kit/client_address.py):
-      #   1. The browser connects to 127.0.0.1:8443. Docker publishes the gateway on loopback only, and relays the
-      #      connection to the gateway over edge, so nginx does not see 127.0.0.1 as the peer. It sees the host's own
-      #      address on edge, 172.28.0.1 (the bridge gateway of the fixed subnet).
-      #   2. nginx overwrites X-Forwarded-For with $remote_addr, that is 172.28.0.1, and connects from 172.28.0.10.
-      #   3. The API takes the socket peer 172.28.0.10 as trusted, walks X-Forwarded-For from the right, and resolves
-      #      the client to 172.28.0.1. That is not loopback, so demo sign-in through the gateway is refused by this
-      #      stack as configured. Only the host can produce that address, and the API port is published on loopback.
-      SAFE_TRUSTED_PROXIES: "172.28.0.10"
+      #   1. The browser connects to 127.0.0.1:8443. Docker publishes the gateway on loopback only and relays the
+      #      connection over edge, so nginx sees the host's own address on edge, 172.28.0.1.
+      #   2. nginx overwrites X-Forwarded-For with $remote_addr, that is 172.28.0.1, and connects to the API from
+      #      172.29.0.10 (the gateway's address on backend).
+      #   3. The API takes the socket peer 172.29.0.10 as trusted, walks X-Forwarded-For from the right, and resolves
+      #      the client to 172.28.0.1. Demo sign-in accepts that address through SAFE_DEMO_HOST_ADDRESS (demo mode only).
+      SAFE_TRUSTED_PROXIES: "172.29.0.10"
     secrets:
       - db_app_password
       - jwt_signing_key
       - evidence_kek
     volumes:
       - evidence-data:/var/lib/safe/evidence
-    # Published on loopback only, for the demo. The gateway reaches the API over the edge network.
-    ports:
-      - "127.0.0.1:8000:8000"
+    # Not published. The gateway is the only entry point; the CLI and the worker reach the API over backend.
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -140,7 +138,6 @@ services:
       retries: 6
       start_period: 10s
     networks:
-      - edge
       - backend
 
   worker:
@@ -175,7 +172,8 @@ services:
       api:
         condition: service_healthy
     ports:
-      - "${SAFE_GATEWAY_BIND:-127.0.0.1}:8443:8443"
+      # Loopback only. The demo has no other published port.
+      - "127.0.0.1:8443:8443"
     # Only the certificate and key are mounted, not the whole secrets/tls directory (which holds the CA key).
     secrets:
       - source: gateway_tls_cert
@@ -192,8 +190,11 @@ services:
       - no-new-privileges:true
     networks:
       edge:
-        # Fixed, so that the API can name the gateway in SAFE_TRUSTED_PROXIES. Nothing else on edge gets this address.
+        # Fixed address on the edge bridge. Nothing else on edge gets it.
         ipv4_address: 172.28.0.10
+      backend:
+        # Fixed, so that the API can name the gateway in SAFE_TRUSTED_PROXIES. Nothing else on backend gets it.
+        ipv4_address: 172.29.0.10
     restart: unless-stopped
 
   cli:
@@ -240,13 +241,18 @@ secrets:
     file: ./secrets/tls/server.key
 
 networks:
-  # Fixed subnet so that the gateway has a known address (172.28.0.10). The host's address on this network is 172.28.0.1.
+  # Only the gateway is attached. Fixed subnet: the host's address here is 172.28.0.1, the gateway is 172.28.0.10.
   edge:
     ipam:
       config:
         - subnet: 172.28.0.0/24
+  # Internal: no route to the host or to other networks. Every service except the gateway is attached only here.
+  # Fixed subnet so that the gateway has a known address on it (172.29.0.10).
   backend:
     internal: true
+    ipam:
+      config:
+        - subnet: 172.29.0.0/24
 
 volumes:
   db-data: {}
