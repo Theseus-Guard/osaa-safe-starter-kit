@@ -54,8 +54,13 @@ CASE_IMPORT = "case.import"
 # Written by safe_kit.evidence against the evidence item (target_type "evidence").
 EVIDENCE_UPLOADED = "evidence.uploaded"
 EVIDENCE_DOWNLOADED = "evidence.downloaded"
+# Redaction creates a derived item (target: the derived evidence ID). Details hold IDs and counts, never removed text.
+EVIDENCE_REDACTED = "evidence.redacted"
+EVIDENCE_RELEASE_APPROVED = "evidence.release_approved"
 # Case history omits these actions for callers without evidence:read.
-EVIDENCE_AUDIT_ACTIONS = frozenset({EVIDENCE_UPLOADED, EVIDENCE_DOWNLOADED})
+EVIDENCE_AUDIT_ACTIONS = frozenset(
+    {EVIDENCE_UPLOADED, EVIDENCE_DOWNLOADED, EVIDENCE_REDACTED, EVIDENCE_RELEASE_APPROVED}
+)
 SYSTEM_TIMEZONE_SET = "system.timezone_set"
 SYSTEM_TIMEZONE_CHANGED = "system.timezone_changed"
 

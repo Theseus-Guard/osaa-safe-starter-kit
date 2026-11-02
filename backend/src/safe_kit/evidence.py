@@ -29,7 +29,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from safe_kit import audit
+from safe_kit import audit, tlp
 from safe_kit.cases import CaseScope, is_visible_on
 from safe_kit.db import connect
 from safe_kit.evidence_crypto import IntegrityError, open_sealed, seal, sha256_hex
@@ -51,6 +51,8 @@ UPLOADED = "uploaded"
 DOWNLOADED = "downloaded"
 VERIFIED = "verified"
 FAILED_EVENT = "failed"
+# Written on the original of a redaction; the derived item gets its own uploaded event.
+REDACTED = "redacted"
 
 EVIDENCE_UPLOADED = audit.EVIDENCE_UPLOADED
 EVIDENCE_DOWNLOADED = audit.EVIDENCE_DOWNLOADED
@@ -189,6 +191,8 @@ class EvidenceItem:
     sha256_plaintext: str | None
     status: str
     created_at: datetime
+    # Null for an uploaded original. A derived item from a redaction has one of the TLP labels (safe_kit.tlp).
+    tlp_label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -204,6 +208,7 @@ class StoredEvidence:
     wrapped_data_key: bytes
     nonce: bytes
     status: str
+    tlp_label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -218,7 +223,7 @@ class CustodyEvent:
 
 _ITEM_COLUMNS = (
     "id::text, case_id::text, uploaded_by::text, original_filename, media_type, size_bytes, "
-    "sha256_plaintext, status, created_at"
+    "sha256_plaintext, status, created_at, tlp_label"
 )
 
 
@@ -233,6 +238,7 @@ def _to_item(row: tuple) -> EvidenceItem:
         sha256_plaintext=row[6],
         status=row[7],
         created_at=row[8],
+        tlp_label=row[9],
     )
 
 
@@ -371,7 +377,7 @@ def find_stored(evidence_id: str, scope: CaseScope) -> StoredEvidence | None:
             f"""
             SELECT e.id::text, e.case_id::text, e.original_filename, e.media_type,
                    e.sha256_plaintext, e.sha256_ciphertext, e.storage_key, e.key_id, e.wrapped_data_key,
-                   e.nonce, e.status
+                   e.nonce, e.status, e.tlp_label
             FROM evidence_items e
             JOIN cases ON cases.id = e.case_id AND NOT cases.is_deleted
             WHERE e.id = %s AND NOT e.is_deleted AND {visibility}
@@ -392,6 +398,7 @@ def find_stored(evidence_id: str, scope: CaseScope) -> StoredEvidence | None:
         wrapped_data_key=bytes(row[8]),
         nonce=bytes(row[9]),
         status=row[10],
+        tlp_label=row[11],
     )
 
 
@@ -444,20 +451,28 @@ def record_failure(evidence_id: str, actor_id: str | None, reason: str) -> None:
         _custody(conn, evidence_id, actor_id, FAILED_EVENT, {"reason": reason})
 
 
-def list_evidence(case_id: str, limit: int, offset: int) -> tuple[list[EvidenceItem], int]:
+def list_evidence(
+    case_id: str, limit: int, offset: int, recipient: tlp.Recipient | None = None
+) -> tuple[list[EvidenceItem], int]:
+    """A page of the items of a case, and their total. With a recipient, items the TLP rule hides from it are left out
+    of both the page and the total, so the total never counts an item the caller cannot see."""
+    if recipient is None:
+        audience, audience_params = "TRUE", ()
+    else:
+        audience, audience_params = tlp.visibility_sql(recipient)
     with connect() as conn:
         rows = conn.execute(
             f"""
-            SELECT {_ITEM_COLUMNS} FROM evidence_items
-            WHERE case_id = %s AND NOT is_deleted
-            ORDER BY created_at, id
+            SELECT {_ITEM_COLUMNS} FROM evidence_items e
+            WHERE e.case_id = %s AND NOT e.is_deleted AND {audience}
+            ORDER BY e.created_at, e.id
             LIMIT %s OFFSET %s
             """,
-            (case_id, limit, offset),
+            (case_id, *audience_params, limit, offset),
         ).fetchall()
         total = conn.execute(
-            "SELECT count(*) FROM evidence_items WHERE case_id = %s AND NOT is_deleted",
-            (case_id,),
+            f"SELECT count(*) FROM evidence_items e WHERE e.case_id = %s AND NOT e.is_deleted AND {audience}",
+            (case_id, *audience_params),
         ).fetchone()[0]
     return [_to_item(row) for row in rows], total
 
