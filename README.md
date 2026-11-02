@@ -88,6 +88,21 @@ The backend `--db` mode starts a throwaway PostgreSQL container and removes it a
 - The application roles cannot change the schema. The bootstrap superuser password is random and not stored.
 - Not yet implemented: a production certificate, OIDC/SSO, encryption at rest for the database volume, the disclosure workflow, a Vault Transit key provider, and backup/restore procedures.
 
+## Export formats
+
+Two export documents are versioned JSON. Both use project-defined schemas in `schemas/`. They are not official SAFE schemas, and this project makes no claim that a SAFE schema or SAFE API defines them.
+
+- Public catalog export: `GET /api/v1/catalog/export` and `safe-kit catalog export`. Schema `schemas/catalog-export.v0.json`, `catalog_export_schema_version` 0.1.0. It needs `catalog:read`. It holds no restricted reference, no digest of one, and no internal identifier.
+- Approved disclosure package version: `GET /api/v1/cases/{case_id}/disclosures/{version_id}/export` and `safe-kit case disclosure export`. Schema `schemas/disclosure-export.v0.json`, `disclosure_export_schema_version` 0.1.0. Only an approved version can be exported, and each export is written to the audit log.
+
+Reading policy for these documents:
+
+- An unknown field is refused. A reader never drops a field silently.
+- A document with a schema version the reader does not know is refused before any other field is read. A breaking change gets a new schema version.
+- A document that repeats an ID (a catalog entry, or a visible disclosure item) is refused as a duplicate.
+
+The service does not import these documents yet. The case import file (`import_format_version` 1, `safe-kit case import`) is a different format, and it refuses these documents as files.
+
 ## Versioning and SAFE compatibility
 
 - Releases follow semantic versioning from v0.1.
