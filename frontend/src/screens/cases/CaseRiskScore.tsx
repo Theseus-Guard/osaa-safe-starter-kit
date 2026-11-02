@@ -51,9 +51,12 @@ export function CaseRiskScore({ caseId, risk, closed, canWrite, onSaved }: Props
   }
 
   return (
-    <section aria-labelledby="case-risk-heading" className="mt-6 flex flex-col gap-3 border-t pt-4 text-sm">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 id="case-risk-heading" className="font-medium">
+    <section
+      aria-labelledby="case-risk-heading"
+      className="flex w-full flex-col gap-3 rounded-lg border bg-muted/40 p-4 text-sm sm:w-80"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <h3 id="case-risk-heading" className="text-sm font-medium text-muted-foreground">
           Risk score
         </h3>
         {canEdit && (
@@ -62,13 +65,13 @@ export function CaseRiskScore({ caseId, risk, closed, canWrite, onSaved }: Props
           </Button>
         )}
       </div>
-      <p className="text-2xl font-semibold tabular-nums">{formatRiskScore(risk.risk_score)}</p>
-      <p className="text-muted-foreground">{description}</p>
-      <dl className="grid gap-4 sm:grid-cols-3">
+      <p className="text-3xl font-semibold tracking-tight tabular-nums">{formatRiskScore(risk.risk_score)}</p>
+      <dl className="grid gap-1.5">
         {IMPACT_VALUE_LABELS.map(({ key, label }) => (
           <ValueDetail key={key} label={label} value={risk[RISK_FIELD[key]]} />
         ))}
       </dl>
+      <p className="text-xs text-muted-foreground">{description}</p>
       {canEdit && (
         <Dialog open={editing} onOpenChange={setEditing}>
           <DialogContent className="max-h-[90vh] overflow-y-auto">
@@ -83,9 +86,9 @@ export function CaseRiskScore({ caseId, risk, closed, canWrite, onSaved }: Props
 
 function ValueDetail({ label, value }: { label: string; value: number | null }) {
   return (
-    <div className="grid gap-1">
+    <div className="flex items-baseline justify-between gap-3">
       <dt className="font-medium">{label}</dt>
-      <dd className="text-muted-foreground">{value === null ? "Not set" : value}</dd>
+      <dd className="text-right tabular-nums text-muted-foreground">{value === null ? "Not set" : value}</dd>
     </div>
   );
 }

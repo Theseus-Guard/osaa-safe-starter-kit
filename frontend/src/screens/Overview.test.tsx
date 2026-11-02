@@ -12,7 +12,7 @@ import {
   type OverviewSummary,
 } from "../api";
 import { Overview } from "./Overview";
-import { NO_DATA_MESSAGE } from "./overview/parts";
+import { axisInterval, formatChartDate, NO_DATA_MESSAGE } from "./overview/parts";
 
 vi.mock("../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api")>();
@@ -227,15 +227,56 @@ describe("Overview range selector", () => {
   });
 });
 
-describe("Overview states", () => {
-  it("renders each chart's table view next to it", async () => {
+// The Chart / Table toggle of one card.
+function viewToggle(title: string) {
+  return within(screen.getByRole("group", { name: `${title} view` }));
+}
+
+describe("Overview chart views", () => {
+  it("shows the chart first, and the table only after Table is chosen for that card", async () => {
+    const user = userEvent.setup();
     renderFor("auditor");
     await settle();
 
+    expect(screen.queryByRole("table", { name: "Cases created per day" })).toBeNull();
+    expect(viewToggle(CHART_TITLES.cases).getByRole("button", { name: "Chart" })).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(viewToggle(CHART_TITLES.cases).getByRole("button", { name: "Table" }));
+
     expect(screen.getByRole("table", { name: "Cases created per day" })).toBeInTheDocument();
-    expect(screen.getByRole("table", { name: "Audit actions per day" })).toBeInTheDocument();
-    expect(screen.getByRole("table", { name: "Outbox jobs by state" })).toBeInTheDocument();
+    expect(viewToggle(CHART_TITLES.cases).getByRole("button", { name: "Table" })).toHaveAttribute("aria-pressed", "true");
+    // Another card keeps its own view.
+    expect(screen.queryByRole("table", { name: "Audit actions per day" })).toBeNull();
   });
+
+  it("shows at most eight table rows until Show all is pressed", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMetricSeries).mockImplementation(async (metric) =>
+      series(metric, Array.from({ length: 30 }, (_, index) => index)),
+    );
+    renderFor("auditor");
+    await settle();
+
+    await user.click(viewToggle(CHART_TITLES.cases).getByRole("button", { name: "Table" }));
+    const table = screen.getByRole("table", { name: "Cases created per day" });
+    expect(within(table).getAllByRole("row")).toHaveLength(9);
+
+    await user.click(screen.getByRole("button", { name: "Show all" }));
+    expect(within(table).getAllByRole("row")).toHaveLength(31);
+    expect(screen.getByRole("button", { name: "Show fewer" })).toBeInTheDocument();
+  });
+
+  it("formats chart dates as day and short month, and keeps the date labels few", () => {
+    expect(formatChartDate("2026-10-15")).toBe("15 Oct");
+    expect(formatChartDate("2026-01-01")).toBe("1 Jan");
+    for (const days of [7, 30, 90]) {
+      // Labels are drawn at every (interval + 1)th point, so this is how many a chart shows.
+      expect(Math.ceil(days / (axisInterval(days) + 1))).toBeLessThanOrEqual(6);
+    }
+  });
+});
+
+describe("Overview states", () => {
 
   it("shows the no-data message for an empty period and never a healthy state", async () => {
     vi.mocked(getMetricSeries).mockImplementation(async (metric) => series(metric, [0, 0, 0]));

@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, XAxis, YAxis } from "recharts";
+import { Button } from "@/components/ui/button";
 import {
   ChartContainer,
   ChartLegend,
@@ -18,7 +20,13 @@ import {
   type OverviewRange,
   type SeriesPoint,
 } from "../../api";
-import { ChartPanel, formatAge, formatDay } from "./parts";
+import {
+  axisInterval,
+  ChartPanel,
+  formatAge,
+  formatChartDate,
+  TABLE_PREVIEW_ROWS,
+} from "./parts";
 import { useLoad } from "./useLoad";
 
 // One row per x value. Keys are chart series keys; they never contain dots, which Recharts reads as a path.
@@ -35,6 +43,11 @@ interface Series {
 // Charts use the fixed series order chart-1 to chart-5 (index.css). "Other" is always neutral.
 const OTHER_COLOR = "var(--muted-foreground)";
 
+// Height of a time-series chart. Margins keep the first and last labels inside the plot.
+const TIME_CHART_CLASS = "h-64 w-full";
+// The right margin keeps the last date label, which is centred on the last point, inside the card.
+const TIME_CHART_MARGIN = { top: 8, right: 24, left: 0, bottom: 0 };
+
 function isAllZero(rows: Row[], keys: string[]): boolean {
   return rows.every((row) => keys.every((key) => row[key] === 0));
 }
@@ -43,19 +56,44 @@ function configFor(series: Series[]): ChartConfig {
   return Object.fromEntries(series.map((item) => [item.key, { label: item.label, color: item.color }]));
 }
 
+// The legend is shown only when there is more than one series to tell apart.
+// Items wrap onto more lines rather than running past the card edge.
+function legendFor(series: Series[]) {
+  return series.length > 1 ? <ChartLegend content={<ChartLegendContent className="flex-wrap gap-x-4 gap-y-1" />} /> : null;
+}
+
 function seriesRows(points: SeriesPoint[], key: string): Row[] {
   return points.map((point) => ({ date: point.date, [key]: point.count }));
 }
 
+// The x axis of a date chart: a readable number of labels, formatted as "15 Oct".
+function DateAxis({ rows }: { rows: Row[] }) {
+  return (
+    <XAxis
+      dataKey="date"
+      tickFormatter={(value: string) => formatChartDate(value)}
+      interval={axisInterval(rows.length)}
+      tick={{ fontSize: 12 }}
+      tickMargin={8}
+      tickLine={false}
+      axisLine={false}
+    />
+  );
+}
+
+function dateTooltip() {
+  return <ChartTooltipContent labelFormatter={(value) => formatChartDate(String(value))} />;
+}
+
 function DailyLineChart({ rows, series }: { rows: Row[]; series: Series[] }) {
   return (
-    <ChartContainer config={configFor(series)} className="h-64 w-full">
-      <LineChart data={rows} accessibilityLayer>
+    <ChartContainer config={configFor(series)} className={TIME_CHART_CLASS}>
+      <LineChart data={rows} margin={TIME_CHART_MARGIN} accessibilityLayer>
         <CartesianGrid vertical={false} />
-        <XAxis dataKey="date" tickFormatter={formatDay} tickLine={false} axisLine={false} minTickGap={16} />
-        <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={40} />
-        <ChartTooltip content={<ChartTooltipContent />} />
-        <ChartLegend content={<ChartLegendContent />} />
+        <DateAxis rows={rows} />
+        <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={32} tick={{ fontSize: 12 }} />
+        <ChartTooltip content={dateTooltip()} />
+        {legendFor(series)}
         {series.map((item) => (
           <Line
             key={item.key}
@@ -73,13 +111,13 @@ function DailyLineChart({ rows, series }: { rows: Row[]; series: Series[] }) {
 
 function DailyStackedBars({ rows, series }: { rows: Row[]; series: Series[] }) {
   return (
-    <ChartContainer config={configFor(series)} className="h-64 w-full">
-      <BarChart data={rows} accessibilityLayer>
+    <ChartContainer config={configFor(series)} className={TIME_CHART_CLASS}>
+      <BarChart data={rows} margin={TIME_CHART_MARGIN} accessibilityLayer>
         <CartesianGrid vertical={false} />
-        <XAxis dataKey="date" tickFormatter={formatDay} tickLine={false} axisLine={false} minTickGap={16} />
-        <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={40} />
-        <ChartTooltip content={<ChartTooltipContent />} />
-        <ChartLegend content={<ChartLegendContent />} />
+        <DateAxis rows={rows} />
+        <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={32} tick={{ fontSize: 12 }} />
+        <ChartTooltip content={dateTooltip()} />
+        {legendFor(series)}
         {series.map((item) => (
           <Bar key={item.key} dataKey={item.key} stackId="day" fill={`var(--color-${item.key})`} />
         ))}
@@ -95,37 +133,57 @@ interface DataTableProps {
 }
 
 // The table view of a chart: the same numbers, one row per x value. The first column is the label; the rest are numbers.
+// Only the first TABLE_PREVIEW_ROWS rows show until "Show all" is pressed.
 function DataTable({ label, headers, rows }: DataTableProps) {
+  const [expanded, setExpanded] = useState(false);
+  const visible = expanded ? rows : rows.slice(0, TABLE_PREVIEW_ROWS);
+  const total = rows.length;
+
   return (
-    <Table aria-label={label}>
-      <TableHeader>
-        <TableRow>
-          {headers.map((header, index) => (
-            <TableHead key={header} className={index === 0 ? undefined : "text-right"}>
-              {header}
-            </TableHead>
-          ))}
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {rows.map((cells, rowIndex) => (
-          <TableRow key={rowIndex}>
-            {cells.map((cell, index) => (
-              <TableCell key={index} className={index === 0 ? undefined : "text-right tabular-nums"}>
-                {cell}
-              </TableCell>
+    <div className="flex flex-col gap-3">
+      <Table aria-label={label}>
+        <TableHeader>
+          <TableRow>
+            {headers.map((header, index) => (
+              <TableHead key={header} className={index === 0 ? undefined : "text-right"}>
+                {header}
+              </TableHead>
             ))}
           </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+        </TableHeader>
+        <TableBody>
+          {visible.map((cells, rowIndex) => (
+            <TableRow key={rowIndex}>
+              {cells.map((cell, index) => (
+                <TableCell key={index} className={index === 0 ? undefined : "text-right tabular-nums"}>
+                  {cell}
+                </TableCell>
+              ))}
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      {total > TABLE_PREVIEW_ROWS && (
+        <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
+          <span>{expanded ? `All ${total} rows.` : `${TABLE_PREVIEW_ROWS} of ${total} rows.`}</span>
+          <Button variant="outline" size="sm" onClick={() => setExpanded((value) => !value)}>
+            {expanded ? "Show fewer" : "Show all"}
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }
 
 // Cases over time (auditor, admin). One line, one series.
 const CASES_SERIES: Series[] = [{ key: "count", label: "Cases created", color: "var(--chart-1)" }];
 
-export function CasesOverTimeChart({ days }: { days: OverviewRange }) {
+interface ChartProps {
+  // Set when the card stands alone in the grid, so it spans both columns.
+  wide?: boolean;
+}
+
+export function CasesOverTimeChart({ days, wide }: ChartProps & { days: OverviewRange }) {
   const state = useLoad(async () => seriesRows((await getMetricSeries("cases_created", days)).points, "count"), [
     days,
   ]);
@@ -134,6 +192,7 @@ export function CasesOverTimeChart({ days }: { days: OverviewRange }) {
       title="Cases over time"
       description={`Cases created each day in the last ${days} days, in the system timezone.`}
       state={state}
+      wide={wide}
       isEmpty={(rows) => isAllZero(rows, ["count"])}
       chart={(rows) => <DailyLineChart rows={rows} series={CASES_SERIES} />}
       table={(rows) => (
@@ -153,7 +212,7 @@ const LOGIN_SERIES: Series[] = [
   { key: "failed", label: "Failed logins", color: "var(--chart-2)" },
 ];
 
-export function LoginsChart({ days }: { days: OverviewRange }) {
+export function LoginsChart({ days, wide }: ChartProps & { days: OverviewRange }) {
   const state = useLoad(async () => {
     const [success, failed] = await Promise.all([
       getMetricSeries("logins_success", days),
@@ -170,6 +229,7 @@ export function LoginsChart({ days }: { days: OverviewRange }) {
       title="Login activity"
       description={`Successful and failed logins each day in the last ${days} days.`}
       state={state}
+      wide={wide}
       isEmpty={(rows) => isAllZero(rows, ["success", "failed"])}
       chart={(rows) => <DailyLineChart rows={rows} series={LOGIN_SERIES} />}
       table={(rows) => (
@@ -199,7 +259,7 @@ const DEADLINE_SERIES: Series[] = [
 ];
 
 // Deadline status per kind, for the caller's own cases (reporter, triager, investigator, reviewer).
-export function DeadlinesChart() {
+export function DeadlinesChart({ wide }: ChartProps) {
   const state = useLoad(async () => {
     const summary = await getDeadlineSummary();
     return summary.items.map((item) => ({
@@ -215,15 +275,16 @@ export function DeadlinesChart() {
       title="Deadlines in my cases"
       description="Open, overdue and done deadline tasks per kind, across the cases you created or are assigned to."
       state={state}
+      wide={wide}
       isEmpty={(rows) => isAllZero(rows, ["open", "overdue", "done", "notApplicable"])}
       chart={(rows) => (
         <ChartContainer config={configFor(DEADLINE_SERIES)} className="h-72 w-full">
-          <BarChart data={rows} layout="vertical" accessibilityLayer>
+          <BarChart data={rows} layout="vertical" margin={{ top: 8, right: 12, left: 0, bottom: 0 }} accessibilityLayer>
             <CartesianGrid horizontal={false} />
-            <XAxis type="number" allowDecimals={false} tickLine={false} axisLine={false} />
-            <YAxis type="category" dataKey="label" width={170} tickLine={false} axisLine={false} />
+            <XAxis type="number" allowDecimals={false} tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
+            <YAxis type="category" dataKey="label" width={170} tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
             <ChartTooltip content={<ChartTooltipContent />} />
-            <ChartLegend content={<ChartLegendContent />} />
+            {legendFor(DEADLINE_SERIES)}
             {DEADLINE_SERIES.map((item) => (
               <Bar key={item.key} dataKey={item.key} fill={`var(--color-${item.key})`} />
             ))}
@@ -263,13 +324,14 @@ function auditView(summary: AuditSummary): AuditView {
   return { rows, series };
 }
 
-export function AuditChart({ days }: { days: OverviewRange }) {
+export function AuditChart({ days, wide }: ChartProps & { days: OverviewRange }) {
   const state = useLoad(async () => auditView(await getAuditSummary(days)), [days]);
   return (
     <ChartPanel
       title="Audit actions"
       description={`Audit events per day by action, last ${days} days. Five actions at most; the rest are grouped as Other.`}
       state={state}
+      wide={wide}
       isEmpty={(view) => isAllZero(view.rows, view.series.map((item) => item.key))}
       chart={(view) => <DailyStackedBars rows={view.rows} series={view.series} />}
       table={(view) => (
@@ -287,7 +349,7 @@ const OUTBOX_LABELS: Record<string, string> = { pending: "Pending", leased: "Lea
 const OUTBOX_ORDER = ["pending", "leased", "done", "failed"] as const;
 
 // Outbox job states right now. This is a snapshot: the range does not change it.
-export function OutboxChart() {
+export function OutboxChart({ wide }: ChartProps) {
   const state = useLoad(async () => {
     const summary = await getOutboxSummary();
     return {
@@ -304,13 +366,14 @@ export function OutboxChart() {
       title="Outbox health"
       description="Background jobs by state right now. Not affected by the range."
       state={state}
+      wide={wide}
       isEmpty={(view) => view.rows.every((row) => row.jobs === 0)}
       chart={(view) => (
-        <ChartContainer config={{ jobs: { label: "Jobs", color: "var(--chart-1)" } }} className="h-64 w-full">
-          <BarChart data={view.rows} accessibilityLayer>
+        <ChartContainer config={{ jobs: { label: "Jobs", color: "var(--chart-1)" } }} className={TIME_CHART_CLASS}>
+          <BarChart data={view.rows} margin={TIME_CHART_MARGIN} accessibilityLayer>
             <CartesianGrid vertical={false} />
-            <XAxis dataKey="label" tickLine={false} axisLine={false} />
-            <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={40} />
+            <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} tick={{ fontSize: 12 }} />
+            <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={32} tick={{ fontSize: 12 }} />
             <ChartTooltip content={<ChartTooltipContent />} />
             <Bar dataKey="jobs">
               {view.rows.map((row) => (
@@ -344,7 +407,7 @@ const USER_SERIES: Series[] = [
 ];
 
 // Accounts per role, split by status (admin only). Counts only, no names.
-export function UsersChart() {
+export function UsersChart({ wide }: ChartProps) {
   const state = useLoad(async () => {
     const summary = await getUsersSummary();
     return {
@@ -363,15 +426,16 @@ export function UsersChart() {
       title="Accounts by role"
       description="Active and inactive accounts per role. Counts only."
       state={state}
+      wide={wide}
       isEmpty={(view) => view.total === 0}
       chart={(view) => (
         <ChartContainer config={configFor(USER_SERIES)} className="h-72 w-full">
-          <BarChart data={view.rows} layout="vertical" accessibilityLayer>
+          <BarChart data={view.rows} layout="vertical" margin={{ top: 8, right: 12, left: 0, bottom: 0 }} accessibilityLayer>
             <CartesianGrid horizontal={false} />
-            <XAxis type="number" allowDecimals={false} tickLine={false} axisLine={false} />
-            <YAxis type="category" dataKey="role" width={150} tickLine={false} axisLine={false} />
+            <XAxis type="number" allowDecimals={false} tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
+            <YAxis type="category" dataKey="role" width={150} tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
             <ChartTooltip content={<ChartTooltipContent />} />
-            <ChartLegend content={<ChartLegendContent />} />
+            {legendFor(USER_SERIES)}
             {USER_SERIES.map((item) => (
               <Bar key={item.key} dataKey={item.key} stackId="accounts" fill={`var(--color-${item.key})`} />
             ))}

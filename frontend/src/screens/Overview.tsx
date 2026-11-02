@@ -1,8 +1,7 @@
-import { useState } from "react";
+import { Fragment, ReactNode, useState } from "react";
+import { SegmentedControl } from "@/components/segmented-control";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   DEFAULT_OVERVIEW_RANGE,
   getOverviewSummary,
@@ -13,12 +12,20 @@ import {
 } from "../api";
 import { overviewSections } from "../overview-sections";
 import { AuditChart, CasesOverTimeChart, DeadlinesChart, LoginsChart, OutboxChart, UsersChart } from "./overview/charts";
-import { formatAge, pendingValue, StatCard } from "./overview/parts";
+import { CHART_GRID_CLASS, formatAge, pendingValue, STAT_GRID_CLASS, StatCard } from "./overview/parts";
 import { LoadState, useLoad } from "./overview/useLoad";
 
 interface Props {
   profile: Me;
   notice: string | null;
+}
+
+const RANGE_OPTIONS = OVERVIEW_RANGES.map((range) => ({ value: range, label: `${range} days` }));
+
+interface ChartEntry {
+  key: string;
+  // Receives whether the card should span both columns, so the last card never stands alone in a row.
+  render: (wide: boolean) => ReactNode;
 }
 
 export function Overview({ profile, notice }: Props) {
@@ -28,6 +35,14 @@ export function Overview({ profile, notice }: Props) {
   const summary = useLoad(() => getOverviewSummary(days), [days]);
   const hasSections = sections.ownCases || sections.operations || sections.users || sections.logins;
 
+  const charts: ChartEntry[] = [];
+  if (sections.operations) charts.push({ key: "cases", render: (wide) => <CasesOverTimeChart days={days} wide={wide} /> });
+  if (sections.ownCases) charts.push({ key: "deadlines", render: (wide) => <DeadlinesChart wide={wide} /> });
+  if (sections.operations) charts.push({ key: "audit", render: (wide) => <AuditChart days={days} wide={wide} /> });
+  if (sections.operations) charts.push({ key: "outbox", render: (wide) => <OutboxChart wide={wide} /> });
+  if (sections.logins) charts.push({ key: "logins", render: (wide) => <LoginsChart days={days} wide={wide} /> });
+  if (sections.users) charts.push({ key: "users", render: (wide) => <UsersChart wide={wide} /> });
+
   return (
     <>
       {notice && (
@@ -35,78 +50,53 @@ export function Overview({ profile, notice }: Props) {
           <AlertDescription>{notice}</AlertDescription>
         </Alert>
       )}
-      <Card>
-        <CardHeader>
-          <CardTitle>Welcome, {profile.username}</CardTitle>
-          <CardDescription>
-            You are signed in with the <Badge variant="secondary">{profile.role}</Badge> role.
-          </CardDescription>
-        </CardHeader>
-      </Card>
 
+      {/* The page title and description come from the shell. The range applies to every card below. */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold">Summary</h2>
-        <RangeSelector value={days} onChange={setDays} />
+        <p className="text-sm text-muted-foreground">
+          Welcome, <span className="font-medium text-foreground">{profile.username}</span>. You are signed in with the{" "}
+          <Badge variant="secondary">{profile.role}</Badge> role.
+        </p>
+        <SegmentedControl label="Date range" options={RANGE_OPTIONS} value={days} onChange={setDays} />
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          label="Password change"
-          value={profile.password_change_required ? "Required" : "Not required"}
-          hint={
-            profile.password_change_required
-              ? "You must set a new password before you continue."
-              : "No action needed."
-          }
-        />
-        {sections.ownCases && <OwnCaseCards state={summary} days={days} />}
-        {sections.operations && <OperationsCards state={summary} days={days} />}
-        {sections.users && <UserCards state={summary} />}
-      </div>
-
-      {summary.status === "error" && (
-        <Alert variant="destructive">
-          <AlertDescription>{summary.message}</AlertDescription>
-        </Alert>
-      )}
+      <section aria-labelledby="overview-summary" className="flex flex-col gap-3">
+        <h2 id="overview-summary" className="text-lg font-semibold tracking-tight">
+          Summary
+        </h2>
+        <div className={STAT_GRID_CLASS}>
+          <StatCard
+            label="Password change"
+            value={profile.password_change_required ? "Required" : "Not required"}
+            hint={
+              profile.password_change_required
+                ? "You must set a new password before you continue."
+                : "No action needed."
+            }
+          />
+          {sections.ownCases && <OwnCaseCards state={summary} days={days} />}
+          {sections.operations && <OperationsCards state={summary} days={days} />}
+          {sections.users && <UserCards state={summary} />}
+        </div>
+        {summary.status === "error" && (
+          <Alert variant="destructive">
+            <AlertDescription>{summary.message}</AlertDescription>
+          </Alert>
+        )}
+      </section>
 
       {hasSections ? (
-        <div className="space-y-6">
-          {sections.operations && <CasesOverTimeChart days={days} />}
-          {sections.ownCases && <DeadlinesChart />}
-          {sections.operations && <AuditChart days={days} />}
-          {sections.operations && <OutboxChart />}
-          {sections.logins && <LoginsChart days={days} />}
-          {sections.users && <UsersChart />}
+        <div className={CHART_GRID_CLASS}>
+          {charts.map((chart, index) => (
+            <Fragment key={chart.key}>
+              {chart.render(charts.length % 2 === 1 && index === charts.length - 1)}
+            </Fragment>
+          ))}
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">Your role has no overview sections.</p>
       )}
     </>
-  );
-}
-
-interface RangeSelectorProps {
-  value: OverviewRange;
-  onChange: (range: OverviewRange) => void;
-}
-
-function RangeSelector({ value, onChange }: RangeSelectorProps) {
-  return (
-    <div role="group" aria-label="Date range" className="flex gap-1">
-      {OVERVIEW_RANGES.map((range) => (
-        <Button
-          key={range}
-          type="button"
-          size="sm"
-          variant={range === value ? "default" : "outline"}
-          aria-pressed={range === value}
-          onClick={() => onChange(range)}
-        >
-          {range} days
-        </Button>
-      ))}
-    </div>
   );
 }
 

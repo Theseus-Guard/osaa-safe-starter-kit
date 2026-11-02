@@ -1,20 +1,23 @@
 import { useEffect, useState } from "react";
+import { Search } from "lucide-react";
 import { toast } from "sonner";
 import { CaseDetail, CasePage, listCases } from "../../api";
 import { describeError } from "../../messages";
 import { caseAbilities } from "../../permissions";
-import { formatRiskScore } from "./case-format";
+import { formatRiskScore, humanize } from "./case-format";
 import { NewCaseDialog } from "./NewCaseDialog";
 import { Timestamp } from "@/components/timestamp";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardFooter } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 const PAGE_SIZE = 20;
-// A bounded height with a scroll container keeps the header sticky.
-const TABLE_FRAME_CLASS = "overflow-hidden rounded-md border";
+// Typing waits this long before the search is sent, so each keystroke does not reach the server.
+const SEARCH_DELAY_MS = 250;
+const COLUMN_COUNT = 6;
 
 interface Props {
   // The caller's permission names from /auth/me.
@@ -23,6 +26,9 @@ interface Props {
 
 export function CasesPage({ permissions }: Props) {
   const canSubmit = caseAbilities(permissions).canSubmit;
+  const [query, setQuery] = useState("");
+  // The trimmed search that is sent to the server. Changing it starts again at the first page.
+  const [term, setTerm] = useState("");
   const [offset, setOffset] = useState(0);
   const [page, setPage] = useState<CasePage | null>(null);
   const [loading, setLoading] = useState(false);
@@ -30,9 +36,17 @@ export function CasesPage({ permissions }: Props) {
   const [dialogOpen, setDialogOpen] = useState(false);
 
   useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setTerm(query.trim());
+      setOffset(0);
+    }, SEARCH_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  useEffect(() => {
     let stale = false;
     setLoading(true);
-    listCases(PAGE_SIZE, offset)
+    listCases(PAGE_SIZE, offset, term)
       .then((result) => {
         if (stale) return;
         setPage(result);
@@ -47,7 +61,7 @@ export function CasesPage({ permissions }: Props) {
     return () => {
       stale = true;
     };
-  }, [offset]);
+  }, [offset, term]);
 
   function handleCreated(created: CaseDetail) {
     toast.success(`Case ${created.reference} created.`);
@@ -57,70 +71,94 @@ export function CasesPage({ permissions }: Props) {
   const total = page?.total ?? 0;
   const shownFrom = page && page.items.length > 0 ? page.offset + 1 : 0;
   const shownTo = page ? page.offset + page.items.length : 0;
+  const searching = term !== "";
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Your cases</CardTitle>
-        {canSubmit && (
-          <CardAction>
-            <Button size="sm" onClick={() => setDialogOpen(true)}>
-              New case
-            </Button>
-          </CardAction>
-        )}
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        {error && (
-          <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
-        <div className={TABLE_FRAME_CLASS}>
-          <Table>
-            <TableHeader className="sticky top-0 z-10 bg-muted">
-              <TableRow>
-                <TableHead>Reference</TableHead>
-                <TableHead>Title</TableHead>
-                <TableHead>Awareness time</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Risk</TableHead>
-                <TableHead>Created</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {page?.items.map((item) => (
-                <TableRow key={item.id}>
-                  <TableCell>
-                    <a
-                      href={`#/cases/${encodeURIComponent(item.id)}`}
-                      className="font-mono text-sm font-medium underline-offset-4 outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring"
-                    >
-                      {item.reference}
-                    </a>
-                  </TableCell>
-                  <TableCell className="whitespace-normal">{item.title}</TableCell>
-                  <TableCell>
-                    <Timestamp value={item.awareness_time} />
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="secondary">{item.status}</Badge>
-                  </TableCell>
-                  <TableCell className={item.risk_score === null ? "text-muted-foreground" : "tabular-nums"}>
-                    {formatRiskScore(item.risk_score)}
-                  </TableCell>
-                  <TableCell>
-                    <Timestamp value={item.created_at} />
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+    <>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground" aria-live="polite">
+          {page !== null && `${total} ${total === 1 ? "case" : "cases"}${searching ? " found" : ""}`}
+        </p>
+        {canSubmit && <Button onClick={() => setDialogOpen(true)}>New case</Button>}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative w-full sm:max-w-sm">
+          <Search aria-hidden="true" className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            type="search"
+            aria-label="Search cases"
+            placeholder="Search by reference"
+            className="pl-8"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
         </div>
-        {page && page.items.length === 0 && <p className="text-sm text-muted-foreground">You have not opened any cases yet.</p>}
-        <div className="flex flex-wrap items-center justify-between gap-2">
+      </div>
+
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      <Card className="gap-0 py-0">
+        <Table>
+          <TableHeader className="bg-muted/50">
+            <TableRow>
+              <TableHead className="px-4">Reference</TableHead>
+              <TableHead>Title</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Risk score</TableHead>
+              <TableHead>Awareness time</TableHead>
+              <TableHead className="pr-4">Created</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {page === null && (
+              <TableRow>
+                <TableCell colSpan={COLUMN_COUNT} className="h-24 px-4 text-center text-muted-foreground">
+                  Loading cases…
+                </TableCell>
+              </TableRow>
+            )}
+            {page?.items.map((item) => (
+              <TableRow key={item.id}>
+                <TableCell className="px-4">
+                  <a
+                    href={`#/cases/${encodeURIComponent(item.id)}`}
+                    className="font-mono text-sm font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring"
+                  >
+                    {item.reference}
+                  </a>
+                </TableCell>
+                <TableCell className="max-w-96 font-medium whitespace-normal">{item.title}</TableCell>
+                <TableCell>
+                  <Badge variant="secondary">{humanize(item.status)}</Badge>
+                </TableCell>
+                <TableCell className={item.risk_score === null ? "text-muted-foreground" : "tabular-nums"}>
+                  {formatRiskScore(item.risk_score)}
+                </TableCell>
+                <TableCell className="text-muted-foreground">
+                  <Timestamp value={item.awareness_time} />
+                </TableCell>
+                <TableCell className="pr-4 text-muted-foreground">
+                  <Timestamp value={item.created_at} />
+                </TableCell>
+              </TableRow>
+            ))}
+            {page !== null && page.items.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={COLUMN_COUNT} className="h-24 px-4 text-center text-muted-foreground">
+                  {searching ? "No cases match this search." : "You have not opened any cases yet."}
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+        <CardFooter className="justify-between gap-2 py-3">
           <p className="text-sm text-muted-foreground" aria-live="polite">
-            {loading ? "Loading…" : `Showing ${shownFrom}–${shownTo} of ${total}`}
+            {loading ? "Loading…" : total > 0 ? `Showing ${shownFrom}–${shownTo} of ${total}` : ""}
           </p>
           <div className="flex gap-2">
             <Button
@@ -140,9 +178,10 @@ export function CasesPage({ permissions }: Props) {
               Next
             </Button>
           </div>
-        </div>
-      </CardContent>
+        </CardFooter>
+      </Card>
+
       {canSubmit && <NewCaseDialog open={dialogOpen} onOpenChange={setDialogOpen} onCreated={handleCreated} />}
-    </Card>
+    </>
   );
 }
