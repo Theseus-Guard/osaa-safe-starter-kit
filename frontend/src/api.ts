@@ -907,3 +907,112 @@ export async function readiness(): Promise<Readiness> {
   }
   return "unavailable";
 }
+// Overview dashboard (F2). Counts and dates only. Every response is role-gated by the backend.
+export const OVERVIEW_RANGES = [7, 30, 90] as const;
+export type OverviewRange = (typeof OVERVIEW_RANGES)[number];
+export const DEFAULT_OVERVIEW_RANGE: OverviewRange = 30;
+
+export interface OwnCaseCards {
+  open_cases: number;
+  opened_in_period: number;
+  deadlines_due_72h: number;
+  deadlines_overdue: number;
+}
+
+export interface CaseCards {
+  open_cases: number;
+  opened_in_period: number;
+}
+
+export type WorkerState = "ok" | "stale" | "no_data";
+
+export interface OpsCards {
+  failed_outbox_jobs: number;
+  status: WorkerState;
+  heartbeat_age_seconds: number | null;
+}
+
+export interface OverviewSummary {
+  days: number;
+  timezone: string;
+  own_cases: OwnCaseCards | null;
+  case_activity: CaseCards | null;
+  users: { pending_password_change: number } | null;
+  ops: OpsCards | null;
+}
+
+export type SeriesMetric =
+  | "cases_created"
+  | "audit_events"
+  | "logins_success"
+  | "logins_failed"
+  | "outbox_completed"
+  | "outbox_failed";
+
+export interface SeriesPoint {
+  date: string;
+  count: number;
+}
+
+export interface SeriesResponse {
+  metric: SeriesMetric;
+  days: number;
+  timezone: string;
+  points: SeriesPoint[];
+}
+
+export interface DeadlineKindCounts {
+  kind: string;
+  open: number;
+  overdue: number;
+  done: number;
+  not_applicable: number;
+}
+
+export interface DeadlineSummary {
+  items: DeadlineKindCounts[];
+}
+
+export interface AuditSummary {
+  days: number;
+  timezone: string;
+  // The top five actions, then "other" when there are more.
+  actions: string[];
+  points: { date: string; counts: Record<string, number> }[];
+}
+
+export interface UsersSummary {
+  total: number;
+  pending_password_change: number;
+  roles: { role: string; active: number; inactive: number }[];
+}
+
+export interface OutboxSummary {
+  counts: Record<string, number>;
+  oldest_pending_age_seconds: number | null;
+}
+
+export function getOverviewSummary(days: OverviewRange): Promise<OverviewSummary> {
+  return request<OverviewSummary>(`/overview/summary?days=${days}`);
+}
+
+export function getMetricSeries(metric: SeriesMetric, days: OverviewRange): Promise<SeriesResponse> {
+  return request<SeriesResponse>(`/metrics/timeseries?metric=${metric}&days=${days}`);
+}
+
+export function getDeadlineSummary(): Promise<DeadlineSummary> {
+  return request<DeadlineSummary>("/cases/deadlines/summary");
+}
+
+export function getAuditSummary(days: OverviewRange): Promise<AuditSummary> {
+  return request<AuditSummary>(`/audit/summary?days=${days}`);
+}
+
+export function getUsersSummary(): Promise<UsersSummary> {
+  return request<UsersSummary>("/users/summary");
+}
+
+export function getOutboxSummary(): Promise<OutboxSummary> {
+  return request<OutboxSummary>("/ops/outbox-summary");
+}
+

@@ -1242,3 +1242,10 @@ from safe_kit.case_links_api import case_links_router  # noqa: E402
 app.include_router(case_links_router)
 
 app.include_router(profile_router)
+
+# Overview dashboard endpoints: counts and dates, gated by role (see safe_kit.overview_api).
+from safe_kit.overview_api import overview_router  # noqa: E402
+
+app.include_router(overview_router)
+
+app.include_router(profile_router)
