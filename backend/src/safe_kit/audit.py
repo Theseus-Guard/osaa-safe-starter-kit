@@ -32,7 +32,9 @@ CASE_CLOSE = "case.closed"
 CASE_REOPEN = "case.reopened"
 CASE_ASSIGNMENT_ADD = "case.assignment_added"
 CASE_ASSIGNMENT_REMOVE = "case.assignment_removed"
-CASE_REVIEW = "case.review_recorded"
+CASE_REVIEW = "case.review_recorded"  # F1 whole-case review; kept so existing history rows keep their meaning
+CASE_REVIEW_ROUND_OPENED = "case.review_round_opened"
+CASE_REVIEW_LAYER_SET = "case.review_layer_set"
 CASE_DEADLINE_UPDATE = "case.deadline_updated"
 # Case record (safe_kit.case_records). Free text is never written here, only its length.
 CASE_AWARENESS_RECORDED = "case.awareness_recorded"

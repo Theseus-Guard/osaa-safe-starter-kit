@@ -12,9 +12,10 @@ from pathlib import Path
 
 import pytest
 
-from safe_kit import audit, cases, migrate, system_timezone, users
+from safe_kit import audit, cases, migrate, reviews, system_timezone, users
 from safe_kit.cases import CaseScope, Outcome, calendar_for, deadline_tasks_for
 from safe_kit.db import connect
+from safe_kit.reviews import RoundOutcome
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("SAFE_TEST_DATABASE") != "1",
@@ -220,7 +221,10 @@ def test_closed_case_refuses_deadline_changes_until_it_is_reopened():
 
     finish_all_tasks(case.id, owner_scope)
     assert cases.assign_member(case.id, reviewer, triage)[0] is Outcome.OK
-    assert cases.record_review(case.id, "pass", None, CaseScope(reviewer, read_assigned=True))[0] is Outcome.OK
+    reviewer_scope = CaseScope(reviewer, read_assigned=True)
+    round_outcome, review_round, _ = reviews.open_round(case.id, reviewer_scope)
+    assert round_outcome is RoundOutcome.OK
+    assert reviews.set_layer(review_round.id, "model", "pass", None, [], 1, reviewer_scope)[0] is RoundOutcome.OK
     assert cases.close_case(case.id, "Closed for the test", triage) == (Outcome.OK, [])
 
     task = case.deadlines[0]

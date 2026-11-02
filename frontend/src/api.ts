@@ -91,12 +91,15 @@ export class ApiError extends Error {
   readonly code: string;
   // Set only on a classification_version_conflict (409): the version the server holds now.
   readonly currentVersion: number | null;
+  // Set only on a revision_conflict (409) of a review round: the revision the server holds now.
+  readonly currentRevision: number | null;
 
-  constructor(status: number, code: string, currentVersion: number | null = null) {
+  constructor(status: number, code: string, currentVersion: number | null = null, currentRevision: number | null = null) {
     super(code);
     this.status = status;
     this.code = code;
     this.currentVersion = currentVersion;
+    this.currentRevision = currentRevision;
   }
 }
 
@@ -121,6 +124,8 @@ interface RequestOptions {
   responseType?: "json" | "blob";
   // Multipart body for file uploads. The browser sets the Content-Type with the boundary.
   form?: FormData;
+  // Extra request headers, such as Idempotency-Key.
+  headers?: Record<string, string>;
 }
 
 let session: Session | null = null;
@@ -145,7 +150,7 @@ function storeTokens(body: TokenResponse): void {
 }
 
 async function send(path: string, options: RequestOptions): Promise<Response> {
-  const headers = new Headers();
+  const headers = new Headers(options.headers);
   if (options.json !== undefined) headers.set("Content-Type", "application/json");
   if (options.auth !== false && session) headers.set("Authorization", `Bearer ${session.access}`);
   let body: BodyInit | undefined;
@@ -182,19 +187,21 @@ function refreshOnce(): Promise<boolean> {
 async function toApiError(response: Response): Promise<ApiError> {
   let code = `http_${response.status}`;
   let currentVersion: number | null = null;
+  let currentRevision: number | null = null;
   try {
     const body = (await response.json()) as { detail?: unknown };
     if (typeof body.detail === "string") {
       code = body.detail;
     } else if (typeof body.detail === "object" && body.detail !== null && "status" in body.detail) {
-      const detail = body.detail as { status: unknown; current_version?: unknown };
+      const detail = body.detail as { status: unknown; current_version?: unknown; current_revision?: unknown };
       code = String(detail.status);
       if (typeof detail.current_version === "number") currentVersion = detail.current_version;
+      if (typeof detail.current_revision === "number") currentRevision = detail.current_revision;
     }
   } catch {
     // Empty or non-JSON error body: keep the HTTP status code.
   }
-  return new ApiError(response.status, code, currentVersion);
+  return new ApiError(response.status, code, currentVersion, currentRevision);
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -419,30 +426,74 @@ export function updateDeadline(
   });
 }
 
-// Review outcomes accepted by the backend.
-export type ReviewOutcome = "pass" | "fail" | "insufficient_evidence" | "not_applicable";
+// The outcome of one review layer, as the backend accepts it. A layer that is not set has no outcome (null).
+export type LayerOutcome = "pass" | "fail" | "insufficient_evidence" | "not_applicable";
 
-export interface ReviewCreateBody {
-  outcome: ReviewOutcome;
-  // Omitted or null when the reviewer adds no note. The backend trims it and stores blank text as null.
-  note?: string | null;
+// The eleven layers of the review template, in the order the plan lists them. The keys are the API's layer names.
+export const REVIEW_LAYERS: { key: string; label: string }[] = [
+  { key: "model", label: "Model" },
+  { key: "instructions", label: "Instructions" },
+  { key: "safeguards", label: "Safeguards" },
+  { key: "tools", label: "Tools" },
+  { key: "environment", label: "Environment" },
+  { key: "monitoring", label: "Monitoring" },
+  { key: "human-operations", label: "Human operations" },
+  { key: "supply-chain", label: "Supply chain" },
+  { key: "serving-path", label: "Serving path" },
+  { key: "authorization-and-commitment", label: "Authorization and commitment" },
+  { key: "workflow-composition", label: "Workflow composition" },
+];
+
+export interface ReviewLayer {
+  layer: string;
+  outcome: LayerOutcome | null;
+  // Null when the caller may not read free text (cases:read_all), and when the layer has no reason.
+  reason: string | null;
+  evidence_ids: string[];
+  set_at: string | null;
 }
 
-export interface ReviewResponse {
+// A review of a case. It has no overall result: only its state, its revision, and its layers.
+export interface ReviewRound {
   id: string;
   case_id: string;
-  outcome: ReviewOutcome;
-  note: string | null;
+  status: "open" | "closed";
+  // Starts at 1 and increases by one for every change to a layer. Send it as expected_revision when changing a layer.
+  revision: number;
+  opened_at: string;
+  closed_at: string | null;
+  layers: ReviewLayer[];
 }
 
-// Needs reviews:write and an active assignment to the case. The case must be open.
-export function createReview(caseId: string, body: ReviewCreateBody): Promise<ReviewResponse> {
-  return request<ReviewResponse>(`/cases/${encodeURIComponent(caseId)}/reviews`, { method: "POST", json: body });
+export interface ReviewLayerBody {
+  outcome: LayerOutcome;
+  // Required for every outcome except pass. Omitted or null otherwise.
+  reason?: string | null;
+  evidence_ids?: string[];
+  expected_revision: number;
 }
 
-// Every review of the case, newest first and not deleted. Needs case read access. Answers 404 when the caller cannot see the case.
-export function listReviews(caseId: string): Promise<ReviewResponse[]> {
-  return request<ReviewResponse[]>(`/cases/${encodeURIComponent(caseId)}/reviews`);
+// Opens a review round with all eleven layers not set. Needs reviews:write and an active assignment to the case.
+// Sends a new Idempotency-Key, so a repeated submit of the same request returns the first round.
+export function openReviewRound(caseId: string): Promise<ReviewRound> {
+  return request<ReviewRound>("/reviews", {
+    method: "POST",
+    json: { case_id: caseId },
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+  });
+}
+
+// The rounds of a case, newest first. Needs case read access. Answers 404 when the caller cannot see the case.
+export function listReviewRounds(caseId: string): Promise<ReviewRound[]> {
+  return request<ReviewRound[]>(`/reviews?case_id=${encodeURIComponent(caseId)}`);
+}
+
+// Sets one layer of a round. A stale expected_revision answers 409 with ApiError.currentRevision and changes nothing.
+export function setReviewLayer(roundId: string, layer: string, body: ReviewLayerBody): Promise<ReviewRound> {
+  return request<ReviewRound>(`/reviews/${encodeURIComponent(roundId)}/layers/${encodeURIComponent(layer)}`, {
+    method: "PATCH",
+    json: body,
+  });
 }
 
 export interface Assignment {
@@ -896,17 +947,6 @@ export function saveBlob(blob: Blob, filename: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export async function readiness(): Promise<Readiness> {
-  const response = await fetch("/api/v1/health/ready");
-  if (response.ok) return "ready";
-  try {
-    const body = (await response.json()) as { detail?: { status?: string } };
-    if (body.detail?.status === "setup_required") return "setup_required";
-  } catch {
-    // Fall through to unavailable.
-  }
-  return "unavailable";
-}
 // Overview dashboard (F2). Counts and dates only. Every response is role-gated by the backend.
 export const OVERVIEW_RANGES = [7, 30, 90] as const;
 export type OverviewRange = (typeof OVERVIEW_RANGES)[number];
@@ -1016,3 +1056,14 @@ export function getOutboxSummary(): Promise<OutboxSummary> {
   return request<OutboxSummary>("/ops/outbox-summary");
 }
 
+export async function readiness(): Promise<Readiness> {
+  const response = await fetch("/api/v1/health/ready");
+  if (response.ok) return "ready";
+  try {
+    const body = (await response.json()) as { detail?: { status?: string } };
+    if (body.detail?.status === "setup_required") return "setup_required";
+  } catch {
+    // Fall through to unavailable.
+  }
+  return "unavailable";
+}

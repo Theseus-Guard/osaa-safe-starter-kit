@@ -38,7 +38,6 @@ from safe_kit.cases import (
     Case,
     CaseScope,
     Outcome,
-    Review,
     assign_member,
     case_history,
     close_case,
@@ -47,15 +46,13 @@ from safe_kit.cases import (
     find_visible_case,
     list_assignable_users,
     list_assignments,
-    list_reviews,
     list_visible_cases,
-    record_review,
     redact_history,
     reopen_case,
-from safe_kit.config_guard import load_settings
     unassign_member,
     update_deadline,
 )
+from safe_kit.config_guard import load_settings
 from safe_kit.db import connect
 from safe_kit.system_timezone import (
     SETUP_ROLE,
@@ -674,25 +671,6 @@ class AssignmentResponse(BaseModel):
     assigned_at: datetime
 
 
-class ReviewRequest(BaseModel):
-    outcome: Literal["pass", "fail", "insufficient_evidence", "not_applicable"]
-    note: str | None = None
-
-    @field_validator("note")
-    @classmethod
-    def note_length(cls, value: str | None) -> str | None:
-        return _clean_text(value)
-
-
-class ReviewResponse(BaseModel):
-    id: str
-    case_id: str
-    outcome: str
-    # Null for callers without the full view (cases:read_all). The reviewer's own submission returns its note.
-    note: str | None
-    created_at: datetime
-
-
 class ReasonRequest(BaseModel):
     reason: str
 
@@ -1054,54 +1032,6 @@ def remove_case_assignment(
     return Response(status_code=204)
 
 
-@app.post("/api/v1/cases/{case_id}/reviews", status_code=201, response_model=ReviewResponse)
-def add_case_review(
-    case_id: uuid.UUID,
-    body: ReviewRequest,
-    actor: User = Depends(require_permission("reviews:write")),
-) -> ReviewResponse:
-    # The response carries the note the caller just wrote, whatever the caller's read permissions: it is their own input.
-    outcome, review = record_review(str(case_id), body.outcome, body.note, _scope(actor))
-    if outcome is Outcome.NOT_FOUND:
-        raise CASE_NOT_FOUND
-    if outcome is Outcome.CLOSED:
-        raise CASE_CLOSED
-    if outcome is Outcome.NOT_ASSIGNED:
-        raise HTTPException(status_code=403, detail="only an assigned reviewer can record a review")
-    assert review is not None
-    return ReviewResponse(
-        id=review.id,
-        case_id=str(case_id),
-        outcome=review.outcome,
-        note=review.note,
-        created_at=review.created_at,
-    )
-
-
-def _review_response(review: Review, scope: CaseScope) -> ReviewResponse:
-    # The note is shown only to callers with the full view, the same rule as the close and reopen reasons.
-    return ReviewResponse(
-        id=review.id,
-        case_id=review.case_id,
-        outcome=review.outcome,
-        note=review.note if scope.read_all else None,
-        created_at=review.created_at,
-    )
-
-
-@app.get("/api/v1/cases/{case_id}/reviews", response_model=list[ReviewResponse])
-def list_case_reviews(
-    case_id: uuid.UUID,
-    actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS)),
-) -> list[ReviewResponse]:
-    # Same visibility as the case itself: a case the caller may not see is 404, as for every case read.
-    scope = _scope(actor)
-    reviews = list_reviews(str(case_id), scope)
-    if reviews is None:
-        raise CASE_NOT_FOUND
-    return [_review_response(review, scope) for review in reviews]
-
-
 @app.post("/api/v1/cases/{case_id}/close", response_model=CaseResponse)
 def close_case_endpoint(
     case_id: uuid.UUID,
@@ -1241,7 +1171,10 @@ from safe_kit.case_links_api import case_links_router  # noqa: E402
 
 app.include_router(case_links_router)
 
-app.include_router(profile_router)
+# Review round endpoints: open a round, read rounds, and set one layer of a round.
+from safe_kit.reviews_api import reviews_router  # noqa: E402
+
+app.include_router(reviews_router)
 
 # Overview dashboard endpoints: counts and dates, gated by role (see safe_kit.overview_api).
 from safe_kit.overview_api import overview_router  # noqa: E402

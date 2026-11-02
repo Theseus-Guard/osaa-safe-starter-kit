@@ -2,158 +2,225 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
-import { ApiError, ReviewResponse, createReview, listReviews } from "../../api";
+import { ApiError, ReviewRound, listReviewRounds, openReviewRound, setReviewLayer } from "../../api";
 import { CaseReview } from "./CaseReview";
 
 vi.mock("../../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../api")>();
-  return { ...actual, createReview: vi.fn(), listReviews: vi.fn() };
+  return { ...actual, listReviewRounds: vi.fn(), openReviewRound: vi.fn(), setReviewLayer: vi.fn() };
 });
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
-const create = vi.mocked(createReview);
-const list = vi.mocked(listReviews);
+const list = vi.mocked(listReviewRounds);
+const open = vi.mocked(openReviewRound);
+const setLayer = vi.mocked(setReviewLayer);
 
-// Newest first, as the backend returns them.
-const NEWER: ReviewResponse = { id: "review-2", case_id: "case-1", outcome: "fail", note: "Missing logs" };
-const OLDER: ReviewResponse = { id: "review-1", case_id: "case-1", outcome: "pass", note: null };
+const LAYER_KEYS = [
+  "model",
+  "instructions",
+  "safeguards",
+  "tools",
+  "environment",
+  "monitoring",
+  "human-operations",
+  "supply-chain",
+  "serving-path",
+  "authorization-and-commitment",
+  "workflow-composition",
+];
+
+// A round at the given revision. The model layer has the given outcome (fail with a reason by default, or null for
+// not set); the other ten layers are not set.
+function roundAt(revision: number, modelOutcome: ReviewRound["layers"][number]["outcome"] = "fail"): ReviewRound {
+  const hasReason = modelOutcome !== null && modelOutcome !== "pass";
+  return {
+    id: "round-1",
+    case_id: "case-1",
+    status: "open",
+    revision,
+    opened_at: "2026-11-01T09:00:00Z",
+    closed_at: null,
+    layers: LAYER_KEYS.map((layer, index) => ({
+      layer,
+      outcome: index === 0 ? modelOutcome : null,
+      reason: index === 0 && hasReason ? "Missing logs" : null,
+      evidence_ids: [],
+      set_at: index === 0 ? "2026-11-01T09:05:00Z" : null,
+    })),
+  };
+}
 
 beforeEach(() => {
-  create.mockReset();
   list.mockReset().mockResolvedValue([]);
+  open.mockReset();
+  setLayer.mockReset();
   vi.mocked(toast.success).mockClear();
 });
 
-async function openDialog(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole("button", { name: "Record review" }));
+async function openLayerDialog(user: ReturnType<typeof userEvent.setup>, layerLabel: string) {
+  await user.click(screen.getByRole("button", { name: `Set ${layerLabel}` }));
   return screen.findByRole("dialog");
 }
 
+async function chooseOutcome(user: ReturnType<typeof userEvent.setup>, dialog: HTMLElement, outcome: string) {
+  await user.click(within(dialog).getByLabelText("Outcome"));
+  await user.click(await screen.findByRole("option", { name: outcome }));
+}
+
 describe("CaseReview", () => {
-  it("loads every review of the case and lists the outcome and the note", async () => {
-    list.mockResolvedValue([NEWER, OLDER]);
+  it("shows the eleven layers of the round with their outcomes and reasons", async () => {
+    list.mockResolvedValue([roundAt(3)]);
     render(<CaseReview caseId="case-1" closed={false} canReview onRecorded={() => {}} />);
 
-    expect(await screen.findByText("Missing logs")).toBeInTheDocument();
-    expect(list).toHaveBeenCalledWith("case-1");
+    expect(await screen.findByText("Revision 3, open")).toBeInTheDocument();
     const items = screen.getAllByRole("listitem");
-    expect(items).toHaveLength(2);
+    expect(items).toHaveLength(11);
+    expect(within(items[0]).getByText("Model")).toBeInTheDocument();
     expect(within(items[0]).getByText("Fail")).toBeInTheDocument();
-    expect(within(items[1]).getByText("Pass")).toBeInTheDocument();
-    expect(within(items[1]).queryByText("Missing logs")).not.toBeInTheDocument();
+    expect(within(items[0]).getByText("Missing logs")).toBeInTheDocument();
+    expect(within(items[10]).getByText("Workflow composition")).toBeInTheDocument();
+    expect(within(items[10]).getByText("Not set")).toBeInTheDocument();
+    expect(list).toHaveBeenCalledWith("case-1");
   });
 
-  it("shows an empty state when no review has been recorded", async () => {
-    render(<CaseReview caseId="case-1" closed={false} canReview onRecorded={() => {}} />);
-
-    expect(await screen.findByText("No review has been recorded for this case yet.")).toBeInTheDocument();
-    expect(screen.queryByRole("listitem")).not.toBeInTheDocument();
-  });
-
-  it("shows the error when the reviews cannot be loaded", async () => {
-    list.mockRejectedValue(new ApiError(404, "case not found"));
-    render(<CaseReview caseId="case-1" closed={false} canReview onRecorded={() => {}} />);
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("No case with that ID is available to your account.");
-    expect(screen.queryByText("No review has been recorded for this case yet.")).not.toBeInTheDocument();
-  });
-
-  it("lists the reviews for a caller without reviews:write and hides the Record review button", async () => {
-    list.mockResolvedValue([NEWER]);
-    render(<CaseReview caseId="case-1" closed={false} canReview={false} onRecorded={() => {}} />);
-
-    expect(await screen.findByText("Missing logs")).toBeInTheDocument();
-    expect(screen.getByText("Reviews recorded on this case.")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Record review" })).not.toBeInTheDocument();
-  });
-
-  it("asks for an outcome before submitting", async () => {
-    const user = userEvent.setup();
-    render(<CaseReview caseId="case-1" closed={false} canReview onRecorded={() => {}} />);
-
-    const dialog = await openDialog(user);
-    await user.click(within(dialog).getByRole("button", { name: "Submit review" }));
-
-    expect(create).not.toHaveBeenCalled();
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Choose the outcome of the review.");
-  });
-
-  it("records the outcome with the trimmed note, reloads the list and reports the result", async () => {
-    const stored: ReviewResponse = { id: "review-3", case_id: "case-1", outcome: "fail", note: "Missing logs" };
-    list.mockResolvedValueOnce([]).mockResolvedValueOnce([stored]);
-    create.mockResolvedValue(stored);
+  it("opens a round when none exists, and reloads the rounds", async () => {
+    list.mockResolvedValueOnce([]).mockResolvedValueOnce([roundAt(1)]);
+    open.mockResolvedValue(roundAt(1));
     const onRecorded = vi.fn();
     const user = userEvent.setup();
     render(<CaseReview caseId="case-1" closed={false} canReview onRecorded={onRecorded} />);
 
-    await screen.findByText("No review has been recorded for this case yet.");
-    const dialog = await openDialog(user);
-    await user.click(within(dialog).getByLabelText("Outcome"));
-    await user.click(await screen.findByRole("option", { name: "Fail" }));
-    await user.type(within(dialog).getByLabelText("Note"), "  Missing logs  ");
-    await user.click(within(dialog).getByRole("button", { name: "Submit review" }));
+    expect(await screen.findByText("No review round has been opened for this case yet.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Open review round" }));
 
+    await waitFor(() => expect(open).toHaveBeenCalledWith("case-1"));
     await waitFor(() => expect(onRecorded).toHaveBeenCalledTimes(1));
-    expect(create).toHaveBeenCalledWith("case-1", { outcome: "fail", note: "Missing logs" });
-    expect(toast.success).toHaveBeenCalledWith("Review recorded.");
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    // The list is loaded again from the server, so the new review appears with the stored ones.
-    expect(await screen.findByText("Missing logs")).toBeInTheDocument();
-    expect(list).toHaveBeenCalledTimes(2);
-    expect(screen.queryByText("No review has been recorded for this case yet.")).not.toBeInTheDocument();
+    expect(await screen.findByText("Revision 1, open")).toBeInTheDocument();
   });
 
-  it("sends no note when the note is blank", async () => {
-    create.mockResolvedValue({ id: "review-1", case_id: "case-1", outcome: "pass", note: null });
+  it("asks for a reason before saving a non-pass outcome and sends nothing", async () => {
+    list.mockResolvedValue([roundAt(3, "not_applicable")]);
     const user = userEvent.setup();
     render(<CaseReview caseId="case-1" closed={false} canReview onRecorded={() => {}} />);
 
-    const dialog = await openDialog(user);
-    await user.click(within(dialog).getByLabelText("Outcome"));
-    await user.click(await screen.findByRole("option", { name: "Pass" }));
-    await user.type(within(dialog).getByLabelText("Note"), "   ");
-    await user.click(within(dialog).getByRole("button", { name: "Submit review" }));
+    await screen.findByText("Revision 3, open");
+    const dialog = await openLayerDialog(user, "Instructions");
+    await chooseOutcome(user, dialog, "Fail");
+    await user.click(within(dialog).getByRole("button", { name: "Save layer" }));
 
-    await waitFor(() => expect(create).toHaveBeenCalledWith("case-1", { outcome: "pass", note: null }));
+    expect(setLayer).not.toHaveBeenCalled();
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("A reason is required for this outcome.");
+  });
+
+  it("saves a pass without a reason, with the revision the editor read", async () => {
+    list.mockResolvedValueOnce([roundAt(3, null)]).mockResolvedValueOnce([roundAt(4, "pass")]);
+    setLayer.mockResolvedValue(roundAt(4, "pass"));
+    const onRecorded = vi.fn();
+    const user = userEvent.setup();
+    render(<CaseReview caseId="case-1" closed={false} canReview onRecorded={onRecorded} />);
+
+    await screen.findByText("Revision 3, open");
+    const dialog = await openLayerDialog(user, "Model");
+    await chooseOutcome(user, dialog, "Pass");
+    await user.click(within(dialog).getByRole("button", { name: "Save layer" }));
+
+    await waitFor(() =>
+      expect(setLayer).toHaveBeenCalledWith("round-1", "model", {
+        outcome: "pass",
+        reason: null,
+        evidence_ids: [],
+        expected_revision: 3,
+      }),
+    );
+    expect(toast.success).toHaveBeenCalledWith("Review layer saved.");
+    expect(onRecorded).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("sends the trimmed reason and the evidence IDs for a fail", async () => {
+    list.mockResolvedValue([roundAt(3, "pass")]);
+    setLayer.mockResolvedValue(roundAt(4));
+    const evidence = "11111111-2222-4333-8444-555555555555";
+    const user = userEvent.setup();
+    render(<CaseReview caseId="case-1" closed={false} canReview onRecorded={() => {}} />);
+
+    await screen.findByText("Revision 3, open");
+    const dialog = await openLayerDialog(user, "Model");
+    await chooseOutcome(user, dialog, "Fail");
+    await user.type(within(dialog).getByLabelText("Reason"), "  Missing logs  ");
+    await user.type(within(dialog).getByLabelText("Evidence IDs"), evidence);
+    await user.click(within(dialog).getByRole("button", { name: "Save layer" }));
+
+    await waitFor(() =>
+      expect(setLayer).toHaveBeenCalledWith("round-1", "model", {
+        outcome: "fail",
+        reason: "Missing logs",
+        evidence_ids: [evidence],
+        expected_revision: 3,
+      }),
+    );
+  });
+
+  it("shows the conflict message with the current revision and reloads the round", async () => {
+    list.mockResolvedValueOnce([roundAt(3)]).mockResolvedValueOnce([roundAt(5)]);
+    setLayer.mockRejectedValue(new ApiError(409, "revision_conflict", null, 5));
+    const user = userEvent.setup();
+    render(<CaseReview caseId="case-1" closed={false} canReview onRecorded={() => {}} />);
+
+    await screen.findByText("Revision 3, open");
+    const dialog = await openLayerDialog(user, "Model");
+    await chooseOutcome(user, dialog, "Insufficient evidence");
+    await user.type(within(dialog).getByLabelText("Reason"), "Needs the export");
+    await user.click(within(dialog).getByRole("button", { name: "Save layer" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("The review was changed by someone else, so nothing was saved.");
+    expect(alert).toHaveTextContent("The current revision is 5.");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(await screen.findByText("Revision 5, open")).toBeInTheDocument();
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it("shows the server refusal when the caller is not assigned to the case", async () => {
-    create.mockRejectedValue(new ApiError(403, "only an assigned reviewer can record a review"));
+    list.mockResolvedValue([roundAt(3)]);
+    setLayer.mockRejectedValue(new ApiError(403, "only an assigned reviewer can record a review"));
     const user = userEvent.setup();
     render(<CaseReview caseId="case-1" closed={false} canReview onRecorded={() => {}} />);
 
-    const dialog = await openDialog(user);
-    await user.click(within(dialog).getByLabelText("Outcome"));
-    await user.click(await screen.findByRole("option", { name: "Pass" }));
-    await user.click(within(dialog).getByRole("button", { name: "Submit review" }));
+    await screen.findByText("Revision 3, open");
+    const dialog = await openLayerDialog(user, "Model");
+    await chooseOutcome(user, dialog, "Pass");
+    await user.click(within(dialog).getByRole("button", { name: "Save layer" }));
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
       "Only an assigned reviewer can record a review on this case.",
     );
-    // A refused review is not stored, so the list is not loaded again.
-    expect(list).toHaveBeenCalledTimes(1);
   });
 
-  it("shows the server refusal when the case is closed", async () => {
-    create.mockRejectedValue(new ApiError(409, "case is closed"));
-    const user = userEvent.setup();
-    render(<CaseReview caseId="case-1" closed={false} canReview onRecorded={() => {}} />);
+  it("lists the rounds read-only for a caller without reviews:write", async () => {
+    list.mockResolvedValue([roundAt(3)]);
+    render(<CaseReview caseId="case-1" closed={false} canReview={false} onRecorded={() => {}} />);
 
-    const dialog = await openDialog(user);
-    await user.click(within(dialog).getByLabelText("Outcome"));
-    await user.click(await screen.findByRole("option", { name: "Pass" }));
-    await user.click(within(dialog).getByRole("button", { name: "Submit review" }));
-
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent("This case is closed.");
+    expect(await screen.findByText("Revision 3, open")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open review round" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Set Model" })).not.toBeInTheDocument();
   });
 
-  it("offers no form on a closed case but still lists its reviews", async () => {
-    list.mockResolvedValue([NEWER]);
+  it("offers no change on a closed case but still shows its rounds", async () => {
+    list.mockResolvedValue([roundAt(3)]);
     render(<CaseReview caseId="case-1" closed canReview onRecorded={() => {}} />);
 
     expect(screen.getByText("This case is closed, so no review can be recorded.")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Record review" })).not.toBeInTheDocument();
-    expect(await screen.findByText("Missing logs")).toBeInTheDocument();
+    expect(await screen.findByText("Revision 3, open")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open review round" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Set Model" })).not.toBeInTheDocument();
+  });
+
+  it("shows the error when the rounds cannot be loaded", async () => {
+    list.mockRejectedValue(new ApiError(404, "case not found"));
+    render(<CaseReview caseId="case-1" closed={false} canReview onRecorded={() => {}} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("No case with that ID is available to your account.");
   });
 });

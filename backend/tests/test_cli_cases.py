@@ -533,13 +533,40 @@ DUTY_ID = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"
 CASE_PATH = f"/api/v1/cases/{CASE_ID}"
 DUTY_PATH = f"{CASE_PATH}/legal-duties/{DUTY_ID}"
 CASE_UPDATED_AT = "2026-10-31T11:00:00Z"
-REVIEW_BODY = {
-    "id": "cccccccc-dddd-4eee-8fff-000000000001",
-    "case_id": CASE_ID,
-    "outcome": "pass",
-    "note": "Checked",
-    "created_at": CASE_UPDATED_AT,
-}
+ROUND_ID = "cccccccc-dddd-4eee-8fff-000000000001"
+REVIEW_LAYER_PATH = f"/api/v1/reviews/{ROUND_ID}/layers/model"
+# The fake API routes by path; the case_id query is sent with the request but is not part of the route key.
+REVIEW_LIST_PATH = "/api/v1/reviews"
+REVIEW_LAYER_NAMES = (
+    "model", "instructions", "safeguards", "tools", "environment", "monitoring", "human-operations",
+    "supply-chain", "serving-path", "authorization-and-commitment", "workflow-composition",
+)
+
+
+def review_round_body(
+    revision: int = 2, reason: str | None = "Checked", status: str = "open", model_set: bool = True
+) -> dict:
+    """A round as the API returns it. The model layer is set to pass unless model_set is False; the others are not set."""
+    layers = [
+        {"layer": name, "outcome": None, "reason": None, "evidence_ids": [], "set_at": None}
+        for name in REVIEW_LAYER_NAMES
+    ]
+    if model_set:
+        layers[0] = {
+            "layer": "model", "outcome": "pass", "reason": reason, "evidence_ids": [], "set_at": CASE_UPDATED_AT,
+        }
+    return {
+        "id": ROUND_ID,
+        "case_id": CASE_ID,
+        "status": status,
+        "revision": revision,
+        "opened_at": CASE_UPDATED_AT,
+        "closed_at": None,
+        "layers": layers,
+    }
+
+
+REVIEW_BODY = review_round_body()
 ASSIGNMENT_BODY = {
     "id": "cccccccc-dddd-4eee-8fff-000000000002",
     "case_id": CASE_ID,
@@ -641,9 +668,11 @@ COMMAND_CASES = [
         "Assignment removed.", "cannot change", id="unassign",
     ),
     pytest.param(
-        ("case", "review", "record", CASE_ID, "--outcome", "pass", "--note", "Checked"),
-        "POST", f"{CASE_PATH}/reviews", {"outcome": "pass", "note": "Checked"}, 201, REVIEW_BODY,
-        "Review recorded.", "no review can be recorded", id="review-record",
+        ("case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "pass", "--reason", "Checked",
+         "--round", ROUND_ID, "--revision", "1"),
+        "PATCH", REVIEW_LAYER_PATH,
+        {"outcome": "pass", "reason": "Checked", "evidence_ids": [], "expected_revision": 1}, 200, REVIEW_BODY,
+        "Review layer saved.", "is closed", id="review-record",
     ),
     pytest.param(
         ("case", "classification", "set", CASE_ID, "--expected-version", "1"),
@@ -769,7 +798,8 @@ def test_case_update_secrets_never_reach_the_output(
     "argv, method, path, body",
     [
         (("case", "close", CASE_ID, "--reason", "Resolved", "--json"), "POST", f"{CASE_PATH}/close", CASE_BODY),
-        (("case", "review", "record", CASE_ID, "--outcome", "pass", "--json"), "POST", f"{CASE_PATH}/reviews",
+        (("case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "pass", "--round", ROUND_ID,
+          "--revision", "1", "--json"), "PATCH", REVIEW_LAYER_PATH,
          REVIEW_BODY),
         (("case", "impact", "set", CASE_ID, "scale", "--severity", "low", "--scope", "x", "--json"), "PUT",
          f"{CASE_PATH}/impacts/scale", IMPACT_BODY),
@@ -1006,10 +1036,108 @@ def test_assign_refusal_names_the_assignable_permission_not_the_role_names(api, 
 
 
 def test_review_record_permission_denied_names_the_assignment_requirement(api, capsys):
-    api.route("POST", f"{CASE_PATH}/reviews", status=403, body={"detail": "only an assigned reviewer can record a review"})
-    code, out, err = run(capsys, "case", "review", "record", CASE_ID, "--outcome", "fail", "--username", "alice")
+    api.route("PATCH", REVIEW_LAYER_PATH, status=403, body={"detail": "only an assigned reviewer can record a review"})
+    code, out, err = run(
+        capsys, "case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "fail", "--reason", "Why",
+        "--round", ROUND_ID, "--revision", "1", "--username", "alice",
+    )
     assert code == 1
     assert "assigned to the case" in err
+
+
+def test_review_record_without_round_uses_the_open_round_and_its_revision_is_the_one_given(api, capsys):
+    api.route("GET", REVIEW_LIST_PATH, body=[review_round_body(status="closed", revision=9),
+                                             review_round_body(revision=4)])
+    api.route("PATCH", REVIEW_LAYER_PATH, body=review_round_body(revision=5))
+    code, out, err = run(
+        capsys, "case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "pass",
+        "--revision", "4", "--username", "alice",
+    )
+    assert code == 0, err
+    assert "The round revision is now 5." in out
+    assert api.paths() == [
+        ("POST", "/api/v1/auth/token"), ("GET", "/api/v1/reviews"), ("PATCH", REVIEW_LAYER_PATH),
+        ("POST", "/api/v1/auth/logout"),
+    ]
+    assert api.calls[2]["json"] == {"outcome": "pass", "reason": None, "evidence_ids": [], "expected_revision": 4}
+
+
+def test_review_record_without_an_open_round_says_how_to_open_one(api, capsys):
+    api.route("GET", REVIEW_LIST_PATH, body=[review_round_body(status="closed")])
+    code, out, err = run(
+        capsys, "case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "pass",
+        "--revision", "1", "--username", "alice",
+    )
+    assert code == 1
+    assert "no open review round" in err
+    assert "review open" in err
+
+
+def test_review_record_refuses_a_non_pass_outcome_without_a_reason_before_any_request(api, capsys):
+    code, out, err = run(
+        capsys, "case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "fail",
+        "--round", ROUND_ID, "--revision", "1", "--username", "alice",
+    )
+    assert code == 2  # a usage error, as in the other argument checks
+    assert "a reason is required" in err
+    assert all(method != "PATCH" for method, _ in api.paths())
+
+
+def test_review_record_revision_conflict_reports_the_current_revision(api, capsys):
+    api.route(
+        "PATCH", REVIEW_LAYER_PATH, status=409,
+        body={"detail": {"status": "revision_conflict", "current_revision": 7}},
+    )
+    code, out, err = run(
+        capsys, "case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "pass",
+        "--round", ROUND_ID, "--revision", "3", "--username", "alice",
+    )
+    assert code == 1
+    assert out == ""
+    assert "nothing was saved" in err
+    assert "current revision is 7" in err
+    assert "--revision 7" in err
+
+
+def test_review_open_posts_the_case_with_an_idempotency_key_and_prints_the_round(api, capsys):
+    api.route("POST", "/api/v1/reviews", status=201, body=review_round_body(revision=1, model_set=False))
+    code, out, err = run(capsys, "case", "review", "open", CASE_ID, "--username", "alice")
+    assert code == 0, err
+    assert "Review round opened." in out
+    assert f"Round ID:   {ROUND_ID}" in out
+    assert "Revision:   1" in out
+    assert "not set" in out
+    assert api.calls[1]["json"] == {"case_id": CASE_ID}
+    sent = {name.lower(): value for name, value in api.calls[1]["headers"].items()}
+    assert len(sent["idempotency-key"]) >= 1
+
+
+def test_review_open_sends_the_key_given_so_a_retry_can_reuse_it(api, capsys):
+    api.route("POST", "/api/v1/reviews", status=201, body=review_round_body(revision=1, model_set=False))
+    code, out, err = run(
+        capsys, "case", "review", "open", CASE_ID, "--idempotency-key", "retry-1", "--username", "alice"
+    )
+    assert code == 0, err
+    sent = {name.lower(): value for name, value in api.calls[1]["headers"].items()}
+    assert sent["idempotency-key"] == "retry-1"
+
+
+def test_review_list_hides_a_reason_the_caller_may_not_read(api, capsys):
+    api.route("GET", REVIEW_LIST_PATH, body=[review_round_body(reason=None)])
+    route_me(api, ["cases:read_own"])
+    code, out, err = run(capsys, "case", "review", "list", CASE_ID, "--username", "alice")
+    assert code == 0, err
+    assert "Revision:   2" in out
+    assert "model" in out and "pass" in out
+    assert cli.NOT_VISIBLE_TEXT in out
+
+
+def test_review_list_shows_a_reason_to_the_full_view(api, capsys):
+    api.route("GET", REVIEW_LIST_PATH, body=[review_round_body(reason="Export missing")])
+    route_me(api, FULL_VIEW)
+    code, out, err = run(capsys, "case", "review", "list", CASE_ID, "--username", "alice")
+    assert code == 0, err
+    assert "Reason: Export missing" in out
 
 
 # --- case links -----------------------------------------------------------------------------------------------------

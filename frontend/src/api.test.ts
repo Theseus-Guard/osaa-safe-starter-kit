@@ -448,14 +448,45 @@ describe("case and evidence endpoints", () => {
     expect(bodyOf(0)).toEqual({ reason: "New evidence" });
   });
 
-  it("records a review with the outcome and the note", async () => {
+  it("opens a review round with a new Idempotency-Key", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(201, {}));
 
-    await api.createReview("case/1", { outcome: "insufficient_evidence", note: null });
+    await api.openReviewRound("case/1");
 
-    expect(urlOf(0)).toBe("/api/v1/cases/case%2F1/reviews");
+    expect(urlOf(0)).toBe("/api/v1/reviews");
     expect(methodOf(0)).toBe("POST");
-    expect(bodyOf(0)).toEqual({ outcome: "insufficient_evidence", note: null });
+    expect(bodyOf(0)).toEqual({ case_id: "case/1" });
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(new Headers(init.headers).get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("sets one review layer with its reason and the expected revision", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+
+    await api.setReviewLayer("round/1", "supply-chain", {
+      outcome: "fail",
+      reason: "Missing SBOM",
+      evidence_ids: [],
+      expected_revision: 4,
+    });
+
+    expect(urlOf(0)).toBe("/api/v1/reviews/round%2F1/layers/supply-chain");
+    expect(methodOf(0)).toBe("PATCH");
+    expect(bodyOf(0)).toEqual({ outcome: "fail", reason: "Missing SBOM", evidence_ids: [], expected_revision: 4 });
+  });
+
+  it("reads the stored current revision from a revision conflict", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(409, { detail: { status: "revision_conflict", current_revision: 7 } }),
+    );
+
+    const error = await api.setReviewLayer("round-1", "model", {
+      outcome: "pass",
+      expected_revision: 3,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(api.ApiError);
+    expect(error).toMatchObject({ status: 409, code: "revision_conflict", currentRevision: 7 });
   });
 
   it("sends the reason only for a not-applicable deadline", async () => {
@@ -570,12 +601,12 @@ describe("case and evidence endpoints", () => {
     });
   });
 
-  it("lists every review of a case", async () => {
+  it("lists the review rounds of a case", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, []));
 
-    await api.listReviews("case-1");
+    await api.listReviewRounds("case-1");
 
-    expect(urlOf(0)).toBe("/api/v1/cases/case-1/reviews");
+    expect(urlOf(0)).toBe("/api/v1/reviews?case_id=case-1");
     expect(methodOf(0)).toBe("GET");
   });
 

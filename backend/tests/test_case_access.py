@@ -17,21 +17,26 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from safe_kit import api, audit, auth, case_import, system_timezone, users
+from safe_kit import api, audit, auth, case_import, reviews_api, system_timezone, users
 from safe_kit.cases import (
     Assignment,
     Case,
     CaseScope,
     HistoryEntry,
     Outcome,
-    Review,
     closure_blockers,
     redact_history,
 )
 from safe_kit.db import connect
+from safe_kit.reviews import RoundOutcome
 from test_case_records_db import reporter_contact_granted_directly
 from safe_kit.rbac import ADMIN_REQUIRED_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, list_role_permissions, set_role_permissions
 from safe_kit.users import User
+
+
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
 
 REPORTER_ID = "11111111-1111-1111-1111-111111111111"
 TRIAGER_ID = "22222222-2222-2222-2222-222222222222"
@@ -248,12 +253,12 @@ def test_roles_without_case_permissions_get_403_on_every_case_endpoint(client, c
     assert client.get(f"/api/v1/cases/{CASE_ID}/history").status_code == 403
     assert client.post(f"/api/v1/cases/{CASE_ID}/assignments", json={"user_id": ASSIGNEE_ID}).status_code == 403
     assert client.post(f"/api/v1/cases/{CASE_ID}/close", json={"reason": "done"}).status_code == 403
-    assert client.post(f"/api/v1/cases/{CASE_ID}/reviews", json={"outcome": "pass"}).status_code == 403
+    assert client.post("/api/v1/reviews", headers=idem(), json={"case_id": CASE_ID}).status_code == 403
 
 
 def test_reporter_cannot_assign_review_close_or_change_deadlines(client, caller):
     assert client.post(f"/api/v1/cases/{CASE_ID}/assignments", json={"user_id": ASSIGNEE_ID}).status_code == 403
-    assert client.post(f"/api/v1/cases/{CASE_ID}/reviews", json={"outcome": "pass"}).status_code == 403
+    assert client.post("/api/v1/reviews", headers=idem(), json={"case_id": CASE_ID}).status_code == 403
     assert client.post(f"/api/v1/cases/{CASE_ID}/close", json={"reason": "done"}).status_code == 403
     response = client.patch(
         f"/api/v1/cases/{CASE_ID}/deadlines/{TASK_ID}", json={"status": "done"}
@@ -261,9 +266,12 @@ def test_reporter_cannot_assign_review_close_or_change_deadlines(client, caller)
     assert response.status_code == 403
 
 
-def test_triager_cannot_record_a_review(client, caller):
+def test_triager_cannot_open_a_review_round_or_set_a_layer(client, caller):
     as_role(caller, TRIAGER_ID, "triager")
-    assert client.post(f"/api/v1/cases/{CASE_ID}/reviews", json={"outcome": "pass"}).status_code == 403
+    assert client.post("/api/v1/reviews", headers=idem(), json={"case_id": CASE_ID}).status_code == 403
+    round_id = str(uuid.uuid4())
+    body = {"outcome": "pass", "expected_revision": 1}
+    assert client.patch(f"/api/v1/reviews/{round_id}/layers/model", json=body).status_code == 403
 
 
 @pytest.mark.parametrize(
@@ -320,37 +328,52 @@ def test_unassign_success_is_204(client, caller, monkeypatch):
     assert client.delete(f"/api/v1/cases/{CASE_ID}/assignments/{ASSIGNEE_ID}").status_code == 204
 
 
-def test_reviewer_review_outcome_must_be_a_known_value(client, caller):
+def test_layer_outcome_must_be_a_known_value(client, caller):
     as_role(caller, REVIEWER_ID, "reviewer")
-    assert client.post(f"/api/v1/cases/{CASE_ID}/reviews", json={"outcome": "maybe"}).status_code == 422
+    round_id = str(uuid.uuid4())
+    body = {"outcome": "maybe", "expected_revision": 1}
+    assert client.patch(f"/api/v1/reviews/{round_id}/layers/model", json=body).status_code == 422
 
 
-def test_review_note_is_limited_to_1000_characters(client, caller):
+def test_layer_reason_is_limited_to_1000_characters(client, caller):
     as_role(caller, REVIEWER_ID, "reviewer")
-    too_long = client.post(f"/api/v1/cases/{CASE_ID}/reviews", json={"outcome": "pass", "note": "x" * 1001})
-    assert too_long.status_code == 422
+    round_id = str(uuid.uuid4())
+    body = {"outcome": "pass", "reason": "x" * 1001, "expected_revision": 1}
+    assert client.patch(f"/api/v1/reviews/{round_id}/layers/model", json=body).status_code == 422
 
 
-def test_review_refusals_and_success(client, caller, monkeypatch):
+def test_layer_refusals_map_to_their_status_codes(client, caller, monkeypatch):
     as_role(caller, REVIEWER_ID, "reviewer")
-    monkeypatch.setattr(api, "record_review", lambda case_id, outcome, note, scope: (Outcome.NOT_ASSIGNED, None))
-    response = client.post(f"/api/v1/cases/{CASE_ID}/reviews", json={"outcome": "pass"})
+    round_id = str(uuid.uuid4())
+    body = {"outcome": "pass", "expected_revision": 1}
+    url = f"/api/v1/reviews/{round_id}/layers/model"
+
+    monkeypatch.setattr(reviews_api, "set_layer", lambda *args: (RoundOutcome.NOT_ASSIGNED, None))
+    response = client.patch(url, json=body)
     assert response.status_code == 403
     assert response.json() == {"detail": "only an assigned reviewer can record a review"}
 
-    monkeypatch.setattr(api, "record_review", lambda case_id, outcome, note, scope: (Outcome.CLOSED, None))
-    assert client.post(f"/api/v1/cases/{CASE_ID}/reviews", json={"outcome": "pass"}).json() == {"detail": "case is closed"}
+    monkeypatch.setattr(reviews_api, "set_layer", lambda *args: (RoundOutcome.CLOSED, None))
+    assert client.patch(url, json=body).json() == {"detail": "case is closed"}
 
+    monkeypatch.setattr(reviews_api, "set_layer", lambda *args: (RoundOutcome.NOT_FOUND, None))
+    assert client.patch(url, json=body).json() == {"detail": "review not found"}
+
+
+def test_layer_blank_reason_is_stored_as_no_reason(client, caller, monkeypatch):
+    as_role(caller, REVIEWER_ID, "reviewer")
     seen = {}
 
-    def fake_review(case_id, outcome, note, scope):
-        seen["note"] = note
-        return Outcome.OK, Review(id="r1", case_id=case_id, outcome=outcome, note=note, created_at=NOW)
+    def fake_set_layer(round_id, layer, outcome, reason, evidence_ids, expected_revision, scope):
+        seen["reason"] = reason
+        return RoundOutcome.NOT_FOUND, None
 
-    monkeypatch.setattr(api, "record_review", fake_review)
-    response = client.post(f"/api/v1/cases/{CASE_ID}/reviews", json={"outcome": "pass", "note": "   "})
-    assert response.status_code == 201
-    assert seen["note"] is None  # a blank note is stored as no note
+    monkeypatch.setattr(reviews_api, "set_layer", fake_set_layer)
+    client.patch(
+        f"/api/v1/reviews/{uuid.uuid4()}/layers/model",
+        json={"outcome": "pass", "reason": "   ", "expected_revision": 1},
+    )
+    assert seen["reason"] is None  # a pass needs no reason, and a blank one is stored as none
 
 
 def test_closure_refusal_lists_the_blockers(client, caller, monkeypatch):
@@ -681,19 +704,30 @@ def test_inactive_and_deleted_users_cannot_be_assigned(db_client, people):
         assert response.json() == {"detail": "assignee is not an active user"}
 
 
+def open_and_set_review(client, case_id: str, outcome: str = "pass", reason: str | None = None):
+    """Open a review round and set its model layer. Closing a case needs at least one layer outcome."""
+    opened = client.post("/api/v1/reviews", headers=idem(), json={"case_id": case_id})
+    assert opened.status_code == 201, opened.text
+    review = opened.json()
+    body = {"outcome": outcome, "expected_revision": review["revision"]}
+    if reason is not None:
+        body["reason"] = reason
+    return client.patch(f"/api/v1/reviews/{review['id']}/layers/model", json=body)
+
+
 @requires_database
 def test_review_needs_an_assignment_and_the_reviewer_role(db_client, people):
     case_id = create_case_via_api(db_client, people["reporter"])
-    body = {"outcome": "pass", "note": "Looks right"}
+    body = {"case_id": case_id}
     # Not assigned: the reviewer cannot see the case, so the answer is not found.
-    assert db_client(people["reviewer"]).post(f"/api/v1/cases/{case_id}/reviews", json=body).status_code == 404
+    assert db_client(people["reviewer"]).post("/api/v1/reviews", headers=idem(), json=body).status_code == 404
     # The triager has no reviews:write permission.
-    assert db_client(people["triager"]).post(f"/api/v1/cases/{case_id}/reviews", json=body).status_code == 403
+    assert db_client(people["triager"]).post("/api/v1/reviews", headers=idem(), json=body).status_code == 403
 
     db_client(people["triager"]).post(
         f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]}
     )
-    assert db_client(people["reviewer"]).post(f"/api/v1/cases/{case_id}/reviews", json=body).status_code == 201
+    assert db_client(people["reviewer"]).post("/api/v1/reviews", headers=idem(), json=body).status_code == 201
 
 
 @requires_database
@@ -708,9 +742,7 @@ def test_close_is_refused_without_review_and_with_open_tasks(db_client, people):
     assert "no review is recorded" in refused.json()["detail"]
     assert "deadline task affected_customers is open" in refused.json()["detail"]
 
-    db_client(people["reviewer"]).post(
-        f"/api/v1/cases/{case_id}/reviews", json={"outcome": "pass", "note": "Reviewed"}
-    )
+    open_and_set_review(db_client(people["reviewer"]), case_id, "pass")
     refused = triager.post(f"/api/v1/cases/{case_id}/close", json={"reason": "all done"})
     assert refused.status_code == 409
     assert "no review" not in refused.json()["detail"]
@@ -722,7 +754,7 @@ def test_close_is_refused_with_an_open_weekly_update(db_client, people):
     case_id = create_case_via_api(db_client, people["reporter"])
     triager = db_client(people["triager"])
     triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]})
-    db_client(people["reviewer"]).post(f"/api/v1/cases/{case_id}/reviews", json={"outcome": "pass"})
+    open_and_set_review(db_client(people["reviewer"]), case_id, "pass")
     tasks = task_ids(db_client, people["triager"], case_id)
     for kind, task_id in tasks.items():
         response = triager.patch(f"/api/v1/cases/{case_id}/deadlines/{task_id}", json={"status": "done"})
@@ -744,7 +776,7 @@ def test_close_succeeds_after_review_and_tasks_done_or_not_applicable(db_client,
     investigator = db_client(people["investigator"])
     triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]})
     triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["investigator"]})
-    db_client(people["reviewer"]).post(f"/api/v1/cases/{case_id}/reviews", json={"outcome": "not_applicable"})
+    open_and_set_review(db_client(people["reviewer"]), case_id, "not_applicable", reason="Not applicable to this case")
 
     tasks = task_ids(db_client, people["triager"], case_id)
     # An assigned investigator may mark tasks done, but not not_applicable.
@@ -778,7 +810,7 @@ def test_closed_case_refuses_changes_and_reopen_is_audited(db_client, people):
     case_id = create_case_via_api(db_client, people["reporter"])
     triager = db_client(people["triager"])
     triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]})
-    db_client(people["reviewer"]).post(f"/api/v1/cases/{case_id}/reviews", json={"outcome": "pass"})
+    open_and_set_review(db_client(people["reviewer"]), case_id, "pass")
     tasks = task_ids(db_client, people["triager"], case_id)
     for kind, task_id in tasks.items():
         triager.patch(
@@ -791,9 +823,9 @@ def test_closed_case_refuses_changes_and_reopen_is_audited(db_client, people):
     url = f"/api/v1/cases/{case_id}/assignments"
     assert triager.post(url, json={"user_id": new_investigator}).json() == {"detail": "case is closed"}
     assert triager.delete(f"{url}/{people['reviewer']}").json() == {"detail": "case is closed"}
-    assert db_client(people["reviewer"]).post(
-        f"/api/v1/cases/{case_id}/reviews", json={"outcome": "fail"}
-    ).json() == {"detail": "case is closed"}
+    assert db_client(people["reviewer"]).post("/api/v1/reviews", headers=idem(), json={"case_id": case_id}).json() == {
+        "detail": "case is closed"
+    }
     first_task = next(iter(tasks.values()))
     assert triager.patch(
         f"/api/v1/cases/{case_id}/deadlines/{first_task}", json={"status": "open"}
@@ -824,16 +856,14 @@ def test_history_shows_details_only_to_the_triager(db_client, people):
     case_id = create_case_via_api(db_client, people["reporter"])
     triager = db_client(people["triager"])
     triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]})
-    db_client(people["reviewer"]).post(
-        f"/api/v1/cases/{case_id}/reviews", json={"outcome": "pass", "note": "Confidential reviewer note"}
-    )
+    open_and_set_review(db_client(people["reviewer"]), case_id, "fail", reason="Confidential reviewer note")
 
     full = triager.get(f"/api/v1/cases/{case_id}/history").json()
     stripped = db_client(people["reporter"]).get(f"/api/v1/cases/{case_id}/history").json()
 
     actions = {item["action"] for item in full["items"]}
-    assert {audit.CASE_CREATE, audit.CASE_ASSIGNMENT_ADD, audit.CASE_REVIEW} <= actions
-    assert full["items"][0]["action"] == audit.CASE_REVIEW  # newest first
+    assert {audit.CASE_CREATE, audit.CASE_ASSIGNMENT_ADD, audit.CASE_REVIEW_ROUND_OPENED, audit.CASE_REVIEW_LAYER_SET} <= actions
+    assert full["items"][0]["action"] == audit.CASE_REVIEW_LAYER_SET  # newest first
     assert all(item["details"] is not None for item in full["items"])
     assert stripped["total"] == full["total"]
     assert all(item["details"] is None and item["actor_id"] is None for item in stripped["items"])
@@ -849,7 +879,7 @@ def test_close_and_reopen_reasons_are_stored_as_text(db_client, people):
     case_id = create_case_via_api(db_client, people["reporter"])
     triager = db_client(people["triager"])
     triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]})
-    db_client(people["reviewer"]).post(f"/api/v1/cases/{case_id}/reviews", json={"outcome": "pass"})
+    open_and_set_review(db_client(people["reviewer"]), case_id, "pass")
     for kind, task_id in task_ids(db_client, people["triager"], case_id).items():
         triager.patch(
             f"/api/v1/cases/{case_id}/deadlines/{task_id}",
@@ -962,8 +992,8 @@ def test_unassigned_investigator_and_reviewer_get_the_same_404_as_a_missing_case
 def test_unassigned_reviewer_gets_404_not_403_when_recording_a_review(db_client, people):
     case_id = create_case_via_api(db_client, people["reporter"])
     reviewer = db_client(people["reviewer"])
-    hidden = reviewer.post(f"/api/v1/cases/{case_id}/reviews", json={"outcome": "pass"})
-    absent = reviewer.post(f"/api/v1/cases/{uuid.uuid4()}/reviews", json={"outcome": "pass"})
+    hidden = reviewer.post("/api/v1/reviews", headers=idem(), json={"case_id": case_id})
+    absent = reviewer.post("/api/v1/reviews", headers=idem(), json={"case_id": str(uuid.uuid4())})
     # 403 would say "only an assigned reviewer" and so reveal that the case exists.
     assert hidden.status_code == absent.status_code == 404
     assert hidden.json() == absent.json()

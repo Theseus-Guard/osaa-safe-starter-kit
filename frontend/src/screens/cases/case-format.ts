@@ -13,6 +13,8 @@ const HISTORY_ACTION_LABELS: Record<string, string> = {
   "case.assignment_added": "Assignment added",
   "case.assignment_removed": "Assignment removed",
   "case.review_recorded": "Review recorded",
+  "case.review_round_opened": "Review round opened",
+  "case.review_layer_set": "Review layer set",
   "case.deadline_updated": "Deadline updated",
   "evidence.uploaded": "Evidence uploaded",
   "evidence.downloaded": "Evidence downloaded",

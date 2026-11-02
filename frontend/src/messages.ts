@@ -41,6 +41,13 @@ const MESSAGES: Record<string, string> = {
   reporter_contact_window_closed:
     "The reporter contact can no longer be read. It is available while the case is open and for 72 hours after it was closed.",
   "only an assigned reviewer can record a review": "Only an assigned reviewer can record a review on this case.",
+  "review round is closed": "This review is closed, so its layers cannot change.",
+  "review not found": "That review does not exist, or your account cannot see its case.",
+  revision_conflict: "The review was changed by someone else. Reload it, check the current revision and save again.",
+  "evidence is not available on this case": "One of the evidence items is not available on this case.",
+  idempotency_key_required: "The request needs an Idempotency-Key. Try again.",
+  idempotency_key_invalid: "The Idempotency-Key is not valid. Try again.",
+  idempotency_key_reused: "This request key was already used for a different request. Try again with a new request.",
   "deadline task not found": "That deadline task does not exist on this case.",
   "legal duty not found": "That legal duty does not exist on this case.",
   "only a triager may mark a deadline not applicable": "Only a triager can mark a deadline not applicable.",

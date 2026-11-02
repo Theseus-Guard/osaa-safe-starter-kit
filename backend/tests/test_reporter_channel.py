@@ -24,6 +24,11 @@ from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS, list_role_permissions, set_r
 from safe_kit.reporter_channel import REPORTER_CONTACT_READ, ContactOutcome, hide_reporter
 from safe_kit.users import User
 
+
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
+
 REPORTER_ID = "11111111-1111-1111-1111-111111111111"
 TRIAGER_ID = "22222222-2222-2222-2222-222222222222"
 REVIEWER_ID = "44444444-4444-4444-4444-444444444444"
@@ -439,8 +444,13 @@ def close_reporter_case(db_client, people, case_id: str) -> None:
     with role_holds("triager", "reporter_contact:read"):
         assigned = triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]})
     assert assigned.status_code == 201, assigned.text
-    reviewed = db_client(people["reviewer"]).post(f"/api/v1/cases/{case_id}/reviews", json={"outcome": "pass"})
-    assert reviewed.status_code == 201, reviewed.text
+    opened = db_client(people["reviewer"]).post("/api/v1/reviews", headers=idem(), json={"case_id": case_id})
+    assert opened.status_code == 201, opened.text
+    reviewed = db_client(people["reviewer"]).patch(
+        f"/api/v1/reviews/{opened.json()['id']}/layers/model",
+        json={"outcome": "pass", "expected_revision": opened.json()["revision"]},
+    )
+    assert reviewed.status_code == 200, reviewed.text
     body = triager.get(f"/api/v1/cases/{case_id}").json()
     for task in body["deadlines"]:
         patched = triager.patch(f"/api/v1/cases/{case_id}/deadlines/{task['id']}", json={"status": "done"})

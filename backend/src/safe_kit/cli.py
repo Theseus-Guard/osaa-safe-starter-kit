@@ -29,6 +29,21 @@ MAX_EVIDENCE_FILE_BYTES = 50 * 1024 * 1024
 
 # The values the API accepts for the case update commands. The API checks them again.
 REVIEW_OUTCOMES = ("pass", "fail", "insufficient_evidence", "not_applicable")
+# The eleven layers of a review round, as the API names them.
+REVIEW_LAYERS = (
+    "model",
+    "instructions",
+    "safeguards",
+    "tools",
+    "environment",
+    "monitoring",
+    "human-operations",
+    "supply-chain",
+    "serving-path",
+    "authorization-and-commitment",
+    "workflow-composition",
+)
+REVIEW_REVISION_CONFLICT = "revision_conflict"
 CLASSIFICATION_TRIGGERS = (
     "unauthorized_access_or_change",
     "boundary_escape",
@@ -152,16 +167,17 @@ def _call(
     raw_body: bytes | None = None,
     content_type: str | None = None,
     messages: dict[int, str] | None = None,
+    extra_headers: dict[str, str] | None = None,
 ) -> bytes:
     """One API request. Returns the raw response body. Raises RequestFailed for any non-2xx or transport error.
 
     payload is sent as JSON. raw_body is sent unchanged with content_type (multipart uploads). messages overrides
-    the default text for the status codes it lists.
+    the default text for the status codes it lists. extra_headers adds headers such as Idempotency-Key.
     """
     url = base_url + path
     if query:
         url += "?" + urllib.parse.urlencode(query)
-    headers = {"Accept": "application/json"}
+    headers = {"Accept": "application/json", **(extra_headers or {})}
     data = None
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
@@ -596,13 +612,42 @@ def _render_case_change(heading: str):
     return render
 
 
-def _render_review(raw: bytes) -> None:
+def _print_review_round(review: dict, full_view: bool) -> None:
+    """One review round: its id, state and revision, then one line per layer. Reasons are shown when the caller may read them."""
+    print(f"  Round ID:   {review['id']}")
+    print(f"  Revision:   {review['revision']}")
+    print(f"  State:      {review['status']}")
+    for layer in review["layers"]:
+        print(f"  {layer['layer']:<30} {layer['outcome'] or 'not set'}")
+        if layer["outcome"] is None:
+            continue
+        print(f"    Reason: {_free_text(layer['reason'], full_view)}")
+
+
+def _render_review_opened(raw: bytes) -> None:
+    print("Review round opened. Every layer is not set.")
+    _print_review_round(_json_object(raw), full_view=True)
+
+
+def _render_review_list(raw: bytes, full_view: bool) -> None:
+    rounds = json.loads(raw)
+    if not isinstance(rounds, list):
+        raise RequestFailed("unexpected response from the server")
+    if not rounds:
+        print("No review round has been opened for this case.")
+        return
+    for review in rounds:
+        _print_review_round(review, full_view)
+        print()
+
+
+def _render_review_saved(raw: bytes) -> None:
     review = _json_object(raw)
-    print("Review recorded.")
-    print(f"  ID:               {review['id']}")
-    print(f"  Outcome:          {review['outcome']}")
-    print(f"  Note:             {review['note'] or '-'}")
-    print(f"  Recorded (UTC):   {review['created_at']}")
+    print(f"Review layer saved. The round revision is now {review['revision']}.")
+    print(f"  Round ID:   {review['id']}")
+    for layer in review["layers"]:
+        if layer["outcome"] is not None:
+            print(f"  {layer['layer']:<30} {layer['outcome']}")
 
 
 def _render_assignment(raw: bytes) -> None:
@@ -679,9 +724,12 @@ LINK_REMOVE_MESSAGES = {
     409: "a case is closed, so its links cannot change",
 }
 REVIEW_MESSAGES = {
-    403: "forbidden: recording a review needs reviews:write, and you must be assigned to the case",
+    403: "forbidden: changing a review needs reviews:write, and you must be assigned to the case",
+    404: "case or review round not found",
+    409: "the case or its review round is closed, so no review can change",
+}
+REVIEW_READ_MESSAGES = {
     404: "case not found",
-    409: "the case is closed, so no review can be recorded",
 }
 CLASSIFICATION_MESSAGES = {
     403: "forbidden: saving the classification needs cases:triage and the full case view (cases:read_all)",
@@ -826,17 +874,101 @@ def _case_link_remove(base_url: str, args: argparse.Namespace) -> None:
     )
 
 
-def _review_record(base_url: str, args: argparse.Namespace) -> None:
+def _review_open(base_url: str, args: argparse.Namespace) -> None:
     case_id = _case_id_arg(args.case_id)
-    _write_case(
+    # The key makes a repeated run safe: the same key and the same case return the first round. Pass the key of an
+    # earlier run to retry it; a new run gets a new key.
+    key = args.idempotency_key or str(uuid.uuid4())
+
+    def action(base: str, token: str) -> None:
+        raw = _call(
+            base,
+            "POST",
+            "/api/v1/reviews",
+            token=token,
+            payload={"case_id": case_id},
+            messages=REVIEW_MESSAGES,
+            extra_headers={"Idempotency-Key": key},
+        )
+        if args.json:
+            _print_json(raw)
+        else:
+            _render_review_opened(raw)
+
+    _with_session(base_url, args, action)
+
+
+def _review_list(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+    _case_read(
         base_url,
         args,
-        "POST",
-        f"/api/v1/cases/{case_id}/reviews",
-        payload={"outcome": args.outcome, "note": args.note},
-        messages=REVIEW_MESSAGES,
-        render=_render_review,
+        f"/api/v1/reviews?case_id={case_id}",
+        REVIEW_READ_MESSAGES,
+        _render_review_list,
     )
+
+
+def _review_conflict_revision(error: RequestFailed) -> int | None:
+    """The current round revision from a stale-write 409, or None for any other failure."""
+    detail = error.detail
+    if error.status != 409 or not isinstance(detail, dict) or detail.get("status") != REVIEW_REVISION_CONFLICT:
+        return None
+    revision = detail.get("current_revision")
+    if isinstance(revision, int) and not isinstance(revision, bool):
+        return revision
+    return None
+
+
+def _review_record(base_url: str, args: argparse.Namespace) -> None:
+    """Set one layer of a review round. Without --round, the open round of the case is used."""
+    case_id = _case_id_arg(args.case_id)
+    if args.revision < 1:
+        raise UsageError("--revision must be 1 or more. Read it with: case review list CASE_ID")
+    reason = args.reason if args.reason is not None else args.note
+    if args.outcome != "pass" and (reason is None or not reason.strip()):
+        raise UsageError("a reason is required for this outcome: pass --reason TEXT")
+    round_id = _case_id_arg(args.round) if args.round is not None else None
+    evidence_ids = [_case_id_arg(item) for item in args.evidence]
+    payload = {
+        "outcome": args.outcome,
+        "reason": reason,
+        "evidence_ids": evidence_ids,
+        "expected_revision": args.revision,
+    }
+
+    def action(base: str, token: str) -> None:
+        target = round_id
+        if target is None:
+            rounds = json.loads(_call(base, "GET", f"/api/v1/reviews?case_id={case_id}", token=token, messages=REVIEW_READ_MESSAGES))
+            open_rounds = [item for item in rounds if item["status"] == "open"]
+            if not open_rounds:
+                raise RequestFailed("this case has no open review round. Open one with: case review open CASE_ID")
+            target = open_rounds[0]["id"]
+        try:
+            raw = _call(
+                base,
+                "PATCH",
+                f"/api/v1/reviews/{target}/layers/{args.layer}",
+                token=token,
+                payload=payload,
+                messages=REVIEW_MESSAGES,
+            )
+        except RequestFailed as error:
+            current = _review_conflict_revision(error)
+            if current is None:
+                raise
+            # Nothing was saved. The command never retries: the user re-reads the round and runs it again.
+            raise RequestFailed(
+                f"the review changed, so nothing was saved. The current revision is {current}. Run "
+                f"'case review list {case_id}' to check it, then run this command again with --revision {current}"
+            ) from None
+        if args.json:
+            _print_json(raw)
+        else:
+            _render_review_saved(raw)
+
+    _with_session(base_url, args, action)
 
 
 def _classification_conflict_version(error: RequestFailed) -> int | None:
@@ -1277,12 +1409,44 @@ def _add_case_update_commands(case_commands) -> None:
     _add_auth_options(link_remove, json_output=False)
     link_remove.set_defaults(handler=_case_link_remove)
 
-    review = case_commands.add_parser("review", help="Record a review of a case")
+    review = case_commands.add_parser("review", help="Review rounds of a case: open, list, and record layer outcomes")
     review_commands = review.add_subparsers(dest="review_command", required=True)
-    review_record = review_commands.add_parser("record", help="Record a review outcome. You must be assigned to the case")
+    review_open = review_commands.add_parser(
+        "open", help="Open a review round with all eleven layers not set. You must be assigned to the case"
+    )
+    review_open.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    review_open.add_argument(
+        "--idempotency-key",
+        metavar="KEY",
+        help="Idempotency-Key, 1 to 128 visible ASCII characters. Default: a new key for this run. "
+        "Reuse the key of an earlier run to retry it safely",
+    )
+    _add_auth_options(review_open)
+    review_open.set_defaults(handler=_review_open)
+    review_list = review_commands.add_parser("list", help="List the review rounds of one of your cases, with revisions")
+    review_list.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    _add_auth_options(review_list)
+    review_list.set_defaults(handler=_review_list)
+    review_record = review_commands.add_parser(
+        "record", help="Set the outcome of one layer of a review round. You must be assigned to the case"
+    )
     review_record.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
-    review_record.add_argument("--outcome", required=True, choices=REVIEW_OUTCOMES, help="Review outcome")
-    review_record.add_argument("--note", help="Optional note, up to 1000 characters")
+    review_record.add_argument("--layer", required=True, choices=REVIEW_LAYERS, help="Layer to set")
+    review_record.add_argument("--outcome", required=True, choices=REVIEW_OUTCOMES, help="Layer outcome")
+    review_record.add_argument(
+        "--reason", help="Reason, up to 1000 characters. Required for every outcome except pass"
+    )
+    review_record.add_argument("--note", help="Same as --reason, kept for existing scripts")
+    review_record.add_argument(
+        "--evidence", action="append", default=[], metavar="EVIDENCE_ID",
+        help="Evidence item ID (UUID) of this case. Repeat for more than one",
+    )
+    review_record.add_argument(
+        "--round", metavar="ROUND_ID", help="Review round ID (UUID). Default: the open round of the case"
+    )
+    review_record.add_argument(
+        "--revision", type=int, required=True, help="Revision of the round you read with 'review list'"
+    )
     _add_auth_options(review_record)
     review_record.set_defaults(handler=_review_record)
 

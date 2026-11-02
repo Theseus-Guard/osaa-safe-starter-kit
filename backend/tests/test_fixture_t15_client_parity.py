@@ -24,9 +24,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from safe_kit import api, auth, cases, cli, migrate, users
+from safe_kit import api, auth, cases, cli, migrate, reviews, users
 from safe_kit.cases import CaseScope, Outcome
 from safe_kit.db import connect
+from safe_kit.reviews import RoundOutcome
 from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS
 from safe_kit.users import User
 from test_cases import OTHER_ID, REPORTER_ID, caller, make_user, valid_body  # noqa: F401 - shared case fixtures
@@ -206,9 +207,16 @@ def test_closed_case_is_not_served_as_open_after_the_close(triager_api):
     with connect() as conn:
         # Test setup: close the deadline tasks and record the one review that closure requires.
         conn.execute("UPDATE deadline_tasks SET status = 'done' WHERE case_id = %s", (case.id,))
-        conn.execute(
-            "INSERT INTO case_reviews (case_id, reviewer_id, outcome, note) VALUES (%s, %s, 'pass', NULL)",
+        round_id = conn.execute(
+            "INSERT INTO review_rounds (case_id, opened_by) VALUES (%s, %s) RETURNING id",
             (case.id, triager_id),
+        ).fetchone()[0]
+        conn.execute(
+            """
+            INSERT INTO review_layers (round_id, layer, outcome, set_by, set_at)
+            VALUES (%s, 'model', 'pass', %s, now())
+            """,
+            (round_id, triager_id),
         )
     assert cases.close_case(case.id, "closed for the fixture", scope) == (Outcome.OK, [])
 
@@ -221,5 +229,5 @@ def test_closed_case_is_not_served_as_open_after_the_close(triager_api):
     assert shown.json()["closed_at"] is not None
     assert [item["status"] for item in listed.json()["items"] if item["id"] == case.id] == ["closed"]
     # A late review or a second close is refused with the closed state, not accepted against a stale open case.
-    assert cases.record_review(case.id, "pass", None, scope)[0] is Outcome.CLOSED
+    assert reviews.open_round(case.id, scope)[0] is RoundOutcome.CLOSED
     assert client.post(f"/api/v1/cases/{case.id}/close", json={"reason": "again"}).status_code == 409

@@ -6,7 +6,6 @@ import {
   Classification,
   PreliminaryReport,
   closeCase,
-  createReview,
   getCase,
   getCaseHistory,
   getClassification,
@@ -17,7 +16,8 @@ import {
   listEvidence,
   listImpacts,
   listLegalDuties,
-  listReviews,
+  listReviewRounds,
+  openReviewRound,
 } from "../../api";
 import { CaseDetailPage } from "./CaseDetailPage";
 
@@ -27,10 +27,10 @@ vi.mock("../../api", async (importOriginal) => {
     ...actual,
     getCase: vi.fn(),
     closeCase: vi.fn(),
-    createReview: vi.fn(),
+    openReviewRound: vi.fn(),
     listAssignments: vi.fn(),
     listEvidence: vi.fn(),
-    listReviews: vi.fn(),
+    listReviewRounds: vi.fn(),
     getCaseHistory: vi.fn(),
     listAwarenessEvents: vi.fn(),
     listImpacts: vi.fn(),
@@ -49,10 +49,10 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const get = vi.mocked(getCase);
 const close = vi.mocked(closeCase);
-const review = vi.mocked(createReview);
+const open = vi.mocked(openReviewRound);
 const assignments = vi.mocked(listAssignments);
 const evidence = vi.mocked(listEvidence);
-const reviews = vi.mocked(listReviews);
+const reviews = vi.mocked(listReviewRounds);
 const history = vi.mocked(getCaseHistory);
 const awarenessEvents = vi.mocked(listAwarenessEvents);
 const impacts = vi.mocked(listImpacts);
@@ -146,7 +146,7 @@ const OPEN_CASE: CaseDetail = {
 beforeEach(() => {
   get.mockReset().mockResolvedValue(OPEN_CASE);
   close.mockReset();
-  review.mockReset();
+  open.mockReset();
   assignments.mockReset().mockResolvedValue([]);
   evidence.mockReset().mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
   reviews.mockReset().mockResolvedValue([]);
@@ -248,42 +248,46 @@ describe("CaseDetailPage", () => {
     render(<CaseDetailPage caseId="case-1" permissions={REVIEWER} />);
 
     expect(await screen.findByText("Review", { exact: true })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Record review" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Open review round" })).toBeInTheDocument();
   });
 
-  it("lists the reviews but hides Record review without reviews:write", async () => {
+  it("lists the review rounds but hides the open button without reviews:write", async () => {
     render(<CaseDetailPage caseId="case-1" permissions={FULL_ACCESS} />);
 
     expect(await screen.findByText("Review", { exact: true })).toBeInTheDocument();
-    expect(await screen.findByText("No review has been recorded for this case yet.")).toBeInTheDocument();
+    expect(await screen.findByText("No review round has been opened for this case yet.")).toBeInTheDocument();
     expect(reviews).toHaveBeenCalledWith("case-1");
-    expect(screen.queryByRole("button", { name: "Record review" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open review round" })).not.toBeInTheDocument();
   });
 
-  it("shows the reviews of the case to a reporter who can read it", async () => {
+  it("shows the review rounds of the case to a reporter who can read it", async () => {
     render(<CaseDetailPage caseId="case-1" permissions={REPORTER} />);
 
     expect(await screen.findByText("Review", { exact: true })).toBeInTheDocument();
-    expect(await screen.findByText("No review has been recorded for this case yet.")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Record review" })).not.toBeInTheDocument();
+    expect(await screen.findByText("No review round has been opened for this case yet.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open review round" })).not.toBeInTheDocument();
   });
 
-  it("reloads the history after a review is recorded", async () => {
-    review.mockResolvedValue({ id: "review-1", case_id: "case-1", outcome: "pass", note: null });
+  it("reloads the history after a review round is opened", async () => {
+    open.mockResolvedValue({
+      id: "round-1",
+      case_id: "case-1",
+      status: "open",
+      revision: 1,
+      opened_at: "2026-11-01T09:00:00Z",
+      closed_at: null,
+      layers: [],
+    });
     const user = userEvent.setup();
     render(<CaseDetailPage caseId="case-1" permissions={REVIEWER} />);
 
     await screen.findByText("Example incident");
     expect(history).toHaveBeenCalledTimes(1);
 
-    await user.click(await screen.findByRole("button", { name: "Record review" }));
-    const dialog = await screen.findByRole("dialog");
-    await user.click(within(dialog).getByLabelText("Outcome"));
-    await user.click(await screen.findByRole("option", { name: "Pass" }));
-    await user.click(within(dialog).getByRole("button", { name: "Submit review" }));
+    await user.click(await screen.findByRole("button", { name: "Open review round" }));
 
     await waitFor(() => expect(history).toHaveBeenCalledTimes(2));
-    expect(review).toHaveBeenCalledWith("case-1", { outcome: "pass", note: null });
+    expect(open).toHaveBeenCalledWith("case-1");
   });
 
   it("shows the case record sections to a reporter who can read the case, without the report", async () => {
