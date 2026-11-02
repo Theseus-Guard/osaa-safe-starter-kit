@@ -261,8 +261,7 @@ def test_case_is_stored_with_its_deadline_tasks_and_audit_row():
         "preliminary_public_report": "open",
         "remediation_status": "open",
     }
-    assert any(item.id == case.id for item in cases.list_visible_cases(CaseScope(owner, read_own=True), 50, 0))
-    assert cases.count_visible_cases(CaseScope(owner, read_own=True)) >= 1
+    assert any(item.id == case.id for item in cases.list_visible_cases(CaseScope(owner, read_own=True), 50))
     assert audit_rows(case.id, audit.CASE_CREATE) == [
         (
             owner,
@@ -280,7 +279,7 @@ def test_other_users_cannot_find_a_case(clean_outbox):
     stranger = new_user("reporter")
     case = cases.create_case("Owner only", datetime.now(UTC) - timedelta(hours=1), created_by=owner)
     assert cases.find_visible_case(case.id, CaseScope(stranger, read_own=True)) is None
-    assert all(item.id != case.id for item in cases.list_visible_cases(CaseScope(stranger, read_own=True), 50, 0))
+    assert all(item.id != case.id for item in cases.list_visible_cases(CaseScope(stranger, read_own=True), 50))
 
 
 def test_soft_deleted_case_is_not_found():

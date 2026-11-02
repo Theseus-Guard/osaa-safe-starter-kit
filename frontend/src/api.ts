@@ -433,9 +433,8 @@ export interface CaseDetail extends RiskFields {
 
 export interface CasePage {
   items: CaseSummary[];
-  total: number;
-  limit: number;
-  offset: number;
+  // Pass this as the cursor of the next call. Null when there is no further page.
+  next_cursor: string | null;
 }
 
 export interface CaseCreateBody {
@@ -451,11 +450,13 @@ export interface ReportCreateBody extends CaseCreateBody {
 
 // q matches the case reference (partial, case-insensitive) or the case UUID prefix. Omitted or blank q lists every visible case.
 // status narrows the list to one case status. Omitted means every status.
-export function listCases(limit: number, offset: number, q?: string, status?: CaseStatus): Promise<CasePage> {
+// cursor is the next_cursor of the previous page. Omitted means the first page.
+export function listCases(limit: number, cursor?: string, q?: string, status?: CaseStatus): Promise<CasePage> {
+  const position = cursor === undefined ? "" : `&cursor=${encodeURIComponent(cursor)}`;
   const term = q?.trim() ?? "";
   const search = term === "" ? "" : `&q=${encodeURIComponent(term)}`;
   const filter = status === undefined ? "" : `&status=${encodeURIComponent(status)}`;
-  return request<CasePage>(`/cases?limit=${limit}&offset=${offset}${search}${filter}`);
+  return request<CasePage>(`/cases?limit=${limit}${position}${search}${filter}`);
 }
 
 export function getCase(caseId: string): Promise<CaseDetail> {

@@ -693,37 +693,42 @@ def _updated_at_params(include_evidence: bool) -> tuple[Any, ...]:
 def list_visible_cases(
     scope: CaseScope,
     limit: int,
-    offset: int,
+    after: tuple[datetime, str] | None = None,
     q: str | None = None,
     status: str | None = None,
     include_evidence: bool = False,
 ) -> list[Case]:
+    # after is the (created_at, id) position of the last row of the previous page. Rows come newest first.
     visibility, params = scope.visibility_sql()
     search, search_params = _search_sql(q)
     status_clause, status_params = _status_sql(status)
+    keyset, keyset_params = _keyset_sql(after)
     with connect() as conn:
         rows = conn.execute(
             f"""
             SELECT {_CASE_COLUMNS}, {_NEXT_DEADLINE_SQL}, {_UPDATED_AT_SQL} FROM cases
-            WHERE NOT is_deleted AND {visibility} AND {search} AND {status_clause}
+            WHERE NOT is_deleted AND {visibility} AND {search} AND {status_clause} AND {keyset}
             ORDER BY created_at DESC, id
-            LIMIT %s OFFSET %s
+            LIMIT %s
             """,
-            (*_updated_at_params(include_evidence), *params, *search_params, *status_params, limit, offset),
+            (
+                *_updated_at_params(include_evidence),
+                *params,
+                *search_params,
+                *status_params,
+                *keyset_params,
+                limit,
+            ),
         ).fetchall()
     return [replace(_to_case(row[:12]), next_deadline=row[12], updated_at=row[13]) for row in rows]
 
 
-def count_visible_cases(scope: CaseScope, q: str | None = None, status: str | None = None) -> int:
-    visibility, params = scope.visibility_sql()
-    search, search_params = _search_sql(q)
-    status_clause, status_params = _status_sql(status)
-    with connect() as conn:
-        row = conn.execute(
-            f"SELECT count(*) FROM cases WHERE NOT is_deleted AND {visibility} AND {search} AND {status_clause}",
-            (*params, *search_params, *status_params),
-        ).fetchone()
-    return row[0]
+def _keyset_sql(after: tuple[datetime, str] | None) -> tuple[str, tuple[object, ...]]:
+    # Matches the ORDER BY: created_at descending, then id ascending.
+    if after is None:
+        return "TRUE", ()
+    created_at, row_id = after
+    return "(created_at < %s OR (created_at = %s AND id > %s))", (created_at, created_at, row_id)
 
 
 def list_assignments(case_id: str, scope: CaseScope) -> list[Assignment] | None:

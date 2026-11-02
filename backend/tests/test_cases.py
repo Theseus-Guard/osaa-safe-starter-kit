@@ -135,18 +135,22 @@ def store(monkeypatch):
             return False
         return True
 
-    def fake_list(scope, limit, offset, q=None, status=None, include_evidence=False):
+    def fake_list(scope, limit, after=None, q=None, status=None, include_evidence=False):
         state["list_calls"].append({"q": q, "status": status, "include_evidence": include_evidence})
-        mine = [case for case in state["cases"].values() if visible(case, scope) and matches(case, q, status)]
-        return mine[offset : offset + limit]
-
-    def fake_count(scope, q=None, status=None):
-        return sum(1 for case in state["cases"].values() if visible(case, scope) and matches(case, q, status))
+        # Newest first, then id ascending, as the SQL orders them. after is the position of the previous page's last row.
+        mine = sorted(
+            (case for case in state["cases"].values() if visible(case, scope) and matches(case, q, status)),
+            key=lambda case: case.id,
+        )
+        mine.sort(key=lambda case: case.created_at, reverse=True)
+        if after is not None:
+            position = next(index for index, case in enumerate(mine) if case.id == after[1])
+            mine = mine[position + 1 :]
+        return mine[:limit]
 
     monkeypatch.setattr(api, "create_case", fake_create)
     monkeypatch.setattr(api, "find_visible_case", fake_find)
     monkeypatch.setattr(api, "list_visible_cases", fake_list)
-    monkeypatch.setattr(api, "count_visible_cases", fake_count)
     return state
 
 
@@ -219,8 +223,8 @@ def test_list_returns_only_the_callers_cases_with_paging(client, caller, store):
     caller["user"] = make_user(OTHER_ID, "reporter")
     client.post("/api/v1/cases", json=valid_body(title="Other's case"), headers=idem())
     caller["user"] = make_user(REPORTER_ID, "reporter")
-    page = client.get("/api/v1/cases?limit=1&offset=0").json()
-    assert page["total"] == 1
+    page = client.get("/api/v1/cases?limit=1").json()
+    assert page["next_cursor"] is None
     assert [item["title"] for item in page["items"]] == ["Suspected token leak"]
     assert "deadlines" not in page["items"][0]
 
@@ -228,7 +232,7 @@ def test_list_returns_only_the_callers_cases_with_paging(client, caller, store):
 def test_list_paging_bounds_are_enforced(client, store):
     assert client.get("/api/v1/cases?limit=0").status_code == 400
     assert client.get("/api/v1/cases?limit=201").status_code == 400
-    assert client.get("/api/v1/cases?offset=-1").status_code == 400
+    assert client.get("/api/v1/cases?cursor=invalid").status_code == 400
 
 
 def set_fields(store, case_id, **fields):
@@ -241,12 +245,10 @@ def test_list_filters_by_status(client, store):
     set_fields(store, first, status="closed")
 
     closed = client.get("/api/v1/cases?status=closed").json()
-    assert closed["total"] == 1
     assert [item["id"] for item in closed["items"]] == [first]
     opened = client.get("/api/v1/cases?status=open").json()
-    assert opened["total"] == 1
     assert [item["title"] for item in opened["items"]] == ["Second"]
-    assert client.get("/api/v1/cases").json()["total"] == 2
+    assert len(client.get("/api/v1/cases").json()["items"]) == 2
 
 
 @pytest.mark.parametrize("value", ["archived", "OPEN", "all", ""])
@@ -262,14 +264,18 @@ def test_status_combines_with_search_and_paging(client, store):
     set_fields(store, ids[2], status="closed")
 
     only_beta = client.get("/api/v1/cases?status=open&q=SAFE-2026-000002").json()
-    assert only_beta["total"] == 1
     assert [item["title"] for item in only_beta["items"]] == ["Beta"]
     # Beta is open but Alpha is the one with reference 000001: the status and the search must both hold.
-    assert client.get("/api/v1/cases?status=closed&q=SAFE-2026-000002").json()["total"] == 0
-    page = client.get("/api/v1/cases?status=open&q=SAFE-2026-00000&limit=1&offset=1").json()
-    assert page["total"] == 2
-    assert len(page["items"]) == 1
-    assert page["offset"] == 1
+    assert client.get("/api/v1/cases?status=closed&q=SAFE-2026-000002").json()["items"] == []
+    first_page = client.get("/api/v1/cases?status=open&q=SAFE-2026-00000&limit=1").json()
+    assert len(first_page["items"]) == 1
+    assert first_page["next_cursor"] is not None
+    second_page = client.get(
+        "/api/v1/cases", params={"status": "open", "q": "SAFE-2026-00000", "limit": 1, "cursor": first_page["next_cursor"]}
+    ).json()
+    assert len(second_page["items"]) == 1
+    assert second_page["items"][0]["id"] != first_page["items"][0]["id"]
+    assert second_page["next_cursor"] is None
 
 
 def test_list_items_carry_the_next_deadline_and_the_last_update(client, store):
@@ -320,7 +326,6 @@ def test_list_does_not_leak_a_case_the_caller_cannot_see_or_its_deadline(client,
     caller["user"] = make_user(REPORTER_ID, "reporter")
 
     response = client.get("/api/v1/cases?status=open")
-    assert response.json()["total"] == 0
     assert response.json()["items"] == []
     assert other_case not in response.text
     assert "2026-12-24" not in response.text

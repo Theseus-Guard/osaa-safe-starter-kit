@@ -146,13 +146,13 @@ def test_list_of_the_callers_cases_is_the_same_through_the_api_and_the_cli(cli_b
     cli_bridge.post("/api/v1/cases", json=valid_body(title="Somebody else's case"), headers=idem())
     caller["user"] = make_user(REPORTER_ID, "reporter")
 
-    api_list = cli_bridge.get("/api/v1/cases?limit=50&offset=0")
-    code, listed = cli_json(capsys, "case", "list", "--limit", "50", "--offset", "0")
+    api_list = cli_bridge.get("/api/v1/cases?limit=50")
+    code, listed = cli_json(capsys, "case", "list", "--limit", "50")
 
     assert api_list.status_code == 200
     assert code == 0
     assert listed == api_list.json()
-    assert listed["total"] == 1
+    assert listed["next_cursor"] is None
     assert [item["title"] for item in listed["items"]] == ["Suspected token leak"]
 
 
@@ -233,7 +233,7 @@ def test_closed_case_is_not_served_as_open_after_the_close(triager_api):
 
     client = TestClient(api.app)
     shown = client.get(f"/api/v1/cases/{case.id}")
-    listed = client.get("/api/v1/cases?limit=200&offset=0")
+    listed = client.get("/api/v1/cases?limit=200")
 
     assert shown.status_code == 200
     assert shown.json()["status"] == "closed"

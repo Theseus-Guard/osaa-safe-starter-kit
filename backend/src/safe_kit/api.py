@@ -58,7 +58,6 @@ from safe_kit.cases import (
     assign_member,
     case_history,
     close_case,
-    count_visible_cases,
     create_case,
     find_visible_case,
     list_assignable_users,
@@ -73,6 +72,7 @@ from safe_kit.cases import (
 from safe_kit.client_address import resolve_client_address
 from safe_kit.config_guard import is_demo, load_settings, retention_years, trusted_proxies
 from safe_kit.db import connect
+from safe_kit.pagination import decode_cursor, encode_cursor
 from safe_kit.demo_auth import (
     DEMO_ROLES,
     DEMO_USERNAMES,
@@ -987,9 +987,7 @@ class CaseSummary(BaseModel):
 
 class CasePage(BaseModel):
     items: list[CaseSummary]
-    total: int
-    limit: int
-    offset: int
+    next_cursor: str | None
 
 
 class AssignmentRequest(BaseModel):
@@ -1405,7 +1403,8 @@ async def dry_run_case_import(
 @app.get("/api/v1/cases", response_model=CasePage)
 def list_cases(
     limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
+    # Opaque. Omit it for the first page; use next_cursor from the previous page for the next one.
+    cursor: str | None = Query(default=None, max_length=200),
     q: str | None = Query(default=None, max_length=100),
     # Omitted means every status. Any other value is refused with 422 (the Literal type).
     status: CaseStatus | None = Query(default=None),
@@ -1416,15 +1415,21 @@ def list_cases(
     scope = _scope(actor)
     search = q.strip() if q is not None else None
     include_evidence = "evidence:read" in permissions
+    after = None
+    if cursor is not None:
+        after = decode_cursor(cursor)
+        if after is None:
+            raise HTTPException(status_code=400, detail={"status": "invalid_cursor"})
+    # One extra row tells whether another page exists; it is not returned.
     page_cases = list_visible_cases(
-        scope, limit, offset, q=search, status=status, include_evidence=include_evidence
+        scope, limit + 1, after, q=search, status=status, include_evidence=include_evidence
     )
+    has_more = len(page_cases) > limit
+    page_cases = page_cases[:limit]
     scores = current_scores_for_cases(case.id for case in page_cases)
     return CasePage(
         items=[_case_summary(case, scores.get(case.id)) for case in page_cases],
-        total=count_visible_cases(scope, q=search, status=status),
-        limit=limit,
-        offset=offset,
+        next_cursor=encode_cursor(page_cases[-1].created_at, page_cases[-1].id) if has_more else None,
     )
 
 

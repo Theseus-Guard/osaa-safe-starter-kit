@@ -200,7 +200,7 @@ def test_a_caller_without_triage_is_told_what_the_permission_is(api, capsys):
 
 
 def test_case_list_has_a_risk_column_with_the_score_or_not_assessed(api, capsys):
-    api.route("GET", LIST_PATH, body={"items": [ASSESSED_SUMMARY, UNASSESSED_SUMMARY], "total": 2, "limit": 20, "offset": 0})
+    api.route("GET", LIST_PATH, body={"items": [ASSESSED_SUMMARY, UNASSESSED_SUMMARY], "next_cursor": None})
     code, out, _ = run(capsys, "case", "list", "--username", "alice")
     assert code == 0
     lines = out.splitlines()
