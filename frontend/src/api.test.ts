@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// api.ts keeps the session and the refresh state at module level. Each test loads a fresh copy.
+// api.ts keeps the session state at module level. Each test loads a fresh copy.
 type Api = typeof import("./api");
 
+// The login and refresh responses carry tokens for API clients. The page must never keep them.
 const TOKENS_1 = { access_token: "access-1", refresh_token: "refresh-1", expires_in: 900, password_change_required: false };
 const TOKENS_2 = { access_token: "access-2", refresh_token: "refresh-2", expires_in: 900, password_change_required: false };
 const ME = {
@@ -24,49 +25,80 @@ function jsonResponse(status: number, body: unknown): Response {
 let api: Api;
 let fetchMock: ReturnType<typeof vi.fn>;
 
-function authorizationOf(call: number): string | null {
+function headersOf(call: number): Headers {
   const init = fetchMock.mock.calls[call][1] as RequestInit | undefined;
-  return new Headers(init?.headers).get("Authorization");
+  return new Headers(init?.headers);
 }
 
 function urlOf(call: number): string {
   return fetchMock.mock.calls[call][0] as string;
 }
 
+function credentialsOf(call: number): RequestCredentials | undefined {
+  return (fetchMock.mock.calls[call][1] as RequestInit | undefined)?.credentials;
+}
+
+function setCookie(name: string, value: string): void {
+  document.cookie = `${name}=${value}; path=/`;
+}
+
+function clearCookies(): void {
+  for (const pair of document.cookie.split(";")) {
+    const name = pair.split("=")[0].trim();
+    if (name) document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+  }
+}
+
 beforeEach(async () => {
   vi.resetModules();
   fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
+  localStorage.clear();
+  sessionStorage.clear();
   api = await import("./api");
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
+  clearCookies();
 });
 
-describe("bearer authentication", () => {
-  it("does not send an authorization header on login", async () => {
+describe("cookie session", () => {
+  it("sends credentials and no authorization header on login", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, TOKENS_1));
 
     await api.login("example-user", "example-password");
 
     expect(urlOf(0)).toBe("/api/v1/auth/token");
-    expect(authorizationOf(0)).toBeNull();
+    expect(credentialsOf(0)).toBe("include");
+    expect(headersOf(0).get("Authorization")).toBeNull();
     expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({
       username: "example-user",
       password: "example-password",
     });
   });
 
-  it("sends the stored access token as a bearer header after login", async () => {
+  it("sends credentials and no authorization header on a read after login", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, TOKENS_1)).mockResolvedValueOnce(jsonResponse(200, ME));
 
     await api.login("example-user", "example-password");
     const me = await api.me();
 
     expect(me).toEqual(ME);
-    expect(authorizationOf(1)).toBe("Bearer access-1");
+    expect(credentialsOf(1)).toBe("include");
+    expect(headersOf(1).get("Authorization")).toBeNull();
+    expect(headersOf(1).get("X-CSRF-Token")).toBeNull();
+  });
+
+  it("sends credentials on every request, including readiness", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { status: "ready" })).mockResolvedValueOnce(jsonResponse(200, ME));
+
+    await api.readiness();
+    await api.me();
+
+    expect(credentialsOf(0)).toBe("include");
+    expect(credentialsOf(1)).toBe("include");
   });
 
   it("does not try to refresh when there is no session", async () => {
@@ -77,12 +109,77 @@ describe("bearer authentication", () => {
   });
 });
 
+describe("browser storage", () => {
+  it("keeps no token in localStorage or sessionStorage", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, TOKENS_1))
+      .mockResolvedValueOnce(jsonResponse(200, ME))
+      .mockResolvedValueOnce(jsonResponse(401, { detail: "token expired" }))
+      .mockResolvedValueOnce(jsonResponse(200, TOKENS_2))
+      .mockResolvedValueOnce(jsonResponse(200, ME));
+
+    await api.login("example-user", "example-password");
+    await api.me();
+    await api.me(); // a 401 and a refresh happen here
+
+    for (const storage of [localStorage, sessionStorage]) {
+      expect(storage.length).toBe(0);
+    }
+  });
+});
+
+describe("CSRF token on state-changing requests", () => {
+  it("sends the safe_csrf cookie value as X-CSRF-Token on an unsafe request", async () => {
+    setCookie("safe_csrf", "csrf-value-1");
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, ME));
+
+    await api.changePassword("example-old-password", "example-new-password");
+
+    expect(urlOf(0)).toBe("/api/v1/auth/password");
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe("POST");
+    expect(headersOf(0).get("X-CSRF-Token")).toBe("csrf-value-1");
+    expect(credentialsOf(0)).toBe("include");
+  });
+
+  it("sends the CSRF header on PUT, PATCH and DELETE too", async () => {
+    setCookie("safe_csrf", "csrf-value-2");
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, {}))
+      .mockResolvedValueOnce(jsonResponse(200, {}))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    await api.updateSystemTimezone({ timezone: "UTC", confirm: true, current: null });
+    await api.updateProfile({ title: "Analyst" });
+    await api.deleteUser("user-1");
+
+    for (const call of [0, 1, 2]) expect(headersOf(call).get("X-CSRF-Token")).toBe("csrf-value-2");
+  });
+
+  it("does not send the CSRF header on a read", async () => {
+    setCookie("safe_csrf", "csrf-value-3");
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, ME));
+
+    await api.me();
+
+    expect(headersOf(0).get("X-CSRF-Token")).toBeNull();
+  });
+
+  it("sends no CSRF header when the cookie is absent", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, TOKENS_1));
+
+    await api.login("example-user", "example-password");
+
+    expect(headersOf(0).get("X-CSRF-Token")).toBeNull();
+  });
+});
+
 describe("401 handling", () => {
-  it("refreshes once and retries the request with the new access token", async () => {
+  it("refreshes once with the cookie and retries the request", async () => {
+    setCookie("safe_csrf", "csrf-value-4");
     fetchMock
       .mockResolvedValueOnce(jsonResponse(200, TOKENS_1))
       .mockResolvedValueOnce(jsonResponse(401, { detail: "token expired" }))
-      .mockResolvedValueOnce(jsonResponse(200, TOKENS_2))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
       .mockResolvedValueOnce(jsonResponse(200, ME));
 
     await api.login("example-user", "example-password");
@@ -91,35 +188,35 @@ describe("401 handling", () => {
     expect(me).toEqual(ME);
     expect(urlOf(2)).toBe("/api/v1/auth/refresh");
     expect((fetchMock.mock.calls[2][1] as RequestInit).method).toBe("POST");
-    expect(JSON.parse((fetchMock.mock.calls[2][1] as RequestInit).body as string)).toEqual({
-      refresh_token: "refresh-1",
-    });
-    expect(authorizationOf(3)).toBe("Bearer access-2");
+    expect((fetchMock.mock.calls[2][1] as RequestInit).body).toBeUndefined();
+    expect(credentialsOf(2)).toBe("include");
+    expect(headersOf(2).get("X-CSRF-Token")).toBe("csrf-value-4");
+    expect(urlOf(3)).toBe("/api/v1/auth/me");
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("shares one refresh between concurrent 401s", async () => {
+    let refreshed = false;
     let unauthorized = 0;
     let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
 
-    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    fetchMock.mockImplementation(async (url: string) => {
       if (url === "/api/v1/auth/token") return jsonResponse(200, TOKENS_1);
       if (url === "/api/v1/auth/refresh") {
         // Hold the refresh until both 401s have arrived, and let their promise chains settle first.
         await gate;
-        return jsonResponse(200, TOKENS_2);
+        refreshed = true;
+        return new Response(null, { status: 200 });
       }
-      const authorization = new Headers(init?.headers).get("Authorization");
-      if (authorization === "Bearer access-1") {
+      if (!refreshed) {
         unauthorized += 1;
         if (unauthorized === 2) setTimeout(release, 0);
         return jsonResponse(401, { detail: "token expired" });
       }
-      if (authorization === "Bearer access-2") return jsonResponse(200, { url });
-      throw new Error(`unexpected request ${url} with ${authorization}`);
+      return jsonResponse(200, { url });
     });
 
     await api.login("example-user", "example-password");
@@ -137,24 +234,24 @@ describe("401 handling", () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(200, TOKENS_1))
       .mockResolvedValueOnce(jsonResponse(401, { detail: "token expired" }))
-      .mockResolvedValueOnce(jsonResponse(401, { detail: "invalid refresh token" }));
+      .mockResolvedValueOnce(jsonResponse(401, { detail: "invalid credentials" }));
 
     await api.login("example-user", "example-password");
     await expect(api.me()).rejects.toBeInstanceOf(api.ApiError);
 
     expect(listener).toHaveBeenCalledTimes(1);
 
-    // The session is gone, so the next request goes out without a bearer header.
+    // The session is gone, so the next request is not refreshed again.
     fetchMock.mockResolvedValueOnce(jsonResponse(401, { detail: "not authenticated" }));
     await expect(api.me()).rejects.toMatchObject({ code: "not authenticated" });
-    expect(authorizationOf(fetchMock.mock.calls.length - 1)).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("returns the server error when the retried request is still rejected, after one refresh", async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(200, TOKENS_1))
       .mockResolvedValueOnce(jsonResponse(401, { detail: "token expired" }))
-      .mockResolvedValueOnce(jsonResponse(200, TOKENS_2))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
       .mockResolvedValueOnce(jsonResponse(403, { detail: "forbidden" }));
 
     await api.login("example-user", "example-password");
@@ -174,18 +271,33 @@ describe("401 handling", () => {
     await expect(api.logout()).rejects.toBeInstanceOf(TypeError);
     await expect(api.me()).rejects.toMatchObject({ code: "not authenticated" });
 
-    expect(authorizationOf(2)).toBeNull();
+    // The session is cleared locally, so the 401 does not start a refresh.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(urlOf(2)).toBe("/api/v1/auth/me");
+  });
+
+  it("sends the logout without a body, so the server reads the refresh cookie", async () => {
+    setCookie("safe_csrf", "csrf-value-5");
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, TOKENS_1)).mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    await api.login("example-user", "example-password");
+    await api.logout();
+
+    expect(urlOf(1)).toBe("/api/v1/auth/logout");
+    expect((fetchMock.mock.calls[1][1] as RequestInit).body).toBeUndefined();
+    expect(headersOf(1).get("X-CSRF-Token")).toBe("csrf-value-5");
+    expect(credentialsOf(1)).toBe("include");
   });
 });
 
 describe("renewal before the refresh token expires", () => {
   const FIVE_MINUTES = 5 * 60 * 1000;
 
-  it("renews the pair before a request made after five minutes", async () => {
+  it("renews the cookie pair before a request made after five minutes", async () => {
     vi.useFakeTimers();
     fetchMock
       .mockResolvedValueOnce(jsonResponse(200, TOKENS_1))
-      .mockResolvedValueOnce(jsonResponse(200, TOKENS_2))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
       .mockResolvedValueOnce(jsonResponse(200, ME));
 
     await api.login("example-user", "example-password");
@@ -193,10 +305,8 @@ describe("renewal before the refresh token expires", () => {
     await api.me();
 
     expect(urlOf(1)).toBe("/api/v1/auth/refresh");
-    expect(JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string)).toEqual({
-      refresh_token: "refresh-1",
-    });
-    expect(authorizationOf(2)).toBe("Bearer access-2");
+    expect((fetchMock.mock.calls[1][1] as RequestInit).body).toBeUndefined();
+    expect(urlOf(2)).toBe("/api/v1/auth/me");
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
@@ -209,7 +319,6 @@ describe("renewal before the refresh token expires", () => {
     await api.me();
 
     expect(urlOf(1)).toBe("/api/v1/auth/me");
-    expect(authorizationOf(1)).toBe("Bearer access-1");
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -219,7 +328,7 @@ describe("renewal before the refresh token expires", () => {
     api.onSessionEnded(listener);
     fetchMock
       .mockResolvedValueOnce(jsonResponse(200, TOKENS_1))
-      .mockResolvedValueOnce(jsonResponse(401, { detail: "invalid refresh token" }));
+      .mockResolvedValueOnce(jsonResponse(401, { detail: "invalid credentials" }));
 
     await api.login("example-user", "example-password");
     vi.advanceTimersByTime(FIVE_MINUTES + 1);
@@ -372,7 +481,6 @@ describe("endpoints", () => {
     await expect(api.me()).rejects.toMatchObject({ code: "not authenticated" });
 
     expect(urlOf(1)).toBe("/api/v1/auth/password");
-    expect(authorizationOf(2)).toBeNull();
   });
 
   it("creates a case with the UTC awareness time", async () => {

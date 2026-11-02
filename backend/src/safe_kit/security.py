@@ -102,5 +102,10 @@ def new_refresh_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def new_csrf_token() -> str:
+    """Random value of the CSRF cookie. The page reads it and sends it back in the X-CSRF-Token header."""
+    return secrets.token_urlsafe(32)
+
+
 def hash_refresh_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()

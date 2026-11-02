@@ -13,18 +13,23 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Res
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from safe_kit.auth import (
+    CSRF_COOKIE,
     INVALID_CREDENTIALS,
-    bearer,
+    REFRESH_COOKIE,
+    AccessCredential,
+    access_credential,
+    clear_session_cookies,
     current_user,
     current_user_pending_change,
     permissions_of,
     require_any_permission,
+    require_csrf,
     require_permission,
+    set_session_cookies,
 )
 from safe_kit.audit import record_login_failure
 from safe_kit.case_import import (
@@ -84,6 +89,7 @@ from safe_kit.security import (
     access_token_ttl,
     decode_access_token,
     issue_access_token,
+    new_csrf_token,
     verify_password,
 )
 from safe_kit.sessions import (
@@ -351,7 +357,7 @@ def ready() -> dict[str, str]:
 
 
 @app.post("/api/v1/auth/token", response_model=TokenResponse)
-def login(body: LoginRequest, request: Request) -> TokenResponse:
+def login(body: LoginRequest, request: Request, response: Response) -> TokenResponse:
     # Until the first admin exists, nobody can log in. The operator creates that admin with the CLI.
     if not admin_exists():
         raise SETUP_REQUIRED
@@ -379,33 +385,58 @@ def login(body: LoginRequest, request: Request) -> TokenResponse:
     if user.role != SETUP_ROLE and current_timezone_name() is None:
         raise SETUP_REQUIRED
     clear_rate_limit(f"login:user:{body.username}")
-    return _issue_tokens(user, open_session(user.id))
+    tokens = _issue_tokens(user, open_session(user.id))
+    # A new session gets a new CSRF value. The browser keeps the cookies; a CLI client uses the body.
+    set_session_cookies(response, tokens.access_token, tokens.refresh_token, new_csrf_token())
+    return tokens
 
 
 @app.post("/api/v1/auth/refresh", response_model=TokenResponse)
-def refresh(body: RefreshRequest) -> TokenResponse:
+def refresh(request: Request, response: Response, body: RefreshRequest | None = None) -> TokenResponse:
+    # The browser sends no body: the refresh token comes from the safe_refresh cookie, and that request must carry the CSRF header.
+    if body is not None:
+        presented = body.refresh_token
+    else:
+        presented = request.cookies.get(REFRESH_COOKIE)
+        if not presented:
+            raise INVALID_CREDENTIALS
+        require_csrf(request)
     try:
-        user_id, new_refresh_token = rotate_session(body.refresh_token)
+        user_id, new_refresh_token = rotate_session(presented)
     except InvalidRefreshToken:
         raise INVALID_CREDENTIALS
     user = find_user_by_id(user_id)
     if user is None or not user.is_active:
         raise INVALID_CREDENTIALS
-    return _issue_tokens(user, new_refresh_token)
+    tokens = _issue_tokens(user, new_refresh_token)
+    # The CSRF value stays the same across a refresh, so requests already in flight with it still pass.
+    set_session_cookies(
+        response,
+        tokens.access_token,
+        tokens.refresh_token,
+        request.cookies.get(CSRF_COOKIE) or new_csrf_token(),
+    )
+    return tokens
 
 
 @app.post("/api/v1/auth/logout", status_code=204)
 def logout(
+    request: Request,
     body: LogoutRequest | None = None,
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    credential: AccessCredential | None = Depends(access_credential),
     user: User = Depends(current_user_pending_change),
 ) -> Response:
     # The access token stays in the revocation list until it would have expired anyway.
-    claims = decode_access_token(credentials.credentials)
+    # current_user_pending_change has already refused a request without a valid token, so credential is set here.
+    claims = decode_access_token(credential.token)
     revoke_access_token(claims["jti"], datetime.fromtimestamp(claims["exp"], UTC))
     if body is not None and body.refresh_token:
         revoke_refresh_token(body.refresh_token, user.id)
-    return Response(status_code=204)
+    elif refresh_cookie := request.cookies.get(REFRESH_COOKIE):
+        revoke_refresh_token(refresh_cookie, user.id)
+    response = Response(status_code=204)
+    clear_session_cookies(response)
+    return response
 
 
 @app.post("/api/v1/auth/password", status_code=204)
@@ -422,7 +453,10 @@ def change_password(
     except PasswordReused:
         raise HTTPException(status_code=422, detail=PASSWORD_REUSED_DETAIL)
     # All sessions end, including this one. The client must log in again with the new password.
-    return Response(status_code=204)
+    # The session cookies go too, so the browser does not keep tokens that no longer work.
+    response = Response(status_code=204)
+    clear_session_cookies(response)
+    return response
 
 
 @app.get("/api/v1/auth/me", response_model=MeResponse)
