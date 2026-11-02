@@ -25,6 +25,11 @@ pytestmark = pytest.mark.skipif(
 BASE = datetime(2026, 12, 1, 9, 0, tzinfo=UTC)
 
 
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
+
+
 @pytest.fixture(autouse=True)
 def system_timezone_configured():
     """Case creation needs a system timezone. Set one on a freshly migrated test database."""
@@ -76,7 +81,7 @@ def past(hours: int = 2) -> str:
 
 
 def new_case(reporter: ActingClient, title: str = "Case") -> dict:
-    response = reporter.post("/api/v1/cases", json={"title": title, "awareness_time": past()})
+    response = reporter.post("/api/v1/cases", json={"title": title, "awareness_time": past()}, headers=idem())
     assert response.status_code == 201, response.text
     return response.json()
 
@@ -272,7 +277,7 @@ def test_updated_at_moves_to_the_latest_change():
     created = parse(item_for(reporter.get("/api/v1/cases").json(), case_id)["updated_at"])
 
     task_id = task_id_of(triager, case_id, "affected_customers")
-    response = triager.patch(f"/api/v1/cases/{case_id}/deadlines/{task_id}", json={"status": "done"})
+    response = triager.patch(f"/api/v1/cases/{case_id}/deadlines/{task_id}", json={"status": "done"}, headers=idem())
     assert response.status_code == 200, response.text
 
     item = item_for(reporter.get("/api/v1/cases").json(), case_id)

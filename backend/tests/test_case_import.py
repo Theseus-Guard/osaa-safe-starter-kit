@@ -53,6 +53,11 @@ requires_database = pytest.mark.skipif(
 )
 
 
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
+
+
 @pytest.fixture(autouse=True)
 def system_timezone_configured():
     """Import needs a system timezone. Set one on a freshly migrated test database."""
@@ -232,7 +237,7 @@ def client(caller):
 def service(monkeypatch):
     state = {"calls": [], "results": None, "error": None}
 
-    def fake_import(records, scope):
+    def fake_import(records, scope, **kwargs):
         state["calls"].append((len(records), scope.user_id))
         if state["error"] is not None:
             raise state["error"]
@@ -250,7 +255,7 @@ def test_import_endpoint_reports_counts_and_one_result_per_record(client, servic
         RecordResult(index=1, status="rejected", errors=("/record_schema_version: '0.2.0' was expected",)),
         RecordResult(index=2, status="duplicate", source_case_id="b", case_id="c2", reference="SAFE-2026-000002"),
     ]
-    response = client.post("/api/v1/cases/import", content=envelope([example_record()] * 3), headers={"content-type": "application/json"})
+    response = client.post("/api/v1/cases/import", content=envelope([example_record()] * 3), headers={**idem(), "content-type": "application/json"})
     assert response.status_code == 200
     body = response.json()
     assert (body["imported"], body["duplicate"], body["conflict"], body["rejected"], body["failed"]) == (1, 1, 0, 1, 0)
@@ -260,28 +265,28 @@ def test_import_endpoint_reports_counts_and_one_result_per_record(client, servic
 
 
 def test_import_endpoint_refuses_an_unsupported_envelope_before_any_record_is_processed(client, service):
-    response = client.post("/api/v1/cases/import", json={"import_format_version": 9, "records": []})
+    response = client.post("/api/v1/cases/import", json={"import_format_version": 9, "records": []}, headers=idem())
     assert response.status_code == 422
     assert service["calls"] == []
 
 
 def test_import_endpoint_refuses_a_body_over_the_size_limit(client, service):
     body = b" " * (MAX_IMPORT_BYTES + 1)
-    response = client.post("/api/v1/cases/import", content=body, headers={"content-type": "application/json"})
+    response = client.post("/api/v1/cases/import", content=body, headers={**idem(), "content-type": "application/json"})
     assert response.status_code == 413
     assert service["calls"] == []
 
 
 def test_import_endpoint_needs_the_case_submit_permission(client, caller, service):
     caller["user"] = make_user(ADMIN_ID, "admin")
-    response = client.post("/api/v1/cases/import", json={"import_format_version": 1, "records": []})
+    response = client.post("/api/v1/cases/import", json={"import_format_version": 1, "records": []}, headers=idem())
     assert response.status_code == 403
     assert service["calls"] == []
 
 
 def test_import_endpoint_refuses_without_a_system_timezone(client, service):
     service["error"] = TimezoneNotConfigured()
-    response = client.post("/api/v1/cases/import", json={"import_format_version": 1, "records": []})
+    response = client.post("/api/v1/cases/import", json={"import_format_version": 1, "records": []}, headers=idem())
     assert response.status_code == 409
     assert response.json() == {"detail": "system timezone is not configured"}
 
@@ -420,7 +425,7 @@ def test_endpoint_imports_through_the_real_service(client, caller):
     caller["user"] = make_user(actor, "reporter")
     record = example_record()
 
-    response = client.post("/api/v1/cases/import", json={"import_format_version": 1, "records": [record]})
+    response = client.post("/api/v1/cases/import", json={"import_format_version": 1, "records": [record]}, headers=idem())
 
     assert response.status_code == 200
     body = response.json()

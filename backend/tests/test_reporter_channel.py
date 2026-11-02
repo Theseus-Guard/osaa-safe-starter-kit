@@ -108,14 +108,14 @@ def as_role(caller, user_id, role):
 def test_report_passes_the_stripped_contact_and_returns_no_reporter_fields(client, caller, monkeypatch):
     seen = {}
 
-    def fake_submit(title, awareness_time, contact, reporter_id):
+    def fake_submit(title, awareness_time, contact, reporter_id, **kwargs):
         seen.update(title=title, contact=contact, reporter_id=reporter_id)
         return sample_case()
 
     monkeypatch.setattr(api, "submit_report", fake_submit)
     response = client.post(
         "/api/v1/reports",
-        json={"title": "Case", "awareness_time": PAST_AWARENESS, "contact": "  reach me at the desk  "},
+        json={"title": "Case", "awareness_time": PAST_AWARENESS, "contact": "  reach me at the desk  "}, headers=idem(),
     )
     assert response.status_code == 201, response.text
     assert seen == {"title": "Case", "contact": "reach me at the desk", "reporter_id": REPORTER_ID}
@@ -127,30 +127,30 @@ def test_report_passes_the_stripped_contact_and_returns_no_reporter_fields(clien
 def test_report_without_contact_or_with_blank_contact_stores_none(client, caller, monkeypatch):
     seen = []
 
-    def fake_submit(title, awareness_time, contact, reporter_id):
+    def fake_submit(title, awareness_time, contact, reporter_id, **kwargs):
         seen.append(contact)
         return sample_case()
 
     monkeypatch.setattr(api, "submit_report", fake_submit)
-    assert client.post("/api/v1/reports", json={"title": "Case", "awareness_time": PAST_AWARENESS}).status_code == 201
+    assert client.post("/api/v1/reports", json={"title": "Case", "awareness_time": PAST_AWARENESS}, headers=idem()).status_code == 201
     assert client.post(
-        "/api/v1/reports", json={"title": "Case", "awareness_time": PAST_AWARENESS, "contact": "   "}
+        "/api/v1/reports", json={"title": "Case", "awareness_time": PAST_AWARENESS, "contact": "   "}, headers=idem()
     ).status_code == 201
     assert seen == [None, None]
 
 
 def test_contact_longer_than_200_characters_is_refused(client, caller, monkeypatch):
-    monkeypatch.setattr(api, "submit_report", lambda *args: pytest.fail("must not reach the service"))
+    monkeypatch.setattr(api, "submit_report", lambda *args, **kwargs: pytest.fail("must not reach the service"))
     response = client.post(
-        "/api/v1/reports", json={"title": "Case", "awareness_time": PAST_AWARENESS, "contact": "x" * 201}
+        "/api/v1/reports", json={"title": "Case", "awareness_time": PAST_AWARENESS, "contact": "x" * 201}, headers=idem()
     )
     assert response.status_code == 422
 
 
 def test_report_needs_the_submit_permission(client, caller, monkeypatch):
-    monkeypatch.setattr(api, "submit_report", lambda *args: pytest.fail("must not reach the service"))
+    monkeypatch.setattr(api, "submit_report", lambda *args, **kwargs: pytest.fail("must not reach the service"))
     as_role(caller, TRIAGER_ID, "triager")
-    response = client.post("/api/v1/reports", json={"title": "Case", "awareness_time": PAST_AWARENESS})
+    response = client.post("/api/v1/reports", json={"title": "Case", "awareness_time": PAST_AWARENESS}, headers=idem())
     assert response.status_code == 403
 
 
@@ -178,7 +178,7 @@ def test_history_hides_the_reporter_account_from_triagers_too(client, caller, mo
 
 
 def test_contact_needs_the_reporter_contact_permission(client, caller, monkeypatch):
-    monkeypatch.setattr(api, "read_reporter_contact", lambda *args: pytest.fail("must not reach the service"))
+    monkeypatch.setattr(api, "read_reporter_contact", lambda *args, **kwargs: pytest.fail("must not reach the service"))
     # The reporter's own role has no reporter_contact:read, and neither does the triager.
     assert client.get(f"/api/v1/reports/{CASE_ID}/contact").status_code == 403
     as_role(caller, TRIAGER_ID, "triager")
@@ -322,7 +322,7 @@ def open_report_via_api(db_client, reporter: str, contact: str | None = CONTACT)
             "title": "Reporter channel case",
             "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
             "contact": contact,
-        },
+        }, headers=idem(),
     )
     assert response.status_code == 201, response.text
     return response.json()["id"]
@@ -346,7 +346,7 @@ def test_no_caller_gets_the_reporter_account_or_contact(db_client, people):
     # who holds reporter_contact:read, makes the assignment.
     with role_holds("triager", "reporter_contact:read"):
         assigned = db_client(people["triager"]).post(
-            f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["investigator"]}
+            f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["investigator"]}, headers=idem()
         )
     assert assigned.status_code == 201, assigned.text
     triager = db_client(people["triager"])
@@ -406,7 +406,7 @@ def test_contact_of_a_case_without_reporter_identity_is_404_and_not_audited(db_c
     # A case opened through the ordinary intake, which has no reporter identity.
     created = db_client(people["reporter"]).post(
         "/api/v1/cases",
-        json={"title": "Not from the reporter channel", "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat()},
+        json={"title": "Not from the reporter channel", "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat()}, headers=idem(),
     )
     assert created.status_code == 201, created.text
     case_id = created.json()["id"]
@@ -442,20 +442,21 @@ def close_reporter_case(db_client, people, case_id: str) -> None:
     """
     triager = db_client(people["triager"])
     with role_holds("triager", "reporter_contact:read"):
-        assigned = triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]})
+        assigned = triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]}, headers=idem())
     assert assigned.status_code == 201, assigned.text
     opened = db_client(people["reviewer"]).post("/api/v1/reviews", headers=idem(), json={"case_id": case_id})
     assert opened.status_code == 201, opened.text
     reviewed = db_client(people["reviewer"]).patch(
         f"/api/v1/reviews/{opened.json()['id']}/layers/model",
-        json={"outcome": "pass", "expected_revision": opened.json()["revision"]},
+        json={"outcome": "fail", "reason": "Reviewed for this test", "expected_revision": opened.json()["revision"]},
+        headers=idem(),
     )
     assert reviewed.status_code == 200, reviewed.text
     body = triager.get(f"/api/v1/cases/{case_id}").json()
     for task in body["deadlines"]:
-        patched = triager.patch(f"/api/v1/cases/{case_id}/deadlines/{task['id']}", json={"status": "done"})
+        patched = triager.patch(f"/api/v1/cases/{case_id}/deadlines/{task['id']}", json={"status": "done"}, headers=idem())
         assert patched.status_code == 200, patched.text
-    closed = triager.post(f"/api/v1/cases/{case_id}/close", json={"reason": "Closed for the contact window test"})
+    closed = triager.post(f"/api/v1/cases/{case_id}/close", json={"reason": "Closed for the contact window test"}, headers=idem())
     assert closed.status_code == 200, closed.text
 
 
@@ -519,7 +520,7 @@ def test_reopened_case_is_readable_again_and_the_latest_closure_counts(db_client
     backdate_closure(case_id, hours=73)
     assert read_contact_as_holder(db_client, people, case_id).status_code == 409
 
-    reopened = triager.post(f"/api/v1/cases/{case_id}/reopen", json={"reason": "New facts found"})
+    reopened = triager.post(f"/api/v1/cases/{case_id}/reopen", json={"reason": "New facts found"}, headers=idem())
     assert reopened.status_code == 200, reopened.text
     response = read_contact_as_holder(db_client, people, case_id)
     assert response.status_code == 200, response.text
@@ -527,7 +528,7 @@ def test_reopened_case_is_readable_again_and_the_latest_closure_counts(db_client
     assert len(contact_audit_rows(case_id)) == 1
 
     # A second closure starts a new window. The first closure is 73 hours old, but the latest one is new.
-    closed_again = triager.post(f"/api/v1/cases/{case_id}/close", json={"reason": "Closed again"})
+    closed_again = triager.post(f"/api/v1/cases/{case_id}/close", json={"reason": "Closed again"}, headers=idem())
     assert closed_again.status_code == 200, closed_again.text
     backdate_closure(case_id, hours=73, closure=0)
     response = read_contact_as_holder(db_client, people, case_id)

@@ -253,6 +253,11 @@ function LayerForm({
       setError("Evidence IDs must be item IDs separated by commas or spaces.");
       return;
     }
+    // A pass is supported only by evidence of the case (T06). The backend refuses it too; this stops it before sending.
+    if (outcome === "pass" && evidenceIds.length === 0) {
+      setError("A pass needs at least one evidence item of this case.");
+      return;
+    }
     setBusy(true);
     try {
       await setReviewLayer(active.round.id, active.layer.layer, {
@@ -315,7 +320,9 @@ function LayerForm({
           <Field>
             <FieldLabel htmlFor="review-layer-evidence">Evidence IDs</FieldLabel>
             <Input id="review-layer-evidence" value={evidence} onChange={(event) => setEvidence(event.target.value)} />
-            <FieldDescription>Optional. Item IDs of this case, separated by commas or spaces.</FieldDescription>
+            <FieldDescription>
+              Item IDs of this case, separated by commas or spaces. Required for a pass; optional for the other outcomes.
+            </FieldDescription>
           </Field>
         </FieldGroup>
         {error && (

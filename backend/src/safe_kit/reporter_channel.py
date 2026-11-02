@@ -16,7 +16,8 @@ The contact can be read while the case is open, or within REPORTER_CONTACT_WINDO
 case closed longer ago refuses the read, and a refused read writes no audit row. A reopened case is open again.
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from typing import Any
 from dataclasses import replace
 from datetime import datetime
 from enum import Enum
@@ -24,6 +25,7 @@ from enum import Enum
 from safe_kit import audit, cases
 from safe_kit.cases import Case, CaseScope, HistoryEntry
 from safe_kit.db import connect
+from safe_kit.idempotency import KeyScope, check, remember
 
 # Written for every successful read of a reporter contact. The row targets the case, so the case history shows it.
 REPORTER_CONTACT_READ = audit.REPORTER_CONTACT_READ
@@ -43,14 +45,30 @@ class ContactOutcome(Enum):
     WINDOW_CLOSED = "window_closed"
 
 
-def submit_report(title: str, awareness_time: datetime, contact: str | None, reporter_id: str) -> Case:
-    """Create the case and its reporter identity in one transaction. The case is created the same way as any other."""
+def submit_report(
+    title: str,
+    awareness_time: datetime,
+    contact: str | None,
+    reporter_id: str,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[Case], Any] | None = None,
+) -> Case:
+    """Create the case and its reporter identity in one transaction. The case is created the same way as any other.
+
+    With an idempotency scope the key is checked first, and the stored response is render(case). The contact is not
+    part of the stored response.
+    """
     with connect() as conn:
+        check(conn, idempotency)
         case = cases.insert_case(conn, title, awareness_time, reporter_id)
         conn.execute(
             "INSERT INTO reporter_identities (case_id, reporter_id, contact) VALUES (%s, %s, %s)",
             (case.id, reporter_id, contact),
         )
+        if idempotency is not None:
+            assert render is not None
+            remember(conn, idempotency, 201, render(case))
     return case
 
 

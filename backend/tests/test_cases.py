@@ -25,6 +25,11 @@ ADMIN_ID = "33333333-3333-3333-3333-333333333333"
 CASE_ID = "99999999-9999-9999-9999-999999999999"
 
 
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
+
+
 def make_user(user_id, role):
     return User(
         id=user_id,
@@ -93,7 +98,7 @@ def client(caller):
 def store(monkeypatch):
     state = {"cases": {}, "created": [], "list_calls": []}
 
-    def fake_create(title, awareness_time, created_by):
+    def fake_create(title, awareness_time, created_by, **kwargs):
         # The first case gets CASE_ID, the others their own id, so several users can each have a case.
         case_id = CASE_ID if not state["cases"] else str(uuid.uuid4())
         number = len(state["cases"]) + 1
@@ -151,7 +156,7 @@ def valid_body(**overrides):
 
 
 def test_reporter_submits_a_case_and_gets_its_deadlines(client, store):
-    response = client.post("/api/v1/cases", json=valid_body())
+    response = client.post("/api/v1/cases", json=valid_body(), headers=idem())
     assert response.status_code == 201
     body = response.json()
     assert body["reference"] == "SAFE-2026-000001"
@@ -162,40 +167,40 @@ def test_reporter_submits_a_case_and_gets_its_deadlines(client, store):
 
 
 def test_title_is_stripped_and_blank_titles_are_rejected(client, store):
-    assert client.post("/api/v1/cases", json=valid_body(title="  Leak  ")).json()["title"] == "Leak"
-    assert client.post("/api/v1/cases", json=valid_body(title="   ")).status_code == 422
-    assert client.post("/api/v1/cases", json=valid_body(title="")).status_code == 422
-    assert client.post("/api/v1/cases", json=valid_body(title="x" * 201)).status_code == 422
+    assert client.post("/api/v1/cases", json=valid_body(title="  Leak  "), headers=idem()).json()["title"] == "Leak"
+    assert client.post("/api/v1/cases", json=valid_body(title="   "), headers=idem()).status_code == 422
+    assert client.post("/api/v1/cases", json=valid_body(title=""), headers=idem()).status_code == 422
+    assert client.post("/api/v1/cases", json=valid_body(title="x" * 201), headers=idem()).status_code == 422
 
 
 def test_naive_awareness_time_is_rejected(client, store):
-    response = client.post("/api/v1/cases", json=valid_body(awareness_time="2026-10-30T09:00:00"))
+    response = client.post("/api/v1/cases", json=valid_body(awareness_time="2026-10-30T09:00:00"), headers=idem())
     assert response.status_code == 422
     assert store["created"] == []
 
 
 def test_future_awareness_time_is_rejected(client, store):
     future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
-    assert client.post("/api/v1/cases", json=valid_body(awareness_time=future)).status_code == 422
+    assert client.post("/api/v1/cases", json=valid_body(awareness_time=future), headers=idem()).status_code == 422
     assert store["created"] == []
 
 
 def test_admin_has_no_case_permissions(client, caller, store):
     caller["user"] = make_user(ADMIN_ID, "admin")
-    assert client.post("/api/v1/cases", json=valid_body()).status_code == 403
+    assert client.post("/api/v1/cases", json=valid_body(), headers=idem()).status_code == 403
     assert client.get("/api/v1/cases").status_code == 403
     assert client.get(f"/api/v1/cases/{CASE_ID}").status_code == 403
 
 
 def test_owner_reads_own_case(client, store):
-    client.post("/api/v1/cases", json=valid_body())
+    client.post("/api/v1/cases", json=valid_body(), headers=idem())
     response = client.get(f"/api/v1/cases/{CASE_ID}")
     assert response.status_code == 200
     assert response.json()["id"] == CASE_ID
 
 
 def test_other_users_case_looks_exactly_like_a_missing_one(client, caller, store):
-    client.post("/api/v1/cases", json=valid_body())
+    client.post("/api/v1/cases", json=valid_body(), headers=idem())
     caller["user"] = make_user(OTHER_ID, "reporter")
     other = client.get(f"/api/v1/cases/{CASE_ID}")
     missing = client.get("/api/v1/cases/88888888-8888-8888-8888-888888888888")
@@ -208,9 +213,9 @@ def test_case_id_must_be_a_uuid(client, store):
 
 
 def test_list_returns_only_the_callers_cases_with_paging(client, caller, store):
-    client.post("/api/v1/cases", json=valid_body())
+    client.post("/api/v1/cases", json=valid_body(), headers=idem())
     caller["user"] = make_user(OTHER_ID, "reporter")
-    client.post("/api/v1/cases", json=valid_body(title="Other's case"))
+    client.post("/api/v1/cases", json=valid_body(title="Other's case"), headers=idem())
     caller["user"] = make_user(REPORTER_ID, "reporter")
     page = client.get("/api/v1/cases?limit=1&offset=0").json()
     assert page["total"] == 1
@@ -229,8 +234,8 @@ def set_fields(store, case_id, **fields):
 
 
 def test_list_filters_by_status(client, store):
-    first = client.post("/api/v1/cases", json=valid_body(title="First")).json()["id"]
-    client.post("/api/v1/cases", json=valid_body(title="Second"))
+    first = client.post("/api/v1/cases", json=valid_body(title="First"), headers=idem()).json()["id"]
+    client.post("/api/v1/cases", json=valid_body(title="Second"), headers=idem())
     set_fields(store, first, status="closed")
 
     closed = client.get("/api/v1/cases?status=closed").json()
@@ -250,7 +255,7 @@ def test_list_refuses_an_unknown_status_with_422(client, store, value):
 
 
 def test_status_combines_with_search_and_paging(client, store):
-    ids = [client.post("/api/v1/cases", json=valid_body(title=title)).json()["id"] for title in ("Alpha", "Beta", "Gamma", "Delta")]
+    ids = [client.post("/api/v1/cases", json=valid_body(title=title), headers=idem()).json()["id"] for title in ("Alpha", "Beta", "Gamma", "Delta")]
     set_fields(store, ids[0], status="closed")
     set_fields(store, ids[2], status="closed")
 
@@ -266,7 +271,7 @@ def test_status_combines_with_search_and_paging(client, store):
 
 
 def test_list_items_carry_the_next_deadline_and_the_last_update(client, store):
-    case_id = client.post("/api/v1/cases", json=valid_body()).json()["id"]
+    case_id = client.post("/api/v1/cases", json=valid_body(), headers=idem()).json()["id"]
     set_fields(
         store,
         case_id,
@@ -279,7 +284,7 @@ def test_list_items_carry_the_next_deadline_and_the_last_update(client, store):
 
 
 def test_list_item_has_a_null_next_deadline_when_no_task_is_open(client, store):
-    case_id = client.post("/api/v1/cases", json=valid_body()).json()["id"]
+    case_id = client.post("/api/v1/cases", json=valid_body(), headers=idem()).json()["id"]
     set_fields(store, case_id, next_deadline=None, updated_at=None)
     item = client.get("/api/v1/cases").json()["items"][0]
     assert item["next_deadline"] is None
@@ -288,7 +293,7 @@ def test_list_item_has_a_null_next_deadline_when_no_task_is_open(client, store):
 
 
 def test_list_items_keep_their_fields_and_add_only_the_two_new_ones(client, store):
-    client.post("/api/v1/cases", json=valid_body())
+    client.post("/api/v1/cases", json=valid_body(), headers=idem())
     item = client.get("/api/v1/cases").json()["items"][0]
     assert set(item) == {
         "id",
@@ -308,7 +313,7 @@ def test_list_items_keep_their_fields_and_add_only_the_two_new_ones(client, stor
 
 def test_list_does_not_leak_a_case_the_caller_cannot_see_or_its_deadline(client, caller, store):
     caller["user"] = make_user(OTHER_ID, "reporter")
-    other_case = client.post("/api/v1/cases", json=valid_body(title="Not yours")).json()["id"]
+    other_case = client.post("/api/v1/cases", json=valid_body(title="Not yours"), headers=idem()).json()["id"]
     set_fields(store, other_case, next_deadline=datetime(2026, 12, 24, 9, 0, tzinfo=UTC))
     caller["user"] = make_user(REPORTER_ID, "reporter")
 
@@ -364,7 +369,7 @@ def test_case_cannot_be_created_before_the_system_timezone_is_set(timezone_db):
 
 
 def test_api_refuses_case_creation_without_a_system_timezone(client, timezone_db):
-    response = client.post("/api/v1/cases", json=valid_body())
+    response = client.post("/api/v1/cases", json=valid_body(), headers=idem())
     assert response.status_code == 409
     assert response.json() == {"detail": "system timezone is not configured"}
     assert timezone_db.case_rows == []

@@ -19,7 +19,8 @@ from safe_kit import auth, evidence, evidence_api, redaction, tlp
 from safe_kit.cases import CaseScope
 from safe_kit.idempotency import StoredResponse
 from test_evidence import INVESTIGATOR, MemoryStorage, stored_record
-from test_evidence_lifecycle import provider  # fixture: local KEK provider
+# The provider fixture is requested by parameter name; pytest needs the name in this module. Ruff sees it as unused.
+from test_evidence_lifecycle import provider  # noqa: F401  # fixture: local KEK provider
 
 TEXT = b"Case notes\nFirst line about the incident\nSecret detail: account 4411\nLast line\n"
 KEY = "redaction-test-key-1"

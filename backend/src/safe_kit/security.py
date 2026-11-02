@@ -12,12 +12,11 @@ import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 
+from safe_kit.config_guard import required_int
+
 ISSUER = "safe-starter-kit"
 AUDIENCE = "safe-starter-kit-api"
 ALGORITHM = "HS256"
-DEFAULT_ACCESS_TTL_MINUTES = 60
-DEFAULT_REFRESH_TTL_MINUTES = 60
-DEFAULT_SESSION_MAX_HOURS = 12
 MIN_PASSWORD_LENGTH = 12
 # Every password expires this long after it was set, temporary passwords included.
 PASSWORD_MAX_AGE = timedelta(days=180)
@@ -52,17 +51,18 @@ def is_recent_password(candidate: str, recent_hashes: Iterable[str]) -> bool:
 
 
 def access_token_ttl() -> timedelta:
-    return timedelta(minutes=int(os.environ.get("SAFE_ACCESS_TTL_MINUTES", DEFAULT_ACCESS_TTL_MINUTES)))
+    # Required, no default: the startup guard refuses a process without it (config_guard.load_settings).
+    return timedelta(minutes=required_int(os.environ, "SAFE_ACCESS_TTL_MINUTES", minimum=None))
 
 
 def refresh_token_ttl() -> timedelta:
     # Each rotation restarts this window, so it is an idle limit: a session ends after this long without a refresh.
-    return timedelta(minutes=int(os.environ.get("SAFE_REFRESH_TTL_MINUTES", DEFAULT_REFRESH_TTL_MINUTES)))
+    return timedelta(minutes=required_int(os.environ, "SAFE_REFRESH_TTL_MINUTES", minimum=None))
 
 
 def session_max_age() -> timedelta:
     # Counted from the login that started the session family. Renewals do not extend it.
-    return timedelta(hours=int(os.environ.get("SAFE_SESSION_MAX_HOURS", DEFAULT_SESSION_MAX_HOURS)))
+    return timedelta(hours=required_int(os.environ, "SAFE_SESSION_MAX_HOURS", minimum=None))
 
 
 def _signing_key() -> str:

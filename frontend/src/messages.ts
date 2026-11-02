@@ -65,6 +65,7 @@ const MESSAGES: Record<string, string> = {
   no_eligible_reviewer:
     "No independent reviewer can be named for this round yet. An assigned reviewer who did not take part in the round and has no declared conflict on it is needed.",
   "evidence is not available on this case": "One of the evidence items is not available on this case.",
+  "a pass needs at least one evidence item of this case": "A pass needs at least one evidence item of this case.",
   idempotency_key_required: "The request needs an Idempotency-Key. Try again.",
   idempotency_key_invalid: "The Idempotency-Key is not valid. Try again.",
   idempotency_key_reused: "This request key was already used for a different request. Try again with a new request.",

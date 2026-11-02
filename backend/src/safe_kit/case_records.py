@@ -11,7 +11,7 @@ deadlines (plans/01, R02).
 Classification versions are never edited. An edit inserts the next version, so the history stays complete.
 """
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import Enum
@@ -20,6 +20,7 @@ from typing import Any
 from safe_kit import audit, cases
 from safe_kit.cases import Case, CaseScope
 from safe_kit.db import connect
+from safe_kit.idempotency import KeyScope, check, remember
 
 # Awareness: the three facts that can start the clock (plans/01, timeline). Each is stored with its own time and basis.
 AWARENESS_KINDS = frozenset({"operator", "affected_party", "external_report"})
@@ -322,9 +323,16 @@ def record_awareness_event(
     occurred_at: datetime,
     basis: str,
     scope: CaseScope,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[AwarenessEvent], Any] | None = None,
 ) -> tuple[RecordOutcome, AwarenessEvent | None]:
-    """Append an awareness event. Events are never edited or removed, so the record of what was known stays intact."""
+    """Append an awareness event. Events are never edited or removed, so the record of what was known stays intact.
+
+    With an idempotency scope the key is checked first, and the stored response is render(event).
+    """
     with connect() as conn:
+        check(conn, idempotency)
         status = _lock_case_for_change(conn, case_id, scope)
         if status is None:
             return RecordOutcome.NOT_FOUND, None
@@ -359,16 +367,19 @@ def record_awareness_event(
             actor_id=scope.user_id,
             details=details,
         )
-    event = AwarenessEvent(
-        id=row[0],
-        case_id=case_id,
-        awareness_kind=awareness_kind,
-        event_kind=event_kind,
-        occurred_at=occurred_at,
-        basis=basis,
-        recorded_by=scope.user_id,
-        created_at=row[1],
-    )
+        event = AwarenessEvent(
+            id=row[0],
+            case_id=case_id,
+            awareness_kind=awareness_kind,
+            event_kind=event_kind,
+            occurred_at=occurred_at,
+            basis=basis,
+            recorded_by=scope.user_id,
+            created_at=row[1],
+        )
+        if idempotency is not None:
+            assert render is not None
+            remember(conn, idempotency, 201, render(event))
     return RecordOutcome.OK, event
 
 
@@ -389,9 +400,16 @@ def set_impact(
     severity: str,
     impact_scope: str,
     scope: CaseScope,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[ImpactAssessment], Any] | None = None,
 ) -> tuple[RecordOutcome, ImpactAssessment | None]:
-    """Create or replace the assessment of one impact area. Writes only what changed, with one audit row."""
+    """Create or replace the assessment of one impact area. Writes only what changed, with one audit row.
+
+    With an idempotency scope the key is checked first, and the stored response is render(assessment).
+    """
     with connect() as conn:
+        check(conn, idempotency)
         status = _lock_case_for_change(conn, case_id, scope)
         if status is None:
             return RecordOutcome.NOT_FOUND, None
@@ -431,7 +449,12 @@ def set_impact(
             audit.record(conn, audit.CASE_IMPACT_CHANGE, "case", case_id, actor_id=scope.user_id, details={"area": area, **changes})
             # The weekly update depends on the significant risks, so it follows every change of an impact area.
             cases.sync_weekly_update(conn, case_id, scope.user_id)
-    assessment = ImpactAssessment(area=area, assessed=True, severity=severity, scope=impact_scope, updated_at=updated_at)
+        assessment = ImpactAssessment(
+            area=area, assessed=True, severity=severity, scope=impact_scope, updated_at=updated_at
+        )
+        if idempotency is not None:
+            assert render is not None
+            remember(conn, idempotency, 200, render(assessment))
     return RecordOutcome.OK, assessment
 
 
@@ -454,8 +477,12 @@ def add_legal_duty(
     jurisdiction: str | None,
     due_at: datetime,
     scope: CaseScope,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[LegalDuty], Any] | None = None,
 ) -> tuple[RecordOutcome, LegalDuty | None]:
     with connect() as conn:
+        check(conn, idempotency)
         status = _lock_case_for_change(conn, case_id, scope)
         if status is None:
             return RecordOutcome.NOT_FOUND, None
@@ -484,18 +511,21 @@ def add_legal_duty(
                 "jurisdiction": _marker(jurisdiction),
             },
         )
-    duty = LegalDuty(
-        id=row[0],
-        case_id=case_id,
-        kind=kind,
-        description=description,
-        source_reference=source_reference,
-        jurisdiction=jurisdiction,
-        due_at=due_at,
-        status="open",
-        created_by=scope.user_id,
-        created_at=row[1],
-    )
+        duty = LegalDuty(
+            id=row[0],
+            case_id=case_id,
+            kind=kind,
+            description=description,
+            source_reference=source_reference,
+            jurisdiction=jurisdiction,
+            due_at=due_at,
+            status="open",
+            created_by=scope.user_id,
+            created_at=row[1],
+        )
+        if idempotency is not None:
+            assert render is not None
+            remember(conn, idempotency, 201, render(duty))
     return RecordOutcome.OK, duty
 
 
@@ -563,13 +593,18 @@ def update_classification(
     expected_version: int,
     values: Mapping[str, Any],
     scope: CaseScope,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[Classification], Any] | None = None,
 ) -> tuple[RecordOutcome, Classification | None]:
     """Store the given classification as the next version.
 
     expected_version is the version the editor read. A different current version is a conflict, and nothing is stored.
-    A request that changes nothing stores nothing and writes no audit row.
+    A request that changes nothing stores nothing and writes no audit row. With an idempotency scope the key is checked
+    first, and a successful request stores render(classification), changed or not.
     """
     with connect() as conn:
+        check(conn, idempotency)
         status = _lock_case_for_change(conn, case_id, scope)
         if status is None:
             return RecordOutcome.NOT_FOUND, None
@@ -580,6 +615,9 @@ def update_classification(
             return RecordOutcome.VERSION_CONFLICT, current
         changes = classification_changes(current, values)
         if not changes:
+            if idempotency is not None:
+                assert render is not None
+                remember(conn, idempotency, 200, render(current))
             return RecordOutcome.OK, current
         new_version = conn.execute(
             "SELECT COALESCE(MAX(version), 0) + 1 FROM case_classifications WHERE case_id = %s",
@@ -621,13 +659,16 @@ def update_classification(
             actor_id=scope.user_id,
             details={"version": {"old": current.version, "new": new_version}, **changes},
         )
-    stored = Classification(
-        version=new_version,
-        **{name: values[name] for name in CLASSIFICATION_EDITABLE_FIELDS if name != "triggers"},
-        triggers=tuple(values["triggers"]),
-        created_by=scope.user_id,
-        created_at=created_at,
-    )
+        stored = Classification(
+            version=new_version,
+            **{name: values[name] for name in CLASSIFICATION_EDITABLE_FIELDS if name != "triggers"},
+            triggers=tuple(values["triggers"]),
+            created_by=scope.user_id,
+            created_at=created_at,
+        )
+        if idempotency is not None:
+            assert render is not None
+            remember(conn, idempotency, 200, render(stored))
     return RecordOutcome.OK, stored
 
 

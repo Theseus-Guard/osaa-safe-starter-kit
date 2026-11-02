@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import io
 import os
 import uuid
@@ -8,7 +9,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 import psycopg
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -76,6 +77,7 @@ from safe_kit.rate_limit import clear as clear_rate_limit
 from safe_kit.rate_limit import hit as hit_rate_limit
 from safe_kit.privacy import CSV_COLUMNS, inventory, inventory_csv_rows
 from safe_kit.rbac import RoleOutcome, list_catalog, list_role_permissions, set_role_permissions
+from safe_kit.idempotency import KeyReused, Replayed, checked_key, key_scope
 from safe_kit.reporter_channel import ContactOutcome, hide_reporter, read_reporter_contact, submit_report
 from safe_kit.security import (
     MIN_PASSWORD_LENGTH,
@@ -125,6 +127,28 @@ async def _startup_guard(_app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="SAFE-Starter-Kit API", version="0.1.0", lifespan=_startup_guard)
+
+
+@app.exception_handler(Replayed)
+def _replayed_request(request: Request, error: Replayed) -> JSONResponse:
+    """A repeated request with the same Idempotency-Key: the stored answer, with its status and body. Nothing is written."""
+    return JSONResponse(status_code=error.stored.status_code, content=error.stored.body)
+
+
+@app.exception_handler(KeyReused)
+def _reused_key(request: Request, error: KeyReused) -> JSONResponse:
+    """The key came with another request. Nothing of the stored request is returned."""
+    return JSONResponse(status_code=409, content={"detail": {"status": "idempotency_key_reused"}})
+
+
+CASES_ROUTE = "/api/v1/cases"
+REPORTS_ROUTE = "/api/v1/reports"
+IMPORT_ROUTE = "/api/v1/cases/import"
+ASSIGNMENTS_ROUTE = "/api/v1/cases/{case_id}/assignments"
+CLOSE_ROUTE = "/api/v1/cases/{case_id}/close"
+REOPEN_ROUTE = "/api/v1/cases/{case_id}/reopen"
+DEADLINE_ROUTE = "/api/v1/cases/{case_id}/deadlines/{task_id}"
+RESTORE_ROUTE = "/api/v1/cases/{case_id}/deadlines/{task_id}/restore"
 
 
 @app.exception_handler(RequestValidationError)
@@ -844,9 +868,19 @@ def _visible_case_or_404(case_id: uuid.UUID, scope: CaseScope) -> Case:
 def submit_case(
     body: CaseCreateRequest,
     actor: User = Depends(require_permission("cases:submit")),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> CaseResponse:
+    scope_key = key_scope(
+        actor.id, "POST", CASES_ROUTE, checked_key(idempotency_key), CASES_ROUTE, body.model_dump(mode="json")
+    )
     try:
-        case = create_case(body.title, body.awareness_time, created_by=actor.id)
+        case = create_case(
+            body.title,
+            body.awareness_time,
+            created_by=actor.id,
+            idempotency=scope_key,
+            render=lambda created: _case_response(created, _scope(actor)).model_dump(mode="json"),
+        )
     except TimezoneNotConfigured:
         raise HTTPException(status_code=409, detail="system timezone is not configured")
     return _case_response(case, _scope(actor))
@@ -868,10 +902,22 @@ class ReportCreateRequest(CaseCreateRequest):
 def open_report(
     body: ReportCreateRequest,
     actor: User = Depends(require_permission("cases:submit")),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> CaseResponse:
     """Open a case through the reporter channel. The case, its deadlines, and the reporter identity are stored together."""
+    # The contact is part of the request, so it is in the fingerprint; it is never part of a stored response.
+    scope_key = key_scope(
+        actor.id, "POST", REPORTS_ROUTE, checked_key(idempotency_key), REPORTS_ROUTE, body.model_dump(mode="json")
+    )
     try:
-        case = submit_report(body.title, body.awareness_time, body.contact, actor.id)
+        case = submit_report(
+            body.title,
+            body.awareness_time,
+            body.contact,
+            actor.id,
+            idempotency=scope_key,
+            render=lambda created: _case_response(created, _scope(actor)).model_dump(mode="json"),
+        )
     except TimezoneNotConfigured:
         raise HTTPException(status_code=409, detail="system timezone is not configured")
     return _case_response(case, _scope(actor))
@@ -941,15 +987,29 @@ def _import_response(results: list[RecordResult]) -> CaseImportResponse:
 async def import_cases(
     request: Request,
     actor: User = Depends(require_permission("cases:submit")),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> CaseImportResponse:
-    """Import case records in the project format. Each record is stored or refused on its own; see safe_kit.case_import."""
+    """Import case records in the project format. Each record is stored or refused on its own; see safe_kit.case_import.
+
+    The fingerprint is the SHA-256 of the file. A repeated import with the same key gets the stored answer of the first.
+    """
+    key = checked_key(idempotency_key)
     body = await _read_import_body(request)
     try:
         records = parse_import_file(body)
     except ImportFileError as error:
         raise HTTPException(status_code=422, detail=str(error))
+    scope_key = key_scope(
+        actor.id, "POST", IMPORT_ROUTE, key, IMPORT_ROUTE, {"file_sha256": hashlib.sha256(body).hexdigest()}
+    )
     try:
-        results = await run_in_threadpool(import_records, records, _scope(actor))
+        results = await run_in_threadpool(
+            import_records,
+            records,
+            _scope(actor),
+            idempotency=scope_key,
+            render=lambda done: _import_response(done).model_dump(mode="json"),
+        )
     except TimezoneNotConfigured:
         raise HTTPException(status_code=409, detail="system timezone is not configured")
     return _import_response(results)
@@ -1032,8 +1092,23 @@ def add_case_assignment(
     case_id: uuid.UUID,
     body: AssignmentRequest,
     actor: User = Depends(require_permission("cases:assign")),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> AssignmentResponse:
-    outcome, assignment = assign_member(str(case_id), str(body.user_id), _scope(actor))
+    scope_key = key_scope(
+        actor.id,
+        "POST",
+        ASSIGNMENTS_ROUTE,
+        checked_key(idempotency_key),
+        f"/api/v1/cases/{case_id}/assignments",
+        body.model_dump(mode="json"),
+    )
+    outcome, assignment = assign_member(
+        str(case_id),
+        str(body.user_id),
+        _scope(actor),
+        idempotency=scope_key,
+        render=lambda created: _assignment_response(created).model_dump(mode="json"),
+    )
     if outcome is Outcome.NOT_FOUND:
         raise CASE_NOT_FOUND
     if outcome is Outcome.CLOSED:
@@ -1069,9 +1144,19 @@ def close_case_endpoint(
     case_id: uuid.UUID,
     body: ReasonRequest,
     actor: User = Depends(require_permission("cases:close")),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> CaseResponse:
     scope = _scope(actor)
-    outcome, blockers = close_case(str(case_id), body.reason, scope)
+    scope_key = key_scope(
+        actor.id, "POST", CLOSE_ROUTE, checked_key(idempotency_key), f"/api/v1/cases/{case_id}/close", body.model_dump(mode="json")
+    )
+    outcome, blockers = close_case(
+        str(case_id),
+        body.reason,
+        scope,
+        idempotency=scope_key,
+        render=lambda closed: _case_response(closed, scope).model_dump(mode="json"),
+    )
     if outcome is Outcome.NOT_FOUND:
         raise CASE_NOT_FOUND
     if outcome is Outcome.CLOSED:
@@ -1086,9 +1171,19 @@ def reopen_case_endpoint(
     case_id: uuid.UUID,
     body: ReasonRequest,
     actor: User = Depends(require_permission("cases:close")),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> CaseResponse:
     scope = _scope(actor)
-    outcome = reopen_case(str(case_id), body.reason, scope)
+    scope_key = key_scope(
+        actor.id, "POST", REOPEN_ROUTE, checked_key(idempotency_key), f"/api/v1/cases/{case_id}/reopen", body.model_dump(mode="json")
+    )
+    outcome = reopen_case(
+        str(case_id),
+        body.reason,
+        scope,
+        idempotency=scope_key,
+        render=lambda reopened: _case_response(reopened, scope).model_dump(mode="json"),
+    )
     if outcome is Outcome.NOT_FOUND:
         raise CASE_NOT_FOUND
     if outcome is Outcome.NOT_CLOSED:
@@ -1102,8 +1197,17 @@ def update_case_deadline(
     task_id: uuid.UUID,
     body: DeadlineUpdateRequest,
     actor: User = Depends(require_any_permission("cases:read_all", "cases:read_assigned")),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> CaseResponse:
     scope = _scope(actor)
+    scope_key = key_scope(
+        actor.id,
+        "PATCH",
+        DEADLINE_ROUTE,
+        checked_key(idempotency_key),
+        f"/api/v1/cases/{case_id}/deadlines/{task_id}",
+        body.model_dump(mode="json"),
+    )
     outcome = update_deadline(
         str(case_id),
         str(task_id),
@@ -1111,6 +1215,8 @@ def update_case_deadline(
         body.reason,
         scope,
         may_mark_not_applicable="cases:triage" in permissions_of(actor),
+        idempotency=scope_key,
+        render=lambda changed: _case_response(changed, scope).model_dump(mode="json"),
     )
     if outcome is Outcome.NOT_FOUND:
         raise CASE_NOT_FOUND
@@ -1128,14 +1234,25 @@ def restore_case_deadline(
     case_id: uuid.UUID,
     task_id: uuid.UUID,
     actor: User = Depends(require_any_permission("cases:read_all", "cases:read_assigned")),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> CaseResponse:
     """Turn off the not applicable exception of a deadline task: it goes back to the status it had before."""
     scope = _scope(actor)
+    scope_key = key_scope(
+        actor.id,
+        "POST",
+        RESTORE_ROUTE,
+        checked_key(idempotency_key),
+        f"/api/v1/cases/{case_id}/deadlines/{task_id}/restore",
+        {},
+    )
     outcome = restore_deadline(
         str(case_id),
         str(task_id),
         scope,
         may_mark_not_applicable="cases:triage" in permissions_of(actor),
+        idempotency=scope_key,
+        render=lambda restored: _case_response(restored, scope).model_dump(mode="json"),
     )
     if outcome is Outcome.NOT_FOUND:
         raise CASE_NOT_FOUND

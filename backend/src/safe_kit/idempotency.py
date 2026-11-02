@@ -16,6 +16,8 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
+from fastapi import HTTPException
+
 KEY_PATTERN = re.compile(r"^[!-~]{1,128}$")
 REPLAY_WINDOW = timedelta(days=7)
 
@@ -111,3 +113,58 @@ def store(conn, scope: KeyScope, response: StoredResponse) -> None:
             json.dumps(response.body),
         ),
     )
+
+
+def checked_key(value: str | None) -> str:
+    """The Idempotency-Key header of a side-effect request: required, and 1 to 128 visible ASCII characters."""
+    if value is None:
+        raise HTTPException(status_code=400, detail={"status": "idempotency_key_required"})
+    if not valid_key(value):
+        raise HTTPException(status_code=400, detail={"status": "idempotency_key_invalid"})
+    return value
+
+
+def key_scope(principal_id: str, method: str, route: str, key: str, path: str, body: Any) -> KeyScope:
+    """The scope of one request. The route is the template, the fingerprint covers the concrete path and the body."""
+    return KeyScope(
+        principal_id=principal_id,
+        method=method,
+        route=route,
+        key=key,
+        fingerprint=fingerprint(method, path, "", body),
+    )
+
+
+class Replayed(Exception):
+    """The same key and the same request came again. The API answers with the stored response (see api.py)."""
+
+    def __init__(self, stored: StoredResponse):
+        super().__init__("idempotent replay")
+        self.stored = stored
+
+
+class KeyReused(Exception):
+    """The key came with a different request. The API answers 409 and returns nothing of the stored request."""
+
+
+def check(conn, scope: KeyScope | None) -> None:
+    """Lock the scope and look it up, inside the caller's transaction, before any change is made.
+
+    Raises Replayed for a repeated request and KeyReused for a key used with another one. Raising inside the
+    transaction rolls it back, so a replay writes nothing. Without a scope the request is new and nothing happens.
+    """
+    if scope is None:
+        return
+    lock_scope(conn, scope)
+    found, stored = lookup(conn, scope)
+    if found is KeyLookup.REPLAY:
+        assert stored is not None
+        raise Replayed(stored)
+    if found is KeyLookup.REUSED:
+        raise KeyReused()
+
+
+def remember(conn, scope: KeyScope | None, status_code: int, body: Any) -> None:
+    """Store the response of a successful request under its key, in the caller's transaction. No-op without a scope."""
+    if scope is not None:
+        store(conn, scope, StoredResponse(status_code=status_code, body=body))

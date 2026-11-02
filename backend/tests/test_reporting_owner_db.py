@@ -6,6 +6,7 @@ can assign no case and triage none. The database tests use the helpers of tests/
 skipped unless SAFE_TEST_DATABASE=1.
 """
 
+import uuid
 import pytest
 
 from safe_kit import audit
@@ -26,6 +27,11 @@ from test_reporter_channel import (
     requires_database,
     system_timezone_configured,
 )
+
+
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
 
 
 @requires_database
@@ -124,7 +130,7 @@ def test_reporting_owner_cannot_assign_the_case(db_client, people):
     case_id = open_report_via_api(db_client, people["reporter"])
     owner = new_user("reporting_owner")
 
-    response = db_client(owner).post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["investigator"]})
+    response = db_client(owner).post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["investigator"]}, headers=idem())
 
     assert response.status_code == 403
 

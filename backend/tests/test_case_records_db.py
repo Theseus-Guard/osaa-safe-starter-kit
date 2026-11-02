@@ -15,7 +15,6 @@ from fastapi.testclient import TestClient
 from safe_kit import api, auth, users
 from safe_kit.case_records import IMPACT_AREAS
 from safe_kit.db import connect
-from safe_kit.rbac import list_role_permissions, set_role_permissions
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("SAFE_TEST_DATABASE") != "1",
@@ -23,6 +22,11 @@ pytestmark = pytest.mark.skipif(
 )
 
 NEW_TABLES = ("awareness_events", "impacts", "legal_duties", "case_classifications")
+
+
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
 
 
 @pytest.fixture(autouse=True)
@@ -93,14 +97,14 @@ def future_free(days: int = 1) -> str:
 
 
 def new_case(reporter: ActingClient) -> str:
-    response = reporter.post("/api/v1/cases", json={"title": "Case", "awareness_time": past()})
+    response = reporter.post("/api/v1/cases", json={"title": "Case", "awareness_time": past()}, headers=idem())
     assert response.status_code == 201, response.text
     return response.json()["id"]
 
 
 def new_reporter_channel_case(reporter: ActingClient, contact: str | None) -> str:
     response = reporter.post(
-        "/api/v1/reports", json={"title": "Report", "awareness_time": past(), "contact": contact}
+        "/api/v1/reports", json={"title": "Report", "awareness_time": past(), "contact": contact}, headers=idem()
     )
     assert response.status_code == 201, response.text
     return response.json()["id"]
@@ -191,7 +195,7 @@ def reporter_contact_holder(role: str = "triager"):
 
 def assign_investigator(triager: ActingClient, case_id: str, investigator_id: str) -> None:
     with reporter_contact_holder():
-        response = triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": investigator_id})
+        response = triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": investigator_id}, headers=idem())
     assert response.status_code == 201, response.text
 
 
@@ -219,7 +223,7 @@ def test_new_tables_have_the_standard_columns_and_the_updated_at_trigger():
 def test_the_updated_at_trigger_moves_updated_at_on_every_change(people):
     case_id = new_case(people["reporter"])
     people["triager"].put(
-        f"/api/v1/cases/{case_id}/impacts/scale", json={"severity": "low", "scope": "three users"}
+        f"/api/v1/cases/{case_id}/impacts/scale", json={"severity": "low", "scope": "three users"}, headers=idem()
     )
     with connect() as conn:
         conn.execute(
@@ -235,11 +239,11 @@ def test_the_updated_at_trigger_moves_updated_at_on_every_change(people):
 def test_soft_deleted_rows_disappear_from_every_new_read(people):
     case_id = new_case(people["reporter"])
     triager = people["triager"]
-    assert triager.post(f"/api/v1/cases/{case_id}/awareness-events", json=awareness_body()).status_code == 201
-    assert triager.put(f"/api/v1/cases/{case_id}/impacts/scale", json={"severity": "low", "scope": "s"}).status_code == 200
+    assert triager.post(f"/api/v1/cases/{case_id}/awareness-events", json=awareness_body(), headers=idem()).status_code == 201
+    assert triager.put(f"/api/v1/cases/{case_id}/impacts/scale", json={"severity": "low", "scope": "s"}, headers=idem()).status_code == 200
     duty = {"kind": "statutory", "description": "notify", "source_reference": "s. 4", "due_at": future_free()}
-    assert triager.post(f"/api/v1/cases/{case_id}/legal-duties", json=duty).status_code == 201
-    assert triager.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(0)).status_code == 200
+    assert triager.post(f"/api/v1/cases/{case_id}/legal-duties", json=duty, headers=idem()).status_code == 201
+    assert triager.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(0), headers=idem()).status_code == 200
 
     for table in NEW_TABLES:
         soft_delete(table, case_id)
@@ -256,7 +260,7 @@ def test_soft_deleted_rows_disappear_from_every_new_read(people):
 
 def test_reporter_reads_own_awareness_without_the_basis_and_others_get_404(people):
     case_id = new_case(people["reporter"])
-    people["triager"].post(f"/api/v1/cases/{case_id}/awareness-events", json=awareness_body(basis="secret basis"))
+    people["triager"].post(f"/api/v1/cases/{case_id}/awareness-events", json=awareness_body(basis="secret basis"), headers=idem())
 
     own = people["reporter"].get(f"/api/v1/cases/{case_id}/awareness-events")
     assert own.status_code == 200
@@ -280,13 +284,13 @@ def test_reporter_channel_case_is_hidden_from_triagers_until_assigned(people):
 def test_investigator_cannot_write_triage_records(people):
     case_id = new_case(people["reporter"])
     investigator = ActingClient(people["investigator_id"])
-    assert investigator.post(f"/api/v1/cases/{case_id}/awareness-events", json=awareness_body()).status_code == 403
-    assert investigator.put(f"/api/v1/cases/{case_id}/impacts/scale", json={"severity": "low", "scope": "s"}).status_code == 403
+    assert investigator.post(f"/api/v1/cases/{case_id}/awareness-events", json=awareness_body(), headers=idem()).status_code == 403
+    assert investigator.put(f"/api/v1/cases/{case_id}/impacts/scale", json={"severity": "low", "scope": "s"}, headers=idem()).status_code == 403
     assert investigator.post(
         f"/api/v1/cases/{case_id}/legal-duties",
-        json={"kind": "statutory", "description": "d", "source_reference": "s", "due_at": future_free()},
+        json={"kind": "statutory", "description": "d", "source_reference": "s", "due_at": future_free()}, headers=idem(),
     ).status_code == 403
-    assert investigator.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(0)).status_code == 403
+    assert investigator.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(0), headers=idem()).status_code == 403
 
 
 # --- T01: awareness events ----------------------------------------------------------------------------------------
@@ -296,7 +300,7 @@ def test_awareness_events_keep_incident_near_miss_and_blocked_attempt_apart(peop
     case_id = new_case(people["reporter"])
     triager = people["triager"]
     for kind in ("incident", "near_miss", "blocked_attempt"):
-        assert triager.post(f"/api/v1/cases/{case_id}/awareness-events", json=awareness_body(kind)).status_code == 201
+        assert triager.post(f"/api/v1/cases/{case_id}/awareness-events", json=awareness_body(kind), headers=idem()).status_code == 201
     kinds = [row["event_kind"] for row in triager.get(f"/api/v1/cases/{case_id}/awareness-events").json()]
     assert sorted(kinds) == ["blocked_attempt", "incident", "near_miss"]
 
@@ -304,15 +308,15 @@ def test_awareness_events_keep_incident_near_miss_and_blocked_attempt_apart(peop
 def test_closed_case_refuses_every_record_write_but_still_reads(people):
     case_id = new_case(people["reporter"])
     triager = people["triager"]
-    assert triager.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(0)).status_code == 200
+    assert triager.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(0), headers=idem()).status_code == 200
     with connect() as conn:
         conn.execute(
             "UPDATE cases SET status = 'closed', closed_at = now(), closed_by = %s, close_reason = 'test' WHERE id = %s",
             (people["triager"].user_id, case_id),
         )
-    assert triager.post(f"/api/v1/cases/{case_id}/awareness-events", json=awareness_body()).status_code == 409
-    assert triager.put(f"/api/v1/cases/{case_id}/impacts/scale", json={"severity": "low", "scope": "s"}).status_code == 409
-    assert triager.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(1)).status_code == 409
+    assert triager.post(f"/api/v1/cases/{case_id}/awareness-events", json=awareness_body(), headers=idem()).status_code == 409
+    assert triager.put(f"/api/v1/cases/{case_id}/impacts/scale", json={"severity": "low", "scope": "s"}, headers=idem()).status_code == 409
+    assert triager.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(1), headers=idem()).status_code == 409
     assert triager.get(f"/api/v1/cases/{case_id}/classification").status_code == 200
 
 
@@ -326,7 +330,7 @@ def test_impacts_list_every_area_and_an_assessed_none_differs_from_not_assessed(
     assert [row["area"] for row in rows] == list(IMPACT_AREAS)
     assert all(row["assessed"] is False for row in rows)
 
-    assert triager.put(f"/api/v1/cases/{case_id}/impacts/scale", json={"severity": "none", "scope": "no users"}).status_code == 200
+    assert triager.put(f"/api/v1/cases/{case_id}/impacts/scale", json={"severity": "none", "scope": "no users"}, headers=idem()).status_code == 200
     rows = {row["area"]: row for row in triager.get(f"/api/v1/cases/{case_id}/impacts").json()}
     assert rows["scale"]["assessed"] is True and rows["scale"]["severity"] == "none"
     assert rows["duration"]["assessed"] is False
@@ -335,11 +339,11 @@ def test_impacts_list_every_area_and_an_assessed_none_differs_from_not_assessed(
 def test_impact_changes_are_audited_and_a_repeat_writes_no_row(people):
     case_id = new_case(people["reporter"])
     triager = people["triager"]
-    triager.put(f"/api/v1/cases/{case_id}/impacts/reversibility", json={"severity": "unknown", "scope": "to research"})
+    triager.put(f"/api/v1/cases/{case_id}/impacts/reversibility", json={"severity": "unknown", "scope": "to research"}, headers=idem())
     assert audit_count("case.impact_changed", case_id) == 1
-    triager.put(f"/api/v1/cases/{case_id}/impacts/reversibility", json={"severity": "unknown", "scope": "to research"})
+    triager.put(f"/api/v1/cases/{case_id}/impacts/reversibility", json={"severity": "unknown", "scope": "to research"}, headers=idem())
     assert audit_count("case.impact_changed", case_id) == 1
-    triager.put(f"/api/v1/cases/{case_id}/impacts/reversibility", json={"severity": "high", "scope": "to research"})
+    triager.put(f"/api/v1/cases/{case_id}/impacts/reversibility", json={"severity": "high", "scope": "to research"}, headers=idem())
     assert audit_count("case.impact_changed", case_id) == 2
 
 
@@ -352,7 +356,7 @@ def test_legal_duty_leaves_the_safe_deadlines_alone_and_its_changes_are_audited(
     deadlines_before = triager.get(f"/api/v1/cases/{case_id}").json()["deadlines"]
 
     duty = {"kind": "contractual", "description": "tell the customer", "source_reference": "clause 9", "due_at": future_free(1)}
-    created = triager.post(f"/api/v1/cases/{case_id}/legal-duties", json=duty)
+    created = triager.post(f"/api/v1/cases/{case_id}/legal-duties", json=duty, headers=idem())
     assert created.status_code == 201
     duty_id = created.json()["id"]
     assert audit_count("case.legal_duty_added", case_id) == 1
@@ -370,7 +374,7 @@ def test_legal_duty_patch_refuses_nulls_and_unknown_duties(people):
     case_id = new_case(people["reporter"])
     triager = people["triager"]
     duty = {"kind": "statutory", "description": "d", "source_reference": "s", "due_at": future_free()}
-    duty_id = triager.post(f"/api/v1/cases/{case_id}/legal-duties", json=duty).json()["id"]
+    duty_id = triager.post(f"/api/v1/cases/{case_id}/legal-duties", json=duty, headers=idem()).json()["id"]
     assert triager.patch(f"/api/v1/cases/{case_id}/legal-duties/{duty_id}", json={"description": None}).status_code == 422
     assert triager.patch(f"/api/v1/cases/{case_id}/legal-duties/{duty_id}", json={}).status_code == 422
     unknown = str(uuid.uuid4())
@@ -385,18 +389,18 @@ def test_classification_is_stored_as_versions_with_a_conflict_check(people):
     triager = people["triager"]
     assert triager.get(f"/api/v1/cases/{case_id}/classification").json()["version"] == 0
 
-    first = triager.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(0))
+    first = triager.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(0), headers=idem())
     assert first.status_code == 200 and first.json()["version"] == 1
 
-    stale = triager.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(0, event_kind="incident"))
+    stale = triager.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(0, event_kind="incident"), headers=idem())
     assert stale.status_code == 409
     assert stale.json() == {"detail": {"status": "classification_version_conflict", "current_version": 1}}
 
-    same = triager.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(1))
+    same = triager.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(1), headers=idem())
     assert same.status_code == 200 and same.json()["version"] == 1
     assert audit_count("case.classification_changed", case_id) == 1
 
-    changed = triager.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(1, event_kind="incident"))
+    changed = triager.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(1, event_kind="incident"), headers=idem())
     assert changed.status_code == 200 and changed.json()["version"] == 2
     assert audit_count("case.classification_changed", case_id) == 2
     assert triager.get(f"/api/v1/cases/{case_id}/classification").json()["event_kind"] == "incident"
@@ -409,7 +413,7 @@ def test_the_classification_refuses_the_case_wide_internal_option(people, value)
     triager = people["triager"]
     deadlines_before = triager.get(f"/api/v1/cases/{case_id}").json()["deadlines"]
     body = classification_body(0, internal_incident_option=value)
-    refused = triager.put(f"/api/v1/cases/{case_id}/classification", json=body)
+    refused = triager.put(f"/api/v1/cases/{case_id}/classification", json=body, headers=idem())
     assert refused.status_code == 422, refused.text
     assert "PATCH /api/v1/cases/{case_id}/deadlines/{task_id}" in refused.text
     assert triager.get(f"/api/v1/cases/{case_id}/classification").json()["version"] == 0
@@ -418,7 +422,7 @@ def test_the_classification_refuses_the_case_wide_internal_option(people, value)
 
 def test_reporter_cannot_store_a_classification(people):
     case_id = new_case(people["reporter"])
-    assert people["reporter"].put(f"/api/v1/cases/{case_id}/classification", json=classification_body(0)).status_code == 403
+    assert people["reporter"].put(f"/api/v1/cases/{case_id}/classification", json=classification_body(0), headers=idem()).status_code == 403
 
 
 def test_preliminary_report_is_generated_with_missing_fields_marked(people):
@@ -439,12 +443,12 @@ def test_preliminary_report_is_complete_when_every_field_is_recorded(people):
     case_id = new_reporter_channel_case(people["reporter"], contact="contact-2")
     triager = people["triager"]
     assign_investigator(triager, case_id, people["investigator_id"])
-    assert triager.post(f"/api/v1/cases/{case_id}/awareness-events", json=awareness_body()).status_code == 201
+    assert triager.post(f"/api/v1/cases/{case_id}/awareness-events", json=awareness_body(), headers=idem()).status_code == 201
     for area in IMPACT_AREAS:
-        assert triager.put(f"/api/v1/cases/{case_id}/impacts/{area}", json={"severity": "low", "scope": "scope"}).status_code == 200
-    assert triager.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(0)).status_code == 200
+        assert triager.put(f"/api/v1/cases/{case_id}/impacts/{area}", json={"severity": "low", "scope": "scope"}, headers=idem()).status_code == 200
+    assert triager.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(0), headers=idem()).status_code == 200
     duty = {"kind": "statutory", "description": "notify", "source_reference": "s. 4", "due_at": future_free()}
-    assert triager.post(f"/api/v1/cases/{case_id}/legal-duties", json=duty).status_code == 201
+    assert triager.post(f"/api/v1/cases/{case_id}/legal-duties", json=duty, headers=idem()).status_code == 201
 
     report = triager.get(f"/api/v1/cases/{case_id}/preliminary-report").json()
     assert report["complete"] is True
@@ -458,7 +462,7 @@ def test_preliminary_report_marks_an_unknown_impact_as_unknown(people):
     case_id = new_reporter_channel_case(people["reporter"], contact="contact-3")
     triager = people["triager"]
     assign_investigator(triager, case_id, people["investigator_id"])
-    triager.put(f"/api/v1/cases/{case_id}/impacts/scale", json={"severity": "unknown", "scope": "to research"})
+    triager.put(f"/api/v1/cases/{case_id}/impacts/scale", json={"severity": "unknown", "scope": "to research"}, headers=idem())
     report = triager.get(f"/api/v1/cases/{case_id}/preliminary-report").json()
     assert {"field": "impacts.scale", "state": "unknown"} in report["missing_fields"]
 

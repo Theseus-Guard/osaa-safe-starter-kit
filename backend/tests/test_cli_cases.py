@@ -610,6 +610,7 @@ CASE_PATH = f"/api/v1/cases/{CASE_ID}"
 DUTY_PATH = f"{CASE_PATH}/legal-duties/{DUTY_ID}"
 CASE_UPDATED_AT = "2026-10-31T11:00:00Z"
 ROUND_ID = "cccccccc-dddd-4eee-8fff-000000000001"
+EVIDENCE_ID = "dddddddd-eeee-4fff-8000-000000000001"
 REVIEW_LAYER_PATH = f"/api/v1/reviews/{ROUND_ID}/layers/model"
 # The fake API routes by path; the case_id query is sent with the request but is not part of the route key.
 REVIEW_LIST_PATH = "/api/v1/reviews"
@@ -743,9 +744,9 @@ COMMAND_CASES = [
     ),
     pytest.param(
         ("case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "pass", "--reason", "Checked",
-         "--round", ROUND_ID, "--revision", "1"),
+         "--evidence", EVIDENCE_ID, "--round", ROUND_ID, "--revision", "1"),
         "PATCH", REVIEW_LAYER_PATH,
-        {"outcome": "pass", "reason": "Checked", "evidence_ids": [], "expected_revision": 1}, 200, REVIEW_BODY,
+        {"outcome": "pass", "reason": "Checked", "evidence_ids": [EVIDENCE_ID], "expected_revision": 1}, 200, REVIEW_BODY,
         "Review layer saved.", "is closed", id="review-record",
     ),
     pytest.param(
@@ -873,7 +874,7 @@ def test_case_update_secrets_never_reach_the_output(
     [
         (("case", "close", CASE_ID, "--reason", "Resolved", "--json"), "POST", f"{CASE_PATH}/close", CASE_BODY),
         (("case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "pass", "--round", ROUND_ID,
-          "--revision", "1", "--json"), "PATCH", REVIEW_LAYER_PATH,
+          "--evidence", EVIDENCE_ID, "--revision", "1", "--json"), "PATCH", REVIEW_LAYER_PATH,
          REVIEW_BODY),
         (("case", "impact", "set", CASE_ID, "scale", "--severity", "low", "--scope", "x", "--json"), "PUT",
          f"{CASE_PATH}/impacts/scale", IMPACT_BODY),
@@ -1112,7 +1113,7 @@ def test_review_record_permission_denied_names_the_assignment_requirement(api, c
     api.route("PATCH", REVIEW_LAYER_PATH, status=403, body={"detail": "only an assigned reviewer can record a review"})
     code, out, err = run(
         capsys, "case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "fail", "--reason", "Why",
-        "--round", ROUND_ID, "--revision", "1", "--username", "alice",
+        "--round", ROUND_ID, "--evidence", EVIDENCE_ID, "--revision", "1", "--username", "alice",
     )
     assert code == 1
     assert "assigned to the case" in err
@@ -1124,7 +1125,7 @@ def test_review_record_without_round_uses_the_open_round_and_its_revision_is_the
     api.route("PATCH", REVIEW_LAYER_PATH, body=review_round_body(revision=5))
     code, out, err = run(
         capsys, "case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "pass",
-        "--revision", "4", "--username", "alice",
+        "--evidence", EVIDENCE_ID, "--revision", "4", "--username", "alice",
     )
     assert code == 0, err
     assert "The round revision is now 5." in out
@@ -1132,14 +1133,25 @@ def test_review_record_without_round_uses_the_open_round_and_its_revision_is_the
         ("POST", "/api/v1/auth/token"), ("GET", "/api/v1/reviews"), ("PATCH", REVIEW_LAYER_PATH),
         ("POST", "/api/v1/auth/logout"),
     ]
-    assert api.calls[2]["json"] == {"outcome": "pass", "reason": None, "evidence_ids": [], "expected_revision": 4}
+    assert api.calls[2]["json"] == {"outcome": "pass", "reason": None, "evidence_ids": [EVIDENCE_ID], "expected_revision": 4}
+
+
+def test_review_record_pass_without_evidence_is_refused_before_any_request(api, capsys):
+    # A pass cites at least one evidence item of the case (T06). The check runs before the login and the request.
+    code, out, err = run(
+        capsys, "case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "pass",
+        "--revision", "1", "--username", "alice",
+    )
+    assert code == 2
+    assert "a pass needs at least one evidence item of this case" in err
+    assert api.calls == []
 
 
 def test_review_record_without_an_open_round_says_how_to_open_one(api, capsys):
     api.route("GET", REVIEW_LIST_PATH, body=[review_round_body(status="closed")])
     code, out, err = run(
         capsys, "case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "pass",
-        "--revision", "1", "--username", "alice",
+        "--evidence", EVIDENCE_ID, "--revision", "1", "--username", "alice",
     )
     assert code == 1
     assert "no open review round" in err
@@ -1149,7 +1161,7 @@ def test_review_record_without_an_open_round_says_how_to_open_one(api, capsys):
 def test_review_record_refuses_a_non_pass_outcome_without_a_reason_before_any_request(api, capsys):
     code, out, err = run(
         capsys, "case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "fail",
-        "--round", ROUND_ID, "--revision", "1", "--username", "alice",
+        "--round", ROUND_ID, "--evidence", EVIDENCE_ID, "--revision", "1", "--username", "alice",
     )
     assert code == 2  # a usage error, as in the other argument checks
     assert "a reason is required" in err
@@ -1163,7 +1175,7 @@ def test_review_record_revision_conflict_reports_the_current_revision(api, capsy
     )
     code, out, err = run(
         capsys, "case", "review", "record", CASE_ID, "--layer", "model", "--outcome", "pass",
-        "--round", ROUND_ID, "--revision", "3", "--username", "alice",
+        "--evidence", EVIDENCE_ID, "--round", ROUND_ID, "--revision", "3", "--username", "alice",
     )
     assert code == 1
     assert out == ""

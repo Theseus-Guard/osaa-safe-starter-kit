@@ -21,6 +21,11 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
+
+
 @pytest.fixture(autouse=True)
 def system_timezone_configured():
     """Case creation needs a system timezone. Set one on a freshly migrated test database."""
@@ -72,13 +77,13 @@ def past(hours: int = 2) -> str:
 
 
 def new_case(reporter: ActingClient, title: str = "Case") -> str:
-    response = reporter.post("/api/v1/cases", json={"title": title, "awareness_time": past()})
+    response = reporter.post("/api/v1/cases", json={"title": title, "awareness_time": past()}, headers=idem())
     assert response.status_code == 201, response.text
     return response.json()["id"]
 
 
 def new_reporter_channel_case(reporter: ActingClient) -> str:
-    response = reporter.post("/api/v1/reports", json={"title": "Report", "awareness_time": past(), "contact": None})
+    response = reporter.post("/api/v1/reports", json={"title": "Report", "awareness_time": past(), "contact": None}, headers=idem())
     assert response.status_code == 201, response.text
     return response.json()["id"]
 
@@ -201,7 +206,7 @@ def test_triager_links_two_open_cases_and_both_sides_list_the_link(people):
     second = new_case(people["reporter"], "Incident two")
     triager = people["triager"]
 
-    created = triager.post(f"/api/v1/cases/{first}/links", json={"linked_case_id": second})
+    created = triager.post(f"/api/v1/cases/{first}/links", json={"linked_case_id": second}, headers=idem())
     assert created.status_code == 201, created.text
     assert created.json()["linked_case_id"] == second
     assert created.json()["linked_case_title"] == "Incident two"
@@ -217,15 +222,15 @@ def test_the_pair_cannot_be_linked_twice_and_the_same_case_is_refused(people):
     first = new_case(people["reporter"], "First")
     second = new_case(people["reporter"], "Second")
     triager = people["triager"]
-    assert triager.post(f"/api/v1/cases/{first}/links", json={"linked_case_id": second}).status_code == 201
+    assert triager.post(f"/api/v1/cases/{first}/links", json={"linked_case_id": second}, headers=idem()).status_code == 201
 
-    again = triager.post(f"/api/v1/cases/{first}/links", json={"linked_case_id": second})
+    again = triager.post(f"/api/v1/cases/{first}/links", json={"linked_case_id": second}, headers=idem())
     assert again.status_code == 409
     assert again.json() == {"detail": "cases are already linked"}
-    reverse = triager.post(f"/api/v1/cases/{second}/links", json={"linked_case_id": first})
+    reverse = triager.post(f"/api/v1/cases/{second}/links", json={"linked_case_id": first}, headers=idem())
     assert reverse.status_code == 409
 
-    same = triager.post(f"/api/v1/cases/{first}/links", json={"linked_case_id": first})
+    same = triager.post(f"/api/v1/cases/{first}/links", json={"linked_case_id": first}, headers=idem())
     assert same.status_code == 422
     assert same.json() == {"detail": "a case cannot be linked to itself"}
 
@@ -237,7 +242,7 @@ def test_a_closed_case_on_either_side_refuses_the_link(people):
     triager = people["triager"]
 
     for source, linked in ((open_case, closed_case), (closed_case, open_case)):
-        response = triager.post(f"/api/v1/cases/{source}/links", json={"linked_case_id": linked})
+        response = triager.post(f"/api/v1/cases/{source}/links", json={"linked_case_id": linked}, headers=idem())
         assert response.status_code == 409
         assert response.json() == {"detail": "case is closed"}
 
@@ -246,7 +251,7 @@ def test_the_case_must_be_visible_to_add_a_link_and_is_not_found_otherwise(peopl
     own = new_case(people["reporter"], "Own")
     channel = new_reporter_channel_case(people["reporter"])
     # The triager cannot see a reporter-channel case until it is assigned, so the link is refused as not found.
-    response = people["triager"].post(f"/api/v1/cases/{own}/links", json={"linked_case_id": channel})
+    response = people["triager"].post(f"/api/v1/cases/{own}/links", json={"linked_case_id": channel}, headers=idem())
     assert response.status_code == 404
     assert response.json() == {"detail": "case not found"}
 
@@ -266,10 +271,10 @@ def test_a_link_to_a_case_the_reader_cannot_see_has_no_id_and_no_title(people):
 def test_the_reporter_reads_links_of_an_own_case_but_cannot_change_them(people):
     own = new_case(people["reporter"], "Own")
     other = new_case(people["other_reporter"], "Other")
-    assert people["triager"].post(f"/api/v1/cases/{own}/links", json={"linked_case_id": other}).status_code == 201
+    assert people["triager"].post(f"/api/v1/cases/{own}/links", json={"linked_case_id": other}, headers=idem()).status_code == 201
     assert people["reporter"].get(f"/api/v1/cases/{own}/links").status_code == 200
     # Writes need cases:triage, which the reporter role does not hold.
-    assert people["reporter"].post(f"/api/v1/cases/{own}/links", json={"linked_case_id": other}).status_code == 403
+    assert people["reporter"].post(f"/api/v1/cases/{own}/links", json={"linked_case_id": other}, headers=idem()).status_code == 403
     assert people["reporter"].delete(f"/api/v1/cases/{own}/links/{other}").status_code == 403
 
 
@@ -277,7 +282,7 @@ def test_removing_a_link_soft_deletes_it_and_the_pair_can_be_linked_again(people
     first = new_case(people["reporter"], "First")
     second = new_case(people["reporter"], "Second")
     triager = people["triager"]
-    assert triager.post(f"/api/v1/cases/{first}/links", json={"linked_case_id": second}).status_code == 201
+    assert triager.post(f"/api/v1/cases/{first}/links", json={"linked_case_id": second}, headers=idem()).status_code == 201
 
     assert triager.delete(f"/api/v1/cases/{first}/links/{second}").status_code == 204
     with connect() as conn:
@@ -288,14 +293,14 @@ def test_removing_a_link_soft_deletes_it_and_the_pair_can_be_linked_again(people
     assert row == (True, True)
     assert triager.get(f"/api/v1/cases/{first}/links").json() == []
     assert triager.delete(f"/api/v1/cases/{first}/links/{second}").status_code == 404
-    assert triager.post(f"/api/v1/cases/{second}/links", json={"linked_case_id": first}).status_code == 201
+    assert triager.post(f"/api/v1/cases/{second}/links", json={"linked_case_id": first}, headers=idem()).status_code == 201
 
 
 def test_a_closed_case_refuses_removal_too(people):
     first = new_case(people["reporter"], "First")
     second = new_case(people["reporter"], "Second")
     triager = people["triager"]
-    assert triager.post(f"/api/v1/cases/{first}/links", json={"linked_case_id": second}).status_code == 201
+    assert triager.post(f"/api/v1/cases/{first}/links", json={"linked_case_id": second}, headers=idem()).status_code == 201
     close_case_in_database(second, new_user("triager"))
     response = triager.delete(f"/api/v1/cases/{first}/links/{second}")
     assert response.status_code == 409
@@ -311,8 +316,8 @@ def test_each_add_and_remove_writes_one_audit_row_with_the_actor_and_no_free_tex
     triager = people["triager"]
     triager_id = triager.user_id
 
-    assert triager.post(f"/api/v1/cases/{first}/links", json={"linked_case_id": second}).status_code == 201
-    assert triager.post(f"/api/v1/cases/{first}/links", json={"linked_case_id": second}).status_code == 409
+    assert triager.post(f"/api/v1/cases/{first}/links", json={"linked_case_id": second}, headers=idem()).status_code == 201
+    assert triager.post(f"/api/v1/cases/{first}/links", json={"linked_case_id": second}, headers=idem()).status_code == 409
     assert triager.delete(f"/api/v1/cases/{first}/links/{second}").status_code == 204
 
     added = audit_rows(audit.CASE_LINK_ADD, first)

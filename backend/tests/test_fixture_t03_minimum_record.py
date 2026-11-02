@@ -20,6 +20,7 @@ Not testable yet, so not asserted here:
 The database tests use the helpers of tests/test_case_records_db.py and are skipped unless SAFE_TEST_DATABASE=1.
 """
 
+import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
@@ -42,6 +43,11 @@ from test_evidence_lifecycle import requires_database
 NOW = datetime(2026, 11, 1, 9, 0, tzinfo=UTC)
 CASE_ID = "99999999-9999-9999-9999-999999999999"
 TRIAGER_ID = "22222222-2222-2222-2222-222222222222"
+
+
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
 
 
 def complete_record(version: int = 1) -> Classification:
@@ -172,7 +178,7 @@ def test_a_partial_classification_is_stored_and_the_report_still_lists_its_gaps(
     body["containment"] = None
     body["evidence_gap_plan"] = None
 
-    saved = triager.put(f"/api/v1/cases/{case_id}/classification", json=body)
+    saved = triager.put(f"/api/v1/cases/{case_id}/classification", json=body, headers=idem())
     assert saved.status_code == 200, saved.text
     assert saved.json()["version"] == 1
 
@@ -191,11 +197,11 @@ def test_a_partial_classification_is_stored_and_the_report_still_lists_its_gaps(
 def test_each_new_version_records_its_next_update_and_the_report_shows_the_latest(record_people):
     case_id = new_case(record_people["reporter"])
     triager = record_people["triager"]
-    assert triager.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(0)).status_code == 200
+    assert triager.put(f"/api/v1/cases/{case_id}/classification", json=classification_body(0), headers=idem()).status_code == 200
 
     later = (datetime.now(UTC) + timedelta(days=14)).replace(microsecond=0).isoformat()
     changed = classification_body(1, event_kind="incident", next_update_due_at=later)
-    assert triager.put(f"/api/v1/cases/{case_id}/classification", json=changed).status_code == 200
+    assert triager.put(f"/api/v1/cases/{case_id}/classification", json=changed, headers=idem()).status_code == 200
 
     report = triager.get(f"/api/v1/cases/{case_id}/preliminary-report").json()
     assert report["classification"]["version"] == 2

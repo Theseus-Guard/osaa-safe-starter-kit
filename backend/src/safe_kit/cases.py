@@ -7,7 +7,7 @@ Every change to a case writes its audit row in the same transaction. Each change
 so concurrent assignment, review, deadline, and closure changes run one after another.
 """
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import Enum
@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 from safe_kit import audit
 from safe_kit import system_timezone
 from safe_kit.db import connect
+from safe_kit.idempotency import KeyScope, check, remember
 from safe_kit.deadlines import BusinessCalendar, deadline_start, deadlines_for, next_weekly_update
 from safe_kit.system_timezone import TimezoneNotConfigured
 
@@ -354,10 +355,25 @@ def _is_assigned(conn, case_id: str, user_id: str) -> bool:
     return row is not None
 
 
-def create_case(title: str, awareness_time: datetime, created_by: str) -> Case:
-    """Create the case, its deadline tasks, and the audit row in one transaction."""
+def create_case(
+    title: str,
+    awareness_time: datetime,
+    created_by: str,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[Case], Any] | None = None,
+) -> Case:
+    """Create the case, its deadline tasks, and the audit row in one transaction.
+
+    With an idempotency scope, a replay raises Replayed and a reused key raises KeyReused, and nothing is created.
+    """
     with connect() as conn:
-        return insert_case(conn, title, awareness_time, created_by)
+        check(conn, idempotency)
+        case = insert_case(conn, title, awareness_time, created_by)
+        if idempotency is not None:
+            assert render is not None
+            remember(conn, idempotency, 201, render(case))
+        return case
 
 
 def insert_case(conn, title: str, awareness_time: datetime, created_by: str) -> Case:
@@ -440,13 +456,23 @@ def _previous_status(conn, case_id: str, task_id: str) -> str:
     return row[0]
 
 
-def restore_deadline(case_id: str, task_id: str, scope: CaseScope, may_mark_not_applicable: bool) -> Outcome:
+def restore_deadline(
+    case_id: str,
+    task_id: str,
+    scope: CaseScope,
+    may_mark_not_applicable: bool,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[Case], Any] | None = None,
+) -> Outcome:
     """Turn off the not applicable exception of one deadline task: it goes back to the status it had before.
 
     The task's due date does not change. The reason goes too, except for a task that was created not applicable by its
     default reason. Only a triager may change a task that is not applicable. Writes one deadline audit row.
+    With an idempotency scope the key is checked first and the response is stored in the same transaction.
     """
     with connect() as conn:
+        check(conn, idempotency)
         locked = _lock_visible_case(conn, case_id, scope)
         if locked is None:
             return Outcome.NOT_FOUND
@@ -472,6 +498,7 @@ def restore_deadline(case_id: str, task_id: str, scope: CaseScope, may_mark_not_
         _write_task_change(
             conn, case_id, task_id, kind, status, previous, reason, previous_reason, RESTORED_SOURCE, scope.user_id,
         )
+        _remember_case(conn, idempotency, render, case_id)
     return Outcome.OK
 
 
@@ -572,16 +599,37 @@ def sync_weekly_update(conn, case_id: str, actor_id: str) -> None:
 
 
 
+_LATEST_REOPEN_REASON = (
+    "(SELECT csc.reason FROM case_status_changes csc WHERE csc.case_id = cases.id "
+    "AND csc.action = 'reopened' AND NOT csc.is_deleted ORDER BY csc.changed_at DESC, csc.id DESC LIMIT 1)"
+)
+
+
+def _load_case(conn, case_id: str) -> Case:
+    """The case with its deadline tasks, read on the caller's connection so a response can be stored in its transaction.
+
+    Callers hold the case visible already (the row is locked), so no visibility filter is applied here.
+    """
+    row = conn.execute(
+        f"SELECT {_CASE_COLUMNS}, {_LATEST_REOPEN_REASON} FROM cases WHERE id = %s AND NOT is_deleted",
+        (case_id,),
+    ).fetchone()
+    return replace(_to_case(row[:-1]), deadlines=_load_tasks(conn, case_id), reopen_reason=row[-1])
+
+
+def _remember_case(conn, idempotency: KeyScope | None, render: Callable[[Case], Any] | None, case_id: str) -> None:
+    """Store the case response of a successful request under its key, in the same transaction as the change."""
+    if idempotency is not None:
+        assert render is not None
+        remember(conn, idempotency, 200, render(_load_case(conn, case_id)))
+
+
 def find_visible_case(case_id: str, scope: CaseScope) -> Case | None:
     """Return the case with its deadline tasks if the scope may see it. Otherwise None, the same as a missing case."""
     visibility, params = scope.visibility_sql()
-    latest_reopen_reason = (
-        "(SELECT csc.reason FROM case_status_changes csc WHERE csc.case_id = cases.id "
-        "AND csc.action = 'reopened' AND NOT csc.is_deleted ORDER BY csc.changed_at DESC, csc.id DESC LIMIT 1)"
-    )
     with connect() as conn:
         row = conn.execute(
-            f"SELECT {_CASE_COLUMNS}, {latest_reopen_reason} FROM cases "
+            f"SELECT {_CASE_COLUMNS}, {_LATEST_REOPEN_REASON} FROM cases "
             f"WHERE id = %s AND NOT is_deleted AND {visibility}",
             (case_id, *params),
         ).fetchone()
@@ -750,9 +798,20 @@ def _role_holds_assignable(conn, role: str) -> bool:
     return bool(row[0])
 
 
-def assign_member(case_id: str, user_id: str, scope: CaseScope) -> tuple[Outcome, Assignment | None]:
-    """Give an active user whose role holds cases:assignable an assignment on the case."""
+def assign_member(
+    case_id: str,
+    user_id: str,
+    scope: CaseScope,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[Assignment], Any] | None = None,
+) -> tuple[Outcome, Assignment | None]:
+    """Give an active user whose role holds cases:assignable an assignment on the case.
+
+    With an idempotency scope the key is checked first, and the stored response is render(assignment).
+    """
     with connect() as conn:
+        check(conn, idempotency)
         locked = _lock_visible_case(conn, case_id, scope)
         if locked is None:
             return Outcome.NOT_FOUND, None
@@ -784,15 +843,18 @@ def assign_member(case_id: str, user_id: str, scope: CaseScope) -> tuple[Outcome
             actor_id=scope.user_id,
             details={"assignee_id": _change(None, user_id)},
         )
-    assignment = Assignment(
-        id=row[0],
-        case_id=case_id,
-        user_id=user_id,
-        username=user[0],
-        role=user[1],
-        assigned_by=scope.user_id,
-        assigned_at=row[1],
-    )
+        assignment = Assignment(
+            id=row[0],
+            case_id=case_id,
+            user_id=user_id,
+            username=user[0],
+            role=user[1],
+            assigned_by=scope.user_id,
+            assigned_at=row[1],
+        )
+        if idempotency is not None:
+            assert render is not None
+            remember(conn, idempotency, 201, render(assignment))
     return Outcome.OK, assignment
 
 
@@ -832,14 +894,19 @@ def update_deadline(
     reason: str | None,
     scope: CaseScope,
     may_mark_not_applicable: bool,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[Case], Any] | None = None,
 ) -> Outcome:
     """Set a deadline task to done, open, or not applicable.
 
     Changing a task to or from not applicable needs the triager permission (may_mark_not_applicable).
-    A request that changes nothing writes no audit row.
+    A request that changes nothing writes no audit row. With an idempotency scope, a replay raises Replayed and a
+    reused key raises KeyReused; a successful request stores render(case) in the same transaction.
     """
     new_reason = reason if status == "not_applicable" else None
     with connect() as conn:
+        check(conn, idempotency)
         locked = _lock_visible_case(conn, case_id, scope)
         if locked is None:
             return Outcome.NOT_FOUND
@@ -863,26 +930,37 @@ def update_deadline(
             changes["status"] = _change(old_status, status)
         if new_reason != old_reason:
             changes["not_applicable_reason"] = _change(_text_marker(old_reason), _text_marker(new_reason))
-        if not changes:
-            return Outcome.OK
-        conn.execute(
-            "UPDATE deadline_tasks SET status = %s, not_applicable_reason = %s WHERE id = %s",
-            (status, new_reason, task_id),
-        )
-        audit.record(
-            conn,
-            audit.CASE_DEADLINE_UPDATE,
-            "case",
-            case_id,
-            actor_id=scope.user_id,
-            details={"task_id": task_id, "kind": kind, **changes},
-        )
+        if changes:
+            conn.execute(
+                "UPDATE deadline_tasks SET status = %s, not_applicable_reason = %s WHERE id = %s",
+                (status, new_reason, task_id),
+            )
+            audit.record(
+                conn,
+                audit.CASE_DEADLINE_UPDATE,
+                "case",
+                case_id,
+                actor_id=scope.user_id,
+                details={"task_id": task_id, "kind": kind, **changes},
+            )
+        _remember_case(conn, idempotency, render, case_id)
     return Outcome.OK
 
 
-def close_case(case_id: str, reason: str, scope: CaseScope) -> tuple[Outcome, list[str]]:
-    """Close the case if the closure rules hold. Otherwise return the blockers and change nothing."""
+def close_case(
+    case_id: str,
+    reason: str,
+    scope: CaseScope,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[Case], Any] | None = None,
+) -> tuple[Outcome, list[str]]:
+    """Close the case if the closure rules hold. Otherwise return the blockers and change nothing.
+
+    With an idempotency scope the key is checked first, and a successful close stores render(case) in its transaction.
+    """
     with connect() as conn:
+        check(conn, idempotency)
         locked = _lock_visible_case(conn, case_id, scope)
         if locked is None:
             return Outcome.NOT_FOUND, []
@@ -926,15 +1004,24 @@ def close_case(case_id: str, reason: str, scope: CaseScope) -> tuple[Outcome, li
                 "close_reason": _change(None, _text_marker(reason)),
             },
         )
+        _remember_case(conn, idempotency, render, case_id)
     return Outcome.OK, []
 
 
-def reopen_case(case_id: str, reason: str, scope: CaseScope) -> Outcome:
+def reopen_case(
+    case_id: str,
+    reason: str,
+    scope: CaseScope,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[Case], Any] | None = None,
+) -> Outcome:
     """Reopen a closed case. The reason is stored as text in case_status_changes; the audit row keeps only its length.
 
-    The previous closure stays in the audit log.
+    The previous closure stays in the audit log. With an idempotency scope the key is checked first.
     """
     with connect() as conn:
+        check(conn, idempotency)
         locked = _lock_visible_case(conn, case_id, scope)
         if locked is None:
             return Outcome.NOT_FOUND
@@ -959,6 +1046,7 @@ def reopen_case(case_id: str, reason: str, scope: CaseScope) -> Outcome:
                 "reopen_reason": _change(None, _text_marker(reason)),
             },
         )
+        _remember_case(conn, idempotency, render, case_id)
     return Outcome.OK
 
 

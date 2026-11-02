@@ -16,7 +16,8 @@ The two cases are locked before the rules are checked, in one statement ordered 
 same pair run one after another.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from typing import Any
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -24,6 +25,7 @@ from enum import Enum
 from safe_kit import audit, cases
 from safe_kit.cases import CaseScope
 from safe_kit.db import connect
+from safe_kit.idempotency import KeyScope, check, remember
 
 
 class LinkOutcome(Enum):
@@ -83,9 +85,21 @@ def _pair_condition() -> str:
     return "((case_id = %s AND linked_case_id = %s) OR (case_id = %s AND linked_case_id = %s))"
 
 
-def add_link(case_id: str, linked_case_id: str, actor: str, scope: CaseScope) -> tuple[LinkOutcome, CaseLink | None]:
-    """Record that the two cases concern the same incident. Both must be visible and open, and not yet linked."""
+def add_link(
+    case_id: str,
+    linked_case_id: str,
+    actor: str,
+    scope: CaseScope,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[CaseLink], Any] | None = None,
+) -> tuple[LinkOutcome, CaseLink | None]:
+    """Record that the two cases concern the same incident. Both must be visible and open, and not yet linked.
+
+    With an idempotency scope the key is checked first, and a new link stores render(link) in the same transaction.
+    """
     with connect() as conn:
+        check(conn, idempotency)
         locked = _lock_visible_pair(conn, case_id, linked_case_id, scope)
         refusal = check_pair(case_id, linked_case_id, _statuses(locked))
         if refusal is not None:
@@ -112,7 +126,11 @@ def add_link(case_id: str, linked_case_id: str, actor: str, scope: CaseScope) ->
             details={"link_id": row[0], "linked_case_id": linked_case_id},
         )
         title = locked[linked_case_id][1]
-    return LinkOutcome.OK, CaseLink(case_id, linked_case_id, title, row[1])
+        link = CaseLink(case_id, linked_case_id, title, row[1])
+        if idempotency is not None:
+            assert render is not None
+            remember(conn, idempotency, 201, render(link))
+    return LinkOutcome.OK, link
 
 
 def remove_link(case_id: str, linked_case_id: str, actor: str, scope: CaseScope) -> LinkOutcome:
