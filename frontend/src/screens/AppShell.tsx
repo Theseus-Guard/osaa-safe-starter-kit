@@ -68,8 +68,11 @@ export function AppShell({ profile, page, onLogout, children, heading }: Props) 
             <CaseSearch />
           </div>
         )}
-        <div className="flex items-center justify-end gap-3 md:flex-1">
-          <SystemClock />
+        <div className="flex min-w-0 items-center justify-end gap-3 md:flex-1">
+          {/* The clock is hidden on phones, where the header has no room for it next to the user menu. */}
+          <div className="hidden sm:block">
+            <SystemClock />
+          </div>
           <UserMenu profile={profile} onLogout={onLogout} />
         </div>
       </header>
@@ -150,7 +153,7 @@ function UserMenu({ profile, onLogout }: UserMenuProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button variant="ghost" className="max-w-full gap-2" />}>
-        <span className="max-w-64 truncate text-sm">{displayName(profile)}</span>
+        <span className="max-w-32 truncate text-sm sm:max-w-64">{displayName(profile)}</span>
         <Badge variant="secondary">{profile.role}</Badge>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">

@@ -130,7 +130,7 @@ export function ChartPanel<T>({ title, description, state, isEmpty, chart, table
   );
 }
 
-// The responsive grid of stat cards: as many columns as fit, each at least 12 rem wide.
-export const STAT_GRID_CLASS = "grid gap-4 grid-cols-[repeat(auto-fit,minmax(12rem,1fr))]";
+// The responsive grid of stat cards: as many columns as fit, each at least 10 rem wide (two on a phone).
+export const STAT_GRID_CLASS = "grid gap-4 grid-cols-[repeat(auto-fit,minmax(10rem,1fr))]";
 // The responsive grid of chart cards: two columns on wide screens, one on narrow ones.
 export const CHART_GRID_CLASS = "grid gap-4 xl:grid-cols-2";

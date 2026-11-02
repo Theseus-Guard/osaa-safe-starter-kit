@@ -66,7 +66,7 @@ export function CaseRiskScore({ caseId, risk, closed, canWrite, onSaved }: Props
         )}
       </div>
       <p className="text-3xl font-semibold tracking-tight tabular-nums">{formatRiskScore(risk.risk_score)}</p>
-      <dl className="grid grid-cols-3 gap-2">
+      <dl className="grid gap-1.5">
         {IMPACT_VALUE_LABELS.map(({ key, label }) => (
           <ValueDetail key={key} label={label} value={risk[RISK_FIELD[key]]} />
         ))}
@@ -86,9 +86,9 @@ export function CaseRiskScore({ caseId, risk, closed, canWrite, onSaved }: Props
 
 function ValueDetail({ label, value }: { label: string; value: number | null }) {
   return (
-    <div className="grid gap-1">
+    <div className="flex items-baseline justify-between gap-3">
       <dt className="font-medium">{label}</dt>
-      <dd className="text-muted-foreground">{value === null ? "Not set" : value}</dd>
+      <dd className="text-right tabular-nums text-muted-foreground">{value === null ? "Not set" : value}</dd>
     </div>
   );
 }
