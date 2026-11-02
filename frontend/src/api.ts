@@ -341,7 +341,16 @@ export interface DeadlineTask {
 
 export type DeadlineStatus = "open" | "done" | "not_applicable";
 
-export interface CaseSummary {
+// Risk. The impact values C (Confidentiality), B (Integrity) and A (Availability) are each 1 to 5, or null when not set.
+// The risk score is their mean to one decimal place, and null until all three are set. Nothing is stored for the score.
+export interface RiskFields {
+  risk_score: number | null;
+  impact_c: number | null;
+  impact_b: number | null;
+  impact_a: number | null;
+}
+
+export interface CaseSummary extends RiskFields {
   id: string;
   reference: string;
   title: string;
@@ -350,7 +359,7 @@ export interface CaseSummary {
   created_at: string;
 }
 
-export interface CaseDetail {
+export interface CaseDetail extends RiskFields {
   id: string;
   reference: string;
   title: string;
@@ -927,6 +936,43 @@ export function getClassification(caseId: string): Promise<Classification> {
 
 export function updateClassification(caseId: string, body: ClassificationUpdateBody): Promise<Classification> {
   return request<Classification>(`/cases/${encodeURIComponent(caseId)}/classification`, { method: "PUT", json: body });
+}
+
+// Risk impact values. Reads need a case-read permission. A save needs cases:triage and an open case (409 when closed).
+export type ImpactValue = 1 | 2 | 3 | 4 | 5;
+
+// Version 0 means no values are recorded. A value that is not set is null.
+export interface ImpactScores {
+  case_id: string;
+  version: number;
+  c: ImpactValue | null;
+  b: ImpactValue | null;
+  a: ImpactValue | null;
+  risk_score: number | null;
+  created_by: string | null;
+  created_at: string | null;
+}
+
+// Every value is sent. The backend stores the body as the next version, and a value that is null is cleared.
+export interface ImpactScoresUpdateBody {
+  // The version the editor read. A different current version is refused with 409.
+  expected_version: number;
+  c: ImpactValue | null;
+  b: ImpactValue | null;
+  a: ImpactValue | null;
+}
+
+export function getImpactScores(caseId: string): Promise<ImpactScores> {
+  return request<ImpactScores>(`/cases/${encodeURIComponent(caseId)}/impact-scores`);
+}
+
+// Sends a new Idempotency-Key, so a repeated submit of the same save returns the first answer.
+export function updateImpactScores(caseId: string, body: ImpactScoresUpdateBody): Promise<ImpactScores> {
+  return request<ImpactScores>(`/cases/${encodeURIComponent(caseId)}/impact-scores`, {
+    method: "POST",
+    json: body,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+  });
 }
 
 // The report lists what is still missing and never refuses for it. The contact is reported as recorded or missing only.

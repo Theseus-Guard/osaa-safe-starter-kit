@@ -132,6 +132,10 @@ const OPEN_CASE: CaseDetail = {
   created_at: "2026-11-01T06:00:00Z",
   closed_at: null,
   close_reason: null,
+  risk_score: null,
+  impact_c: null,
+  impact_b: null,
+  impact_a: null,
   deadlines: [
     {
       id: "task-1",

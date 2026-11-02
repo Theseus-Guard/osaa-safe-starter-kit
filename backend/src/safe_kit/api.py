@@ -90,6 +90,8 @@ from safe_kit.sessions import (
     rotate_session,
 )
 from safe_kit.profile_api import profile_fields, router as profile_router
+from safe_kit.impact import ImpactScores, current_scores_for_cases
+from safe_kit.impact_api import impact_router, risk_fields
 from safe_kit.users import (
     ROLES,
     EmailAlreadyInUse,
@@ -631,6 +633,11 @@ class CaseResponse(BaseModel):
     # Reason of the latest reopening, null when the case was never reopened.
     reopen_reason: str | None
     deadlines: list[DeadlineTaskResponse]
+    # Risk (safe_kit.impact): the three impact values and the risk score. Null until the values are set.
+    risk_score: float | None
+    impact_c: int | None
+    impact_b: int | None
+    impact_a: int | None
 
 
 class CaseSummary(BaseModel):
@@ -640,6 +647,11 @@ class CaseSummary(BaseModel):
     awareness_time: datetime
     status: str
     created_at: datetime
+    # Risk (safe_kit.impact), as in CaseResponse.
+    risk_score: float | None
+    impact_c: int | None
+    impact_b: int | None
+    impact_a: int | None
 
 
 class CasePage(BaseModel):
@@ -761,7 +773,9 @@ def _scope(actor: User) -> CaseScope:
 
 def _case_response(case: Case, scope: CaseScope) -> CaseResponse:
     # Reasons are shown only to callers with the full view, the same rule as the history details.
+    scores = current_scores_for_cases([case.id]).get(case.id)
     return CaseResponse(
+        **risk_fields(scores),
         id=case.id,
         reference=case.reference,
         title=case.title,
@@ -786,7 +800,7 @@ def _case_response(case: Case, scope: CaseScope) -> CaseResponse:
     )
 
 
-def _case_summary(case: Case) -> CaseSummary:
+def _case_summary(case: Case, scores: ImpactScores | None) -> CaseSummary:
     return CaseSummary(
         id=case.id,
         reference=case.reference,
@@ -794,6 +808,7 @@ def _case_summary(case: Case) -> CaseSummary:
         awareness_time=case.awareness_time,
         status=case.status,
         created_at=case.created_at,
+        **risk_fields(scores),
     )
 
 
@@ -941,8 +956,10 @@ def list_cases(
     # q matches the reference (partial) or the id prefix. It only narrows the cases the caller may already see.
     scope = _scope(actor)
     search = q.strip() if q is not None else None
+    page_cases = list_visible_cases(scope, limit, offset, q=search)
+    scores = current_scores_for_cases(case.id for case in page_cases)
     return CasePage(
-        items=[_case_summary(case) for case in list_visible_cases(scope, limit, offset, q=search)],
+        items=[_case_summary(case, scores.get(case.id)) for case in page_cases],
         total=count_visible_cases(scope, q=search),
         limit=limit,
         offset=offset,
@@ -1170,6 +1187,9 @@ app.include_router(case_records_router)
 from safe_kit.case_links_api import case_links_router  # noqa: E402
 
 app.include_router(case_links_router)
+
+# Risk endpoints: the C, B and A impact values of a case and its risk score (see safe_kit.impact_api).
+app.include_router(impact_router)
 
 # Weekly update endpoints: the machine-readable updates of a case, read-only (see safe_kit.weekly_updates).
 from safe_kit.weekly_updates_api import weekly_updates_router  # noqa: E402

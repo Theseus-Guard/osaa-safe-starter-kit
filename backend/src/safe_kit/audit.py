@@ -46,6 +46,8 @@ CASE_IMPACT_CHANGE = "case.impact_changed"
 CASE_LEGAL_DUTY_ADD = "case.legal_duty_added"
 CASE_LEGAL_DUTY_CHANGE = "case.legal_duty_changed"
 CASE_CLASSIFICATION_CHANGE = "case.classification_changed"
+# Risk impact values (C, B, A) of a case, one row per version change (safe_kit.impact). Details hold the changed values.
+CASE_IMPACT_SCORES_CHANGE = "case.impact_scores_changed"
 # Case links: a record that two cases concern the same incident. The details hold the link and the other case's ID only.
 CASE_LINK_ADD = "case.link_added"
 CASE_LINK_REMOVE = "case.link_removed"

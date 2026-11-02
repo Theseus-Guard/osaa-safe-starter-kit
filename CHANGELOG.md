@@ -55,6 +55,7 @@ Every release entry states the **SAFE compatibility baseline**: the SAFE version
 - Classification has an explicit `none_applies` trigger (migration 0027). It cannot be combined with other triggers.
 - Choosing the internal incident option marks the external notice tasks as not applicable, with the rationale recorded. Due dates do not change, and turning the option off restores the previous statuses.
 - Linked cases: two cases can be linked as a record only (migration 0028). Links change no task, deadline or status. Links are added, listed and removed from the case detail page and the CLI.
+- Case risk: each case has impact values C (Confidentiality), B (Integrity) and A (Availability), each 1 to 5, stored as versions by holders of `cases:triage` (migration 0038). The risk score is their mean to one decimal place and shows Not assessed until all three are set. The case list, the case detail and the CLI show it.
 
 ### Not yet implemented
 - A production certificate, OIDC/SSO, encryption at rest for the database volume, and backup and restore procedures.

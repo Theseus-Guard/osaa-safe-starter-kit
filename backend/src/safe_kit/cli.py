@@ -67,6 +67,7 @@ LEGAL_DUTY_KINDS = ("statutory", "contractual")
 LEGAL_DUTY_STATUSES = ("open", "done")
 # The API answers a stale classification save with this status in a structured 409 detail, next to current_version.
 CLASSIFICATION_VERSION_CONFLICT = "classification_version_conflict"
+IMPACT_VERSION_CONFLICT = "impact_version_conflict"
 
 
 class UsageError(Exception):
@@ -288,6 +289,20 @@ def _print_json(raw: bytes) -> None:
     sys.stdout.write(text if text.endswith("\n") else text + "\n")
 
 
+def _format_risk(score: float | None) -> str:
+    """The risk score with one decimal place, or Not assessed while a value is not set."""
+    return "Not assessed" if score is None else f"{score:.1f}"
+
+
+def _risk_line(record: dict) -> str:
+    """The risk score with its three values, for example "3.7 (C 4, B 3, A 4)". A value that is not set shows a dash."""
+    values = ", ".join(
+        f"{letter} {'-' if record[key] is None else record[key]}"
+        for letter, key in (("C", "impact_c"), ("B", "impact_b"), ("A", "impact_a"))
+    )
+    return f"{_format_risk(record['risk_score'])} ({values})"
+
+
 def _print_case(case: dict) -> None:
     print(f"Case {case['reference']}")
     print(f"  ID:               {case['id']}")
@@ -296,6 +311,7 @@ def _print_case(case: dict) -> None:
     print(f"  Awareness (UTC):  {case['awareness_time']}")
     print(f"  Created (UTC):    {case['created_at']}")
     print(f"  Calendar version: {case['calendar_version']}")
+    print(f"  Risk score:       {_risk_line(case)}")
     if case["deadlines"]:
         print("  Deadlines:")
         for task in case["deadlines"]:
@@ -307,12 +323,12 @@ def _print_case_page(page: dict) -> None:
     if not items:
         print(f"No cases to show. Total: {page['total']}")
         return
-    rows = [("REFERENCE", "STATUS", "AWARENESS (UTC)", "TITLE")]
-    rows += [(item["reference"], item["status"], item["awareness_time"], item["title"]) for item in items]
-    widths = [max(len(row[column]) for row in rows) for column in range(3)]
-    for row in rows:
-        cells = [row[column].ljust(widths[column]) for column in range(3)] + [row[3]]
-        print("  ".join(cells).rstrip())
+    rows = [("REFERENCE", "STATUS", "AWARENESS (UTC)", "RISK", "TITLE")]
+    rows += [
+        (item["reference"], item["status"], item["awareness_time"], _format_risk(item["risk_score"]), item["title"])
+        for item in items
+    ]
+    _print_table(rows)
     first = page["offset"] + 1
     last = page["offset"] + len(items)
     print(f"Showing {first}-{last} of {page['total']}")
@@ -737,6 +753,13 @@ CLASSIFICATION_MESSAGES = {
     409: "the case is closed, so the classification cannot change",
 }
 IMPACT_MESSAGES = {404: "case not found", 409: "the case is closed, so its impact assessment cannot change"}
+RISK_MESSAGES = {
+    403: "forbidden: saving the impact values needs cases:triage",
+    404: "case not found",
+    409: "the case is closed, so the impact values cannot change",
+}
+# The three impact values in the order C, B, A, with the field each one has in the API body.
+RISK_VALUES = (("C – Confidentiality", "c"), ("B – Integrity", "b"), ("A – Availability", "a"))
 LEGAL_DUTY_MESSAGES = {404: "case not found", 409: "the case is closed, so its legal duties cannot change"}
 LEGAL_DUTY_UPDATE_MESSAGES = {
     404: "case or legal duty not found",
@@ -1179,6 +1202,91 @@ def _impact_set(base_url: str, args: argparse.Namespace) -> None:
         messages=IMPACT_MESSAGES,
         render=_render_impact,
     )
+
+
+def _impact_value(text: str) -> int:
+    """A value of the impact scale: a whole number from 1 to 5."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a whole number from 1 to 5") from None
+    if not 1 <= value <= 5:
+        raise argparse.ArgumentTypeError("must be a whole number from 1 to 5")
+    return value
+
+
+def _print_risk(scores: dict) -> None:
+    _print_field("Risk score", _format_risk(scores["risk_score"]))
+    for label, key in RISK_VALUES:
+        _print_field(label, "Not set" if scores[key] is None else str(scores[key]))
+
+
+def _risk_show(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+
+    def action(base: str, token: str) -> None:
+        raw = _call(base, "GET", f"/api/v1/cases/{case_id}/impact-scores", token=token, messages=READ_MESSAGES)
+        if args.json:
+            _print_json(raw)
+            return
+        scores = _json_object(raw)
+        if scores["version"] == 0:
+            print("No impact values are recorded for this case yet.")
+        else:
+            print(f"Impact values, version {scores['version']}:")
+        _print_risk(scores)
+
+    _with_session(base_url, args, action)
+
+
+def _risk_conflict_version(error: RequestFailed) -> int | None:
+    """The current impact version from a stale-save 409, or None for any other failure."""
+    detail = error.detail
+    if error.status != 409 or not isinstance(detail, dict) or detail.get("status") != IMPACT_VERSION_CONFLICT:
+        return None
+    version = detail.get("current_version")
+    if isinstance(version, int) and not isinstance(version, bool):
+        return version
+    return None
+
+
+def _risk_set(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+    if args.expected_version < 0:
+        raise UsageError("--expected-version must be 0 or more")
+    # The save replaces the three values. A value left out is sent as empty and cleared, as in the web UI.
+    payload = {"expected_version": args.expected_version, "c": args.c, "b": args.b, "a": args.a}
+    path = f"/api/v1/cases/{case_id}/impact-scores"
+    key = args.idempotency_key or str(uuid.uuid4())
+
+    def action(base: str, token: str) -> None:
+        try:
+            raw = _call(
+                base,
+                "POST",
+                path,
+                token=token,
+                payload=payload,
+                messages=RISK_MESSAGES,
+                extra_headers={"Idempotency-Key": key},
+            )
+        except RequestFailed as error:
+            version = _risk_conflict_version(error)
+            if version is None:
+                raise
+            # Nothing was saved. The command never retries: the user reads the values again and runs it again.
+            raise RequestFailed(
+                f"the impact values were changed by someone else, so nothing was saved. The current version is "
+                f"{version}. Read them with 'case risk show', then run this command again with --expected-version {version}"
+            ) from None
+        if args.json:
+            _print_json(raw)
+            return
+        scores = _json_object(raw)
+        print(f"Impact values saved as version {scores['version']}.")
+        _print_risk(scores)
+
+    _with_session(base_url, args, action)
 
 
 def _legal_duty_add(base_url: str, args: argparse.Namespace) -> None:
@@ -1770,6 +1878,37 @@ def _add_case_update_commands(case_commands) -> None:
     impact_set.add_argument("--scope", required=True, help="What is affected (required, up to 1000 characters)")
     _add_auth_options(impact_set)
     impact_set.set_defaults(handler=_impact_set)
+
+    # The risk commands are named "risk": "impact set" above already sets the severity of one impact area.
+    risk = case_commands.add_parser("risk", help="Show and set the impact values C, B and A of a case, and its risk score")
+    risk_commands = risk.add_subparsers(dest="risk_command", required=True)
+    risk_show = risk_commands.add_parser("show", help="Show the impact values and the risk score of one of your cases")
+    risk_show.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    _add_auth_options(risk_show)
+    risk_show.set_defaults(handler=_risk_show)
+    risk_set = risk_commands.add_parser(
+        "set",
+        help="Save the impact values as the next version. Every value is replaced: a value you leave out is cleared",
+    )
+    risk_set.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    risk_set.add_argument("--c", type=_impact_value, metavar="N", help="Confidentiality, 1 to 5")
+    risk_set.add_argument("--b", type=_impact_value, metavar="N", help="Integrity, 1 to 5")
+    risk_set.add_argument("--a", type=_impact_value, metavar="N", help="Availability, 1 to 5")
+    risk_set.add_argument(
+        "--expected-version",
+        required=True,
+        type=int,
+        metavar="V",
+        help="The version you read (0 when none is recorded). A save is refused when the current version differs",
+    )
+    risk_set.add_argument(
+        "--idempotency-key",
+        metavar="KEY",
+        help="Idempotency-Key, 1 to 128 visible ASCII characters. Default: a new key for this run. "
+        "Reuse the key of an earlier run to retry it safely",
+    )
+    _add_auth_options(risk_set)
+    risk_set.set_defaults(handler=_risk_set)
 
     legal = case_commands.add_parser(
         "legal-duty",

@@ -1,4 +1,5 @@
 // Display helpers for the case screens. Pure functions, so they are tested without rendering.
+import type { ImpactValue } from "../../api";
 
 // "preliminary_safe_report" -> "Preliminary safe report", "case.closed" -> "Case closed"
 export function humanize(value: string): string {
@@ -97,6 +98,29 @@ export function triggerLabel(trigger: string): string {
 export function recordText(value: string | null, fullView: boolean): string {
   if (value !== null) return value;
   return fullView ? "Not recorded." : "Not shown for your role.";
+}
+
+// The risk score with one decimal place, for example "3.7". "Not assessed" while a value is not set.
+export function formatRiskScore(score: number | null): string {
+  return score === null ? "Not assessed" : score.toFixed(1);
+}
+
+// The three impact values with the labels the owner asked for, in the order C, B, A.
+export const IMPACT_VALUE_LABELS = [
+  { key: "c", label: "C – Confidentiality" },
+  { key: "b", label: "B – Integrity" },
+  { key: "a", label: "A – Availability" },
+] as const;
+
+export type ImpactKey = (typeof IMPACT_VALUE_LABELS)[number]["key"];
+
+export type ImpactParse = { value: ImpactValue | null } | { error: string };
+
+// A form value is "" (not set) or a single digit from 1 to 5. Anything else, such as 0, 6, 2.5 or " 3", is refused.
+export function parseImpactValue(text: string): ImpactParse {
+  if (text === "") return { value: null };
+  if (/^[1-5]$/.test(text)) return { value: Number(text) as ImpactValue };
+  return { error: "Choose a whole number from 1 to 5, or leave the value not set." };
 }
 
 // Lists one entry of the preliminary report's missing_fields as a sentence fragment.

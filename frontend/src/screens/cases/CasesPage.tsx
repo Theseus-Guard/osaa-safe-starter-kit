@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { CaseDetail, CasePage, listCases } from "../../api";
 import { describeError } from "../../messages";
 import { caseAbilities } from "../../permissions";
+import { formatRiskScore } from "./case-format";
 import { NewCaseDialog } from "./NewCaseDialog";
 import { Timestamp } from "@/components/timestamp";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -83,6 +84,7 @@ export function CasesPage({ permissions }: Props) {
                 <TableHead>Title</TableHead>
                 <TableHead>Awareness time</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Risk</TableHead>
                 <TableHead>Created</TableHead>
               </TableRow>
             </TableHeader>
@@ -103,6 +105,9 @@ export function CasesPage({ permissions }: Props) {
                   </TableCell>
                   <TableCell>
                     <Badge variant="secondary">{item.status}</Badge>
+                  </TableCell>
+                  <TableCell className={item.risk_score === null ? "text-muted-foreground" : "tabular-nums"}>
+                    {formatRiskScore(item.risk_score)}
                   </TableCell>
                   <TableCell>
                     <Timestamp value={item.created_at} />

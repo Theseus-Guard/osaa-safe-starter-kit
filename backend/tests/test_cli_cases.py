@@ -25,6 +25,10 @@ CASE_BODY = {
     "calendar_version": "2026.1",
     "created_at": "2026-10-31T10:00:00Z",
     "deadlines": [{"kind": "initial_notice", "due_at": "2026-11-01T09:00:00Z", "status": "pending"}],
+    "risk_score": None,
+    "impact_c": None,
+    "impact_b": None,
+    "impact_a": None,
 }
 SUMMARY = {
     "id": CASE_ID,
@@ -33,6 +37,10 @@ SUMMARY = {
     "awareness_time": "2026-10-30T09:00:00Z",
     "status": "open",
     "created_at": "2026-10-31T10:00:00Z",
+    "risk_score": None,
+    "impact_c": None,
+    "impact_b": None,
+    "impact_a": None,
 }
 
 
