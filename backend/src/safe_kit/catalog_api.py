@@ -449,8 +449,8 @@ def export_catalog(
     actor: User = Depends(require_permission("catalog:read")),
 ) -> dict[str, Any]:
     """The public export (schemas/catalog-export.v0.json). It is the same for every caller with catalog:read: it holds
-    no restricted reference and no digest, whatever the caller may read."""
-    return public_export()
+    no restricted reference and no digest, whatever the caller may read. Each export writes one audit row."""
+    return public_export(actor.id)
 
 
 @catalog_router.get(ENTRY_ROUTE)

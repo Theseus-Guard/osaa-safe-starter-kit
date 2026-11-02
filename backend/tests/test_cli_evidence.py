@@ -524,23 +524,67 @@ def test_task_update_sends_the_revision_read_as_if_match(api, capsys):
     assert patch["if_match"] == '"7"'
 
 
-def test_task_update_without_a_revision_is_a_usage_error_before_any_request(
+TASK_ID = "dddddddd-1111-4222-8333-444444444444"
+
+
+def task_update_without_revision(*extra: str) -> tuple[str, ...]:
+    return ("task", "update", CASE_ID, TASK_ID, "--username", "ines", *extra)
+
+
+def test_task_update_without_a_revision_reads_the_current_one_and_sends_it(api, capsys):
+    api.route("GET", f"/api/v1/cases/{CASE_ID}", body=CASE_BODY)
+    api.route("PATCH", TASK_PATH, body=CASE_BODY)
+    code, out, err = run(capsys, *task_update_without_revision("--status", "open"))
+    assert code == 0, err
+    assert out.startswith("Deadline task updated.")
+    # The case is read in the same session, and the revision it lists (3) is sent as If-Match.
+    assert api.paths() == [
+        ("POST", "/api/v1/auth/token"),
+        ("GET", f"/api/v1/cases/{CASE_ID}"),
+        ("PATCH", TASK_PATH),
+        ("POST", "/api/v1/auth/logout"),
+    ]
+    (patch,) = [call for call in api.calls if call["method"] == "PATCH"]
+    assert patch["if_match"] == '"3"'
+    assert json.loads(patch["data"]) == {"status": "open", "reason": None}
+
+
+def test_task_update_with_a_revision_does_not_read_the_case_first(api, capsys):
+    api.route("PATCH", TASK_PATH, body=CASE_BODY)
+    code, _, err = run(capsys, *task_update_args("--status", "open", revision="3"))
+    assert code == 0, err
+    assert api.paths() == [
+        ("POST", "/api/v1/auth/token"),
+        ("PATCH", TASK_PATH),
+        ("POST", "/api/v1/auth/logout"),
+    ]
+
+
+def test_task_update_without_a_revision_of_a_task_not_in_the_case_sends_nothing(
     api, capsys
 ):
-    code, _, err = run(
-        capsys,
-        "task",
-        "update",
-        CASE_ID,
-        "dddddddd-1111-4222-8333-444444444444",
-        "--status",
-        "open",
-        "--username",
-        "ines",
+    api.route("GET", f"/api/v1/cases/{CASE_ID}", body={**CASE_BODY, "deadlines": []})
+    code, out, err = run(capsys, *task_update_without_revision("--status", "open"))
+    assert code == 1
+    assert out == ""
+    assert "deadline task not found" in err
+    assert not any(call["method"] == "PATCH" for call in api.calls)
+
+
+def test_task_update_without_a_revision_that_changes_meanwhile_says_so(api, capsys):
+    api.route("GET", f"/api/v1/cases/{CASE_ID}", body=CASE_BODY)
+    api.route(
+        "PATCH",
+        TASK_PATH,
+        status=412,
+        body={"detail": {"status": "precondition_failed", "current_revision": 4}},
     )
-    assert code == 2
-    assert "--revision" in err
-    assert api.calls == []
+    code, out, err = run(capsys, *task_update_without_revision("--status", "open"))
+    assert code == 1
+    assert out == ""
+    assert "changed after this command read it, so nothing was saved" in err
+    assert "case task list" in err
+    assert "--revision" not in err
 
 
 def test_task_update_with_a_stale_revision_names_the_current_one(api, capsys):
