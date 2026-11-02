@@ -361,7 +361,7 @@ describe("CaseDisclosures", () => {
     render(<CaseDisclosures caseId={CASE_ID} closed={false} canApprove={false} canRecordNotices={false} />);
 
     const section = await screen.findByRole("region", { name: "External notices" });
-    expect(within(section).getByText("Sent, no receipt recorded yet")).toBeInTheDocument();
+    expect(await within(section).findByText("Sent, no receipt recorded yet")).toBeInTheDocument();
     expect(within(section).getByText("Receipt unknown")).toBeInTheDocument();
     expect(within(section).getByText("cert-07")).toBeInTheDocument();
     expect(within(section).getByText("Courier")).toBeInTheDocument();
