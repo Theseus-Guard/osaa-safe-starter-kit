@@ -1171,6 +1171,11 @@ from safe_kit.case_links_api import case_links_router  # noqa: E402
 
 app.include_router(case_links_router)
 
+# Weekly update endpoints: the machine-readable updates of a case, read-only (see safe_kit.weekly_updates).
+from safe_kit.weekly_updates_api import weekly_updates_router  # noqa: E402
+
+app.include_router(weekly_updates_router)
+
 # Review round endpoints: open a round, read rounds, and set one layer of a round.
 from safe_kit.reviews_api import reviews_router  # noqa: E402
 

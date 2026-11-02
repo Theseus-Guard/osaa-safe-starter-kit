@@ -1419,6 +1419,56 @@ def _render_report(report: dict) -> None:
     _print_field("Legal duties", f"{len(duties)} ({open_duties} open)")
 
 
+WEEKLY_MESSAGES = {
+    403: "forbidden: weekly updates need cases:read_own, cases:read_assigned or cases:read_all",
+    404: "case or weekly update not found",
+}
+
+
+def _weekly_list(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+
+    def render(raw: bytes, full_view: bool) -> None:
+        updates = _json_list(raw)
+        if not updates:
+            print("No weekly updates for this case. One is made each week while it has an open significant risk.")
+            return
+        rows = [("SEQUENCE", "GENERATED (UTC)", "NEXT DUE (UTC)", "RISKS", "UPDATE ID")]
+        for update in updates:
+            rows.append(
+                (
+                    str(update["sequence"]),
+                    update["generated_at"],
+                    update["next_update_due_at"],
+                    str(len(update["significant_risks"])),
+                    update["weekly_update_id"],
+                )
+            )
+        _print_table(rows)
+
+    _case_read(base_url, args, f"/api/v1/cases/{case_id}/weekly-updates", WEEKLY_MESSAGES, render)
+
+
+def _weekly_show(base_url: str, args: argparse.Namespace) -> None:
+    case_id = _case_id_arg(args.case_id)
+    update_id = _uuid_arg(args.update_id, "UPDATE_ID")
+
+    def render(raw: bytes, full_view: bool) -> None:
+        update = _json_object(raw)
+        print(f"Weekly update {update['sequence']} of {update['case_reference']}:")
+        _print_field("Update ID", update["weekly_update_id"])
+        _print_field("Generated (UTC)", update["generated_at"])
+        _print_field("Next due (UTC)", update["next_update_due_at"])
+        print("  Significant risks:")
+        for risk in update["significant_risks"]:
+            print(f"    {risk['area']}: {risk['severity']}")
+        print("  Deadline tasks:")
+        for task in update["deadline_tasks"]:
+            print(f"    {task['kind']}: due {task['due_at']}, {task['status']}")
+
+    _case_read(base_url, args, f"/api/v1/cases/{case_id}/weekly-updates/{update_id}", WEEKLY_MESSAGES, render)
+
+
 def _report_show(base_url: str, args: argparse.Namespace) -> None:
     case_id = _case_id_arg(args.case_id)
 
@@ -1786,6 +1836,20 @@ def _add_case_report_commands(case_commands) -> None:
     report_show.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
     _add_auth_options(report_show)
     report_show.set_defaults(handler=_report_show)
+
+    weekly = case_commands.add_parser(
+        "weekly", help="List and show the weekly machine-readable updates of a case, made while a significant risk is open"
+    )
+    weekly_commands = weekly.add_subparsers(dest="weekly_command", required=True)
+    weekly_list = weekly_commands.add_parser("list", help="List the weekly updates of one of your cases, oldest first")
+    weekly_list.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    _add_auth_options(weekly_list)
+    weekly_list.set_defaults(handler=_weekly_list)
+    weekly_show = weekly_commands.add_parser("show", help="Show one weekly update of one of your cases")
+    weekly_show.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    weekly_show.add_argument("update_id", metavar="UPDATE_ID", help="Weekly update ID (UUID), as listed by 'case weekly list'")
+    _add_auth_options(weekly_show)
+    weekly_show.set_defaults(handler=_weekly_show)
 
 
 def main(argv: list[str] | None = None) -> int:
