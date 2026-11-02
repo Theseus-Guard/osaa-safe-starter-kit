@@ -24,6 +24,17 @@ Thank you for helping improve SAFE-Starter-Kit. Please read this page before you
 - Code, comments, UI strings, log and CLI messages, and public documents are written in English.
 - Do not commit credentials, certificates, or local secrets. The `secrets/` directory is git-ignored and must stay that way.
 
+## User guide
+
+The user guide in `docs/user-guide/` is published on the documentation site. After any phase, and after any change that adds or changes a screen, a role, a workflow or a command, update the guide pages that cover it in the same change. Check these files:
+
+- [ ] `docs/user-guide/index.md`: the roles and their permissions, and the map of the screens.
+- [ ] `docs/user-guide/quick-start.md`: the setup and sign-in commands.
+- [ ] `docs/user-guide/screens.md`: each screen and tab, the labels, who can change what, and what is audited.
+- [ ] `docs/user-guide/workflows.md`: the workflows, and the list of features that are not built yet.
+- [ ] `docs/user-guide/demo.md`: the demo commands, the demo roles, and what was run live.
+- [ ] `docs/user-guide/faq.md`: every answer that is no longer true.
+
 ## Licence
 
 By contributing, you agree that your contribution is licensed under the Apache License 2.0, the licence of this project.
