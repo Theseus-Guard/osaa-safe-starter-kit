@@ -5,10 +5,15 @@ import {
   DisclosureVersion,
   ExternalNotice,
   NoticeChannel,
+  NoticeState,
+  NoticeUnknownReason,
   approveDisclosure,
+  cancelNotice,
   exportDisclosure,
   getDisclosurePreview,
   listDisclosures,
+  recordNoticeFollowUp,
+  recordNoticeReceipt,
   saveBlob,
   listNotices,
   recordNotice,
@@ -62,6 +67,42 @@ const NOTICE_STATE_TEXT: Record<ExternalNotice["state"], string> = {
   cancelled: "Cancelled",
 };
 
+type NoticeAction = "receipt" | "follow_up_require" | "follow_up_complete" | "cancel";
+
+// The buttons of one notice, in the order they are shown. The states follow the server rules in safe_kit.external_notices.
+// The server also accepts a receipt from the follow-up states; the screen offers a receipt from sent and receipt_unknown.
+const NOTICE_ACTIONS: NoticeAction[] = ["receipt", "follow_up_require", "follow_up_complete", "cancel"];
+const NOTICE_ACTION_TEXT: Record<NoticeAction, string> = {
+  receipt: "Record receipt",
+  follow_up_require: "Mark follow-up",
+  follow_up_complete: "Complete follow-up",
+  cancel: "Cancel notice",
+};
+const NOTICE_ACTION_STATES: Record<NoticeAction, NoticeState[]> = {
+  receipt: ["sent", "receipt_unknown"],
+  follow_up_require: ["sent", "receipt_unknown", "follow_up_done"],
+  follow_up_complete: ["follow_up_required"],
+  cancel: ["sent", "receipt_unknown", "follow_up_required", "follow_up_done"],
+};
+const NOTICE_ACTION_SUBMIT_TEXT: Record<NoticeAction, string> = {
+  receipt: "Save receipt",
+  follow_up_require: "Save follow-up",
+  follow_up_complete: "Mark follow-up done",
+  cancel: "Confirm cancellation",
+};
+const NOTICE_ACTION_TEXT_LABEL: Record<NoticeAction, string> = {
+  receipt: "Note (optional)",
+  follow_up_require: "Reason for the follow-up",
+  follow_up_complete: "What was done",
+  cancel: "Reason for cancelling",
+};
+const UNKNOWN_REASON_TEXT: Record<NoticeUnknownReason, string> = {
+  provider_accepted_no_receipt: "The provider accepted it, but no receipt came back",
+  timeout: "No receipt came back in time",
+  no_answer: "The recipient did not answer",
+};
+const UNKNOWN_REASONS = Object.keys(UNKNOWN_REASON_TEXT) as NoticeUnknownReason[];
+
 const APPROVAL_TEXT: Record<DisclosureVersion["approval_state"], string> = {
   approved: "Approved",
   not_approved: "Not approved",
@@ -101,6 +142,15 @@ export function CaseDisclosures({ caseId, closed, canApprove, canRecordNotices }
   const [repeatReason, setRepeatReason] = useState("");
   const [noticeFormError, setNoticeFormError] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
+  // The action form for one notice. One action is open at a time. actionText holds the reason, or the note on a receipt.
+  const [activeAction, setActiveAction] = useState<{ noticeId: string; action: NoticeAction } | null>(null);
+  const [actionText, setActionText] = useState("");
+  const [receiptOutcome, setReceiptOutcome] = useState<"received" | "unknown">("received");
+  const [unknownReason, setUnknownReason] = useState<NoticeUnknownReason | null>(null);
+  const [receivedDate, setReceivedDate] = useState("");
+  const [receivedTime, setReceivedTime] = useState("");
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [acting, setActing] = useState(false);
 
   useEffect(() => {
     let stale = false;
@@ -285,6 +335,129 @@ export function CaseDisclosures({ caseId, closed, canApprove, canRecordNotices }
     }
   }
 
+  // The notice actions are offered to the same callers as the record form (disclosures:approve or disclosures:prepare),
+  // and not on a closed case. Each notice shows only the actions its state allows.
+  const canActOnNotices = canRecordNotices && !closed;
+  const actionNotice =
+    activeAction === null ? undefined : notices?.find((item) => item.id === activeAction.noticeId);
+
+  function openNoticeAction(noticeId: string, action: NoticeAction) {
+    const now = zonedParts(new Date(), zone);
+    setActiveAction({ noticeId, action });
+    setActionText("");
+    setReceiptOutcome("received");
+    setUnknownReason(null);
+    setReceivedDate(now.date);
+    setReceivedTime(now.time);
+    setActionError(null);
+  }
+
+  function closeNoticeAction() {
+    setActiveAction(null);
+    setActionError(null);
+  }
+
+  async function runNoticeAction(run: () => Promise<ExternalNotice>, success: string) {
+    setActing(true);
+    try {
+      await run();
+      toast.success(success);
+      setActiveAction(null);
+      setNoticeRevision((count) => count + 1);
+    } catch (caught) {
+      toast.error(describeError(caught));
+    } finally {
+      setActing(false);
+    }
+  }
+
+  // Checks the form locally, then sends the one action. The server refusal is shown as a toast, the form stays open.
+  function submitNoticeAction() {
+    if (selectedId === null || activeAction === null || actionNotice === undefined) return;
+    const versionId = selectedId;
+    const noticeId = actionNotice.id;
+    const text = actionText.trim();
+    if (text.length > REASON_LIMIT) {
+      setActionError(`The text can be at most ${REASON_LIMIT} characters.`);
+      return;
+    }
+    setActionError(null);
+    switch (activeAction.action) {
+      case "receipt": {
+        const note = text === "" ? null : text;
+        if (receiptOutcome === "unknown") {
+          if (unknownReason === null) {
+            setActionError("Choose the reason why no receipt is known.");
+            return;
+          }
+          const reasonCode = unknownReason;
+          void runNoticeAction(
+            () =>
+              recordNoticeReceipt(caseId, versionId, noticeId, {
+                outcome: "unknown",
+                received_at: null,
+                reason_code: reasonCode,
+                reason: note,
+              }),
+            "No receipt is known for this notice. It stays unknown.",
+          );
+          return;
+        }
+        const receivedAt = zonedToUtcIso(receivedDate, receivedTime, zone);
+        if (receivedAt === null) {
+          setActionError(
+            `This date and time does not exist in ${zone} because of a daylight saving change. Choose another time.`,
+          );
+          return;
+        }
+        const receivedMs = new Date(receivedAt).getTime();
+        if (receivedMs > Date.now()) {
+          setActionError("The time cannot be in the future. Enter the time the receipt came in.");
+          return;
+        }
+        if (receivedMs < new Date(actionNotice.sent_at).getTime()) {
+          setActionError("The receipt cannot be earlier than the send. Enter the time the receipt came in.");
+          return;
+        }
+        void runNoticeAction(
+          () =>
+            recordNoticeReceipt(caseId, versionId, noticeId, {
+              outcome: "received",
+              received_at: receivedAt,
+              reason_code: null,
+              reason: note,
+            }),
+          "Receipt recorded. The notice is now marked as received.",
+        );
+        return;
+      }
+      case "follow_up_require":
+      case "follow_up_complete": {
+        if (text === "") {
+          setActionError("Enter the text. It is kept with the notice.");
+          return;
+        }
+        const followUp = activeAction.action === "follow_up_require" ? "require" : "complete";
+        void runNoticeAction(
+          () => recordNoticeFollowUp(caseId, versionId, noticeId, { action: followUp, reason: text }),
+          followUp === "require" ? "Follow-up marked as required." : "Follow-up marked as done.",
+        );
+        return;
+      }
+      case "cancel": {
+        if (text === "") {
+          setActionError("Enter the reason for cancelling. It is kept with the notice.");
+          return;
+        }
+        void runNoticeAction(
+          () => cancelNotice(caseId, versionId, noticeId, { reason: text }),
+          "Notice cancelled. It stays in the record with its reason.",
+        );
+        return;
+      }
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -337,7 +510,11 @@ export function CaseDisclosures({ caseId, closed, canApprove, canRecordNotices }
                         size="sm"
                         variant="outline"
                         aria-pressed={item.id === selectedId}
-                        onClick={() => setSelectedId(item.id)}
+                        onClick={() => {
+                          setSelectedId(item.id);
+                          // An open notice action belongs to the version it was opened on.
+                          setActiveAction(null);
+                        }}
                       >
                         Preview
                       </Button>
@@ -456,6 +633,7 @@ export function CaseDisclosures({ caseId, closed, canApprove, canRecordNotices }
                       <TableHead>Recipient reference</TableHead>
                       <TableHead>State</TableHead>
                       <TableHead>Path</TableHead>
+                      {canActOnNotices && <TableHead>Actions</TableHead>}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -470,12 +648,152 @@ export function CaseDisclosures({ caseId, closed, canApprove, canRecordNotices }
                         <TableCell className="font-mono text-xs">{notice.recipient_ref}</TableCell>
                         <TableCell>{NOTICE_STATE_TEXT[notice.state]}</TableCell>
                         <TableCell>{notice.manual_fallback ? "Manual" : "Approver"}</TableCell>
+                        {canActOnNotices && (
+                          <TableCell>
+                            <div className="flex flex-wrap gap-2">
+                              {NOTICE_ACTIONS.filter((action) => NOTICE_ACTION_STATES[action].includes(notice.state)).map(
+                                (action) => (
+                                  <Button
+                                    key={action}
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => openNoticeAction(notice.id, action)}
+                                  >
+                                    {NOTICE_ACTION_TEXT[action]}
+                                  </Button>
+                                ),
+                              )}
+                            </div>
+                          </TableCell>
+                        )}
                       </TableRow>
                     ))}
                   </TableBody>
                 </Table>
               </div>
             )}
+            {canActOnNotices &&
+              activeAction !== null &&
+              actionNotice !== undefined &&
+              NOTICE_ACTION_STATES[activeAction.action].includes(actionNotice.state) && (
+                <form
+                  aria-label={NOTICE_ACTION_TEXT[activeAction.action]}
+                  className="flex flex-col gap-3 border-t pt-4"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    submitNoticeAction();
+                  }}
+                >
+                  <h4 className="text-sm font-medium">{NOTICE_ACTION_TEXT[activeAction.action]}</h4>
+                  <p className="text-sm text-muted-foreground">
+                    Notice to <span className="font-mono text-xs">{actionNotice.recipient_ref}</span>, sent{" "}
+                    <Timestamp value={actionNotice.sent_at} />.
+                  </p>
+                  {activeAction.action === "receipt" && (
+                    <>
+                      <Field>
+                        <FieldLabel htmlFor="notice-action-outcome">Receipt</FieldLabel>
+                        <Select
+                          value={receiptOutcome}
+                          onValueChange={(value) => {
+                            if (value) setReceiptOutcome(value as "received" | "unknown");
+                          }}
+                          disabled={acting}
+                        >
+                          <SelectTrigger id="notice-action-outcome" className="w-full">
+                            <SelectValue>
+                              {(value: string | null) => (value === "unknown" ? "No receipt known" : "Receipt from the recipient")}
+                            </SelectValue>
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="received">Receipt from the recipient</SelectItem>
+                            <SelectItem value="unknown">No receipt known</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                      {receiptOutcome === "received" ? (
+                        <Field>
+                          <FieldLabel htmlFor="notice-action-received-date">Receipt came in on</FieldLabel>
+                          <div className="grid grid-cols-2 gap-2">
+                            <Input
+                              id="notice-action-received-date"
+                              type="date"
+                              value={receivedDate}
+                              onChange={(event) => setReceivedDate(event.target.value)}
+                              disabled={acting}
+                            />
+                            <Input
+                              id="notice-action-received-time"
+                              type="time"
+                              aria-label="Time the receipt came in"
+                              value={receivedTime}
+                              onChange={(event) => setReceivedTime(event.target.value)}
+                              disabled={acting}
+                            />
+                          </div>
+                          <FieldDescription>Times are in {zone}. The case stores the moment in UTC.</FieldDescription>
+                        </Field>
+                      ) : (
+                        <Field>
+                          <FieldLabel htmlFor="notice-action-unknown-reason">Why no receipt is known</FieldLabel>
+                          <Select
+                            value={unknownReason ?? ""}
+                            onValueChange={(value) => {
+                              if (value) setUnknownReason(value as NoticeUnknownReason);
+                            }}
+                            disabled={acting}
+                          >
+                            <SelectTrigger id="notice-action-unknown-reason" className="w-full">
+                              <SelectValue>
+                                {(value: string | null) =>
+                                  value ? UNKNOWN_REASON_TEXT[value as NoticeUnknownReason] : "Choose a reason"
+                                }
+                              </SelectValue>
+                            </SelectTrigger>
+                            <SelectContent>
+                              {UNKNOWN_REASONS.map((reason) => (
+                                <SelectItem key={reason} value={reason}>
+                                  {UNKNOWN_REASON_TEXT[reason]}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <FieldDescription>The notice stays unknown. Nothing is assumed delivered.</FieldDescription>
+                        </Field>
+                      )}
+                    </>
+                  )}
+                  <Field>
+                    <FieldLabel htmlFor="notice-action-text">{NOTICE_ACTION_TEXT_LABEL[activeAction.action]}</FieldLabel>
+                    <Textarea
+                      id="notice-action-text"
+                      value={actionText}
+                      onChange={(event) => setActionText(event.target.value)}
+                      disabled={acting}
+                      maxLength={REASON_LIMIT}
+                    />
+                    {activeAction.action === "cancel" && (
+                      <FieldDescription>The notice stays in the record, marked cancelled, with this reason.</FieldDescription>
+                    )}
+                    {activeAction.action !== "receipt" && activeAction.action !== "cancel" && (
+                      <FieldDescription>Recording a follow-up does not change any deadline.</FieldDescription>
+                    )}
+                  </Field>
+                  {actionError && (
+                    <Alert variant="destructive">
+                      <AlertDescription>{actionError}</AlertDescription>
+                    </Alert>
+                  )}
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="submit" disabled={acting}>
+                      {NOTICE_ACTION_SUBMIT_TEXT[activeAction.action]}
+                    </Button>
+                    <Button type="button" variant="outline" onClick={closeNoticeAction} disabled={acting}>
+                      Close
+                    </Button>
+                  </div>
+                </form>
+              )}
             {canRecordNotices && (
               <form
                 aria-label="Record a notice"
