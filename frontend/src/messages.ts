@@ -71,7 +71,7 @@ const MESSAGES: Record<string, string> = {
   idempotency_key_invalid: "The Idempotency-Key is not valid. Try again.",
   idempotency_key_reused: "This request key was already used for a different request. Try again with a new request.",
   case_closed: "This case is closed, so its disclosure packages cannot change.",
-  version_conflict: "The package has a newer version. Reload it, then try again.",
+  version_conflict: "The item changed, so nothing was saved. Reload it, check the current version and save again.",
   no_change: "The package content did not change, so no new version was saved.",
   evidence_not_eligible:
     "One or more evidence items cannot be used. Each must be a redacted derivative of this case that you may see.",
@@ -106,7 +106,6 @@ const MESSAGES: Record<string, string> = {
   "the redaction expired before it finished; retry": "The redaction timed out before it finished. Try again.",
   "catalog entry not found": "No catalog entry with that ID is available to your account.",
   entry_closed: "This entry is withdrawn or superseded. It accepts no further changes.",
-  version_conflict: "The entry changed, so nothing was saved. Reload it, check the current version and save again.",
   "verification run is not known": "The verification run could not be found.",
   "replacement must be another open catalog entry": "Choose another open catalog entry as the replacement.",
   invalid_cursor: "The list position is not valid. Reload the list.",

@@ -203,7 +203,7 @@ describe("CatalogEntryPage", () => {
     await user.click(within(form).getByRole("button", { name: "Save version" }));
 
     expect(
-      await within(form).findByText("The entry changed, so nothing was saved. Reload it, check the current version and save again."),
+      await within(form).findByText("The item changed, so nothing was saved. Reload it, check the current version and save again."),
     ).toBeInTheDocument();
   });
 
