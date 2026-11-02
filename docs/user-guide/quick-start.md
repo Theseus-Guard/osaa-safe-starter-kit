@@ -49,10 +49,6 @@ This page takes you from a clean machine to a signed-in administrator. Every com
 
 7. Open https://127.0.0.1:8443 and sign in with the username and password from step 6.
 
-   ![Sign-in page in demo mode](images/login.png)
-
-   > **Known issue: demo sign-in on this stack.** `compose.yaml` runs the `api` and `worker` services with `SAFE_MODE=demo` and `SAFE_DATASET=synthetic-demo`. In that mode the sign-in page offers demo sign-in only. It lists the demo roles and asks for their demo credentials (see [Demo](./demo.md)). The account from step 6 is not a demo role, so that form does not accept it. This is taken from the code. It has not been run live for this guide.
-
 8. Change the password when the application asks. A new account must change its password at its first sign-in. A new password must be at least 12 characters, must not match one of the last three passwords, and expires after 180 days.
 
 9. Choose the system timezone when the application asks. The timezone sets how every time is shown. Stored times stay in UTC.

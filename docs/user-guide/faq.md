@@ -86,4 +86,4 @@ A session ends after 60 minutes without activity, and in any case 12 hours after
 
 ## Why does the sign-in page ask for a demo role?
 
-The stack in `compose.yaml` runs in demo mode, with the synthetic dataset. In that mode the sign-in page offers demo sign-in only. See the known issue in the [Quick start](./quick-start.md), step 7, and the [Demo](./demo.md) page.
+Only the demo does. The stack from `compose.yaml` runs in production mode, and its sign-in page takes a username and password. The demo is started with `scripts/demo.sh`, which adds the overlay `compose.demo.yaml`; with the overlay, the sign-in page offers demo sign-in only. See the [Demo](./demo.md) page.

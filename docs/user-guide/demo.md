@@ -1,6 +1,6 @@
 # Demo
 
-The demo runs the application on this machine with synthetic data. It has its own Compose project, `safe-demo`, and the overlay `compose.demo.yaml`. It does not share containers, networks or volumes with the local stack from the [Quick start](./quick-start.md). It listens on `127.0.0.1` only. Only one stack can use `127.0.0.1:8443` at a time, so stop the other stack first.
+The demo runs the application on this machine with synthetic data. The default stack from `compose.yaml` runs in production mode and does not run the demo. The demo is an overlay: `scripts/demo.sh` starts it with `compose.demo.yaml`, which sets demo mode and the synthetic dataset for `api` and `worker`. It has its own Compose project, `safe-demo`. It does not share containers, networks or volumes with the local stack from the [Quick start](./quick-start.md). It listens on `127.0.0.1` only. Only one stack can use `127.0.0.1:8443` at a time, so stop the other stack first.
 
 Do not use the demo for real data. Its credentials are for the demo only.
 
