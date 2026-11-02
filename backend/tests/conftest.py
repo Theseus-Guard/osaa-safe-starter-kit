@@ -14,6 +14,16 @@ import pytest
 from safe_kit import api, cases, system_timezone
 
 
+# The token and session settings are required in every process (no defaults). Tests use the values that compose.yaml sets.
+TOKEN_SETTINGS = {"SAFE_ACCESS_TTL_MINUTES": "60", "SAFE_REFRESH_TTL_MINUTES": "60", "SAFE_SESSION_MAX_HOURS": "12"}
+
+
+@pytest.fixture(autouse=True)
+def token_settings(monkeypatch) -> None:
+    for name, value in TOKEN_SETTINGS.items():
+        monkeypatch.setenv(name, value)
+
+
 @pytest.fixture(autouse=True)
 def impact_values_without_database(monkeypatch) -> None:
     """Case responses read the impact values from the database. Without a database, the API tests see no values, so

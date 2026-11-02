@@ -104,6 +104,11 @@ services:
       SAFE_JWT_KEY_FILE: /run/secrets/jwt_signing_key
       SAFE_EVIDENCE_KEK_FILE: /run/secrets/evidence_kek
       SAFE_EVIDENCE_DIR: /var/lib/safe/evidence
+      # Required by the startup guard, no defaults. Access token 60 minutes; refresh window 60 minutes of idleness;
+      # session at most 12 hours from its login.
+      SAFE_ACCESS_TTL_MINUTES: "60"
+      SAFE_REFRESH_TTL_MINUTES: "60"
+      SAFE_SESSION_MAX_HOURS: "12"
     secrets:
       - db_app_password
       - jwt_signing_key
@@ -137,6 +142,10 @@ services:
       SAFE_DATASET: synthetic-demo
       SAFE_DB_USER: safe_worker
       SAFE_DB_PASSWORD_FILE: /run/secrets/db_worker_password
+      # The startup guard checks the same settings in every process, so the worker carries them too.
+      SAFE_ACCESS_TTL_MINUTES: "60"
+      SAFE_REFRESH_TTL_MINUTES: "60"
+      SAFE_SESSION_MAX_HOURS: "12"
     secrets:
       - db_worker_password
     depends_on:

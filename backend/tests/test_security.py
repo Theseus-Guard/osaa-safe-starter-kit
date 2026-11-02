@@ -4,6 +4,7 @@ import jwt
 import pytest
 
 from safe_kit import security
+from safe_kit.config_guard import ConfigError
 
 
 @pytest.fixture
@@ -46,17 +47,35 @@ def test_access_token_round_trip_has_unique_jti(signing_key):
     assert claims["jti"] != security.decode_access_token(second)["jti"]
 
 
-def test_default_access_token_lifetime_is_60_minutes(signing_key, monkeypatch):
-    monkeypatch.delenv("SAFE_ACCESS_TTL_MINUTES", raising=False)
+def test_access_token_lifetime_is_the_configured_value(signing_key, monkeypatch):
+    monkeypatch.setenv("SAFE_ACCESS_TTL_MINUTES", "45")
     _, expires_at = security.issue_access_token("user-1", "alice", "triager")
-    assert expires_at - datetime.now(UTC) == pytest.approx(timedelta(minutes=60), abs=timedelta(seconds=5))
+    assert expires_at - datetime.now(UTC) == pytest.approx(timedelta(minutes=45), abs=timedelta(seconds=5))
 
 
-def test_refresh_token_lifetime_matches_the_access_token_by_default(monkeypatch):
+def test_refresh_token_lifetime_matches_the_access_token_with_the_compose_values(monkeypatch):
     # Both start at issue time, so the frontend renews the pair before the access token expires.
-    monkeypatch.delenv("SAFE_REFRESH_TTL_MINUTES", raising=False)
     assert security.refresh_token_ttl() == timedelta(minutes=60)
     assert security.refresh_token_ttl() == security.access_token_ttl()
+    assert security.session_max_age() == timedelta(hours=12)
+
+
+@pytest.mark.parametrize(
+    ("name", "reader"),
+    [
+        ("SAFE_ACCESS_TTL_MINUTES", security.access_token_ttl),
+        ("SAFE_REFRESH_TTL_MINUTES", security.refresh_token_ttl),
+        ("SAFE_SESSION_MAX_HOURS", security.session_max_age),
+    ],
+)
+def test_a_token_setting_has_no_default(monkeypatch, name, reader):
+    # A missing setting is refused by name; the helpers never fall back to a value of their own.
+    monkeypatch.delenv(name)
+    with pytest.raises(ConfigError, match=name):
+        reader()
+    monkeypatch.setenv(name, "   ")
+    with pytest.raises(ConfigError, match=name):
+        reader()
 
 
 def test_expired_token_is_rejected(signing_key, monkeypatch):

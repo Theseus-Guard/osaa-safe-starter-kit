@@ -14,6 +14,9 @@ SYNTHETIC_DEMO_DATASET = "synthetic-demo"
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 
 MAX_PORT = 65535
+# Token and session lifetimes. The values are required: there is no default. The upper bounds only catch typos.
+MAX_TTL_MINUTES = 525_600  # one year
+MAX_SESSION_HOURS = 8_760  # one year
 
 
 class ConfigError(Exception):
@@ -30,6 +33,9 @@ class Settings:
     db_name: str
     db_user: str
     db_password_file: str
+    access_ttl_minutes: int
+    refresh_ttl_minutes: int
+    session_max_hours: int
 
 
 def _value(env: Mapping[str, str], name: str) -> str:
@@ -40,6 +46,23 @@ def _required(env: Mapping[str, str], name: str) -> str:
     value = _value(env, name)
     if not value:
         raise ConfigError(f"{name} is required and must not be empty")
+    return value
+
+
+def required_int(env: Mapping[str, str], name: str, *, minimum: int | None = 1, maximum: int | None = None) -> int:
+    """A required whole number. Missing, empty, or not a whole number is refused; so is a value outside the bounds.
+
+    minimum=None skips the lower bound. security.py uses that: the startup guard has already checked the range, and
+    the token helpers only need the value.
+    """
+    raw = _required(env, name)
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ConfigError(f"{name} must be a whole number") from None
+    if (minimum is not None and value < minimum) or (maximum is not None and value > maximum):
+        bounds = f"from {minimum} to {maximum}" if maximum is not None else f"of at least {minimum}"
+        raise ConfigError(f"{name} must be a whole number {bounds}")
     return value
 
 
@@ -80,4 +103,7 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         db_name=_required(env, "SAFE_DB_NAME"),
         db_user=_required(env, "SAFE_DB_USER"),
         db_password_file=_required(env, "SAFE_DB_PASSWORD_FILE"),
+        access_ttl_minutes=required_int(env, "SAFE_ACCESS_TTL_MINUTES", maximum=MAX_TTL_MINUTES),
+        refresh_ttl_minutes=required_int(env, "SAFE_REFRESH_TTL_MINUTES", maximum=MAX_TTL_MINUTES),
+        session_max_hours=required_int(env, "SAFE_SESSION_MAX_HOURS", maximum=MAX_SESSION_HOURS),
     )

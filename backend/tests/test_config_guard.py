@@ -25,6 +25,9 @@ DB_SETTINGS = {
     "SAFE_DB_NAME": "safe",
     "SAFE_DB_USER": "safe_api",
     "SAFE_DB_PASSWORD_FILE": "/run/secrets/db_app_password",
+    "SAFE_ACCESS_TTL_MINUTES": "60",
+    "SAFE_REFRESH_TTL_MINUTES": "60",
+    "SAFE_SESSION_MAX_HOURS": "12",
 }
 
 
@@ -97,6 +100,51 @@ def test_demo_accepts_loopback_published_hosts(host):
 def test_demo_refuses_a_published_host_that_is_not_loopback(host):
     with pytest.raises(ConfigError, match="published host address"):
         load_settings(demo_env(SAFE_BIND_HOST=host))
+
+
+@pytest.mark.parametrize("name", ["SAFE_ACCESS_TTL_MINUTES", "SAFE_REFRESH_TTL_MINUTES", "SAFE_SESSION_MAX_HOURS"])
+def test_each_token_setting_is_required(name):
+    with pytest.raises(ConfigError, match=name):
+        load_settings(production_env(**{name: None}))
+    with pytest.raises(ConfigError, match=name):
+        load_settings(production_env(**{name: "  "}))
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "1.5", "sixty", str(525_601)])
+def test_access_and_refresh_minutes_must_be_whole_numbers_in_range(value):
+    with pytest.raises(ConfigError, match="SAFE_ACCESS_TTL_MINUTES"):
+        load_settings(production_env(SAFE_ACCESS_TTL_MINUTES=value))
+    with pytest.raises(ConfigError, match="SAFE_REFRESH_TTL_MINUTES"):
+        load_settings(production_env(SAFE_REFRESH_TTL_MINUTES=value))
+
+
+@pytest.mark.parametrize("value", ["0", "-12", "twelve", str(8_761)])
+def test_session_hours_must_be_whole_numbers_in_range(value):
+    with pytest.raises(ConfigError, match="SAFE_SESSION_MAX_HOURS"):
+        load_settings(production_env(SAFE_SESSION_MAX_HOURS=value))
+
+
+def test_token_settings_are_read_into_the_settings():
+    settings = load_settings(production_env(SAFE_ACCESS_TTL_MINUTES="30", SAFE_REFRESH_TTL_MINUTES="90",
+                                            SAFE_SESSION_MAX_HOURS="8"))
+    assert (settings.access_ttl_minutes, settings.refresh_ttl_minutes, settings.session_max_hours) == (30, 90, 8)
+
+
+@pytest.mark.parametrize("service", ["api", "worker"])
+def test_compose_sets_the_token_settings_for_api_and_worker(service):
+    # The guard runs in both processes, so both services carry the settings; the values are the ones that were the
+    # defaults before, so the demo behaves as it did.
+    compose = (Path(__file__).resolve().parents[2] / "compose.yaml").read_text(encoding="utf-8")
+    lines = compose.split(f"\n  {service}:\n", 1)[1].split("\n")
+    environment = []
+    for line in lines[lines.index("    environment:") + 1:]:
+        if line and not line.startswith("      "):
+            break
+        environment.append(line)
+    text = "\n".join(environment)
+    assert 'SAFE_ACCESS_TTL_MINUTES: "60"' in text
+    assert 'SAFE_REFRESH_TTL_MINUTES: "60"' in text
+    assert 'SAFE_SESSION_MAX_HOURS: "12"' in text
 
 
 def test_compose_publishes_the_api_on_loopback_only():
