@@ -70,12 +70,11 @@ The proxy must send these headers to the gateway:
 
 - `Host`: the public host name.
 - `X-Forwarded-Proto: https`. Overwrite any value from the client.
-- `X-Forwarded-For`: the client chain, appended by the proxy.
-- `X-Real-IP`: the client address.
 
-The gateway sets `X-Forwarded-Proto` to `https` itself. It also overwrites `X-Real-IP` with the address of its direct peer.
-With offload, the API therefore records the proxy's address as `client_ip` unless the gateway is changed to trust the proxy
-(`set_real_ip_from`). That change is not made here.
+The gateway sets `X-Forwarded-Proto` to `https` itself. It also overwrites `X-Forwarded-For` with the address of its direct
+peer, so the client chain sent by the proxy is not passed on. The API reads `X-Forwarded-For` only from the gateway's
+address (`SAFE_TRUSTED_PROXIES`). With offload, the API therefore sees the proxy's address as the client, and the login
+rate limits and demo sign-in use that address. Passing the client chain through needs a gateway change that is not made here.
 
 ## 5. Not covered
 

@@ -65,7 +65,8 @@ from safe_kit.cases import (
     unassign_member,
     update_deadline,
 )
-from safe_kit.config_guard import is_demo, load_settings
+from safe_kit.client_address import resolve_client_address
+from safe_kit.config_guard import is_demo, load_settings, trusted_proxies
 from safe_kit.db import connect
 from safe_kit.demo_auth import (
     DEMO_ADMIN_ID,
@@ -310,11 +311,10 @@ class RolePermissionsRequest(BaseModel):
 
 
 def _client_ip(request: Request) -> str:
-    # The gateway overwrites X-Real-IP with the address it received the connection from.
-    # This is safe only because the API is reachable solely through the gateway.
-    if real_ip := request.headers.get("x-real-ip"):
-        return real_ip
-    return request.client.host if request.client else "unknown"
+    # The one place that decides the client address for demo sign-in and the login rate limits.
+    # X-Forwarded-For counts only when the socket peer is a trusted proxy (client_address.py).
+    peer = request.client.host if request.client else None
+    return resolve_client_address(peer, request.headers.get("x-forwarded-for"), trusted_proxies(os.environ))
 
 
 def _issue_tokens(user: User, refresh_token: str) -> TokenResponse:

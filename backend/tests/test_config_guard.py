@@ -6,6 +6,7 @@ lifespan and the worker entrypoint are exercised; those tests set or remove the 
 
 import asyncio
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -166,6 +167,41 @@ def test_compose_demo_api_binds_the_published_address_to_loopback():
 
     assert "SAFE_BIND_HOST: 127.0.0.1" in api_block
     assert "SAFE_MODE: demo" in api_block
+
+
+def test_compose_api_trusts_only_the_gateway_address_on_a_fixed_edge_subnet():
+    compose = (Path(__file__).resolve().parents[2] / "compose.yaml").read_text(encoding="utf-8")
+    api_block = compose.split("\n  api:\n", 1)[1].split("\n  worker:\n", 1)[0]
+    gateway_block = compose.split("\n  gateway:\n", 1)[1].split("\n  cli:\n", 1)[0]
+
+    match = re.search(r'SAFE_TRUSTED_PROXIES: "([^"]*)"', api_block)
+    assert match, "the api service must set SAFE_TRUSTED_PROXIES"
+    trusted = match.group(1)
+    assert trusted == "172.28.0.10"
+    assert "ipv4_address: 172.28.0.10" in gateway_block
+    assert "subnet: 172.28.0.0/24" in compose
+
+
+def test_nginx_overwrites_x_forwarded_for_with_the_direct_peer():
+    nginx = (Path(__file__).resolve().parents[2] / "gateway" / "nginx.conf").read_text(encoding="utf-8")
+
+    assert nginx.count("proxy_set_header X-Forwarded-For $remote_addr;") == 2
+    assert "$proxy_add_x_forwarded_for" not in nginx
+    assert "listen 8443 ssl;" in nginx
+
+
+def test_trusted_proxies_are_optional_and_allowed_in_production():
+    assert load_settings(demo_env()).trusted_proxies == ()
+    settings = load_settings(production_env(SAFE_TRUSTED_PROXIES="172.28.0.10, 10.0.0.0/8"))
+    assert [str(network) for network in settings.trusted_proxies] == ["172.28.0.10/32", "10.0.0.0/8"]
+
+
+@pytest.mark.parametrize("value", ["172.28.0.10/24", "172.28.0.10,,10.0.0.1", "not-an-address", "0.0.0.0/0"])
+def test_malformed_trusted_proxies_stop_the_process_without_echoing_the_value(value):
+    with pytest.raises(ConfigError, match="SAFE_TRUSTED_PROXIES") as refused:
+        load_settings(demo_env(SAFE_TRUSTED_PROXIES=value + SECRET))
+
+    assert SECRET not in str(refused.value)
 
 
 @pytest.mark.parametrize("host", [None, ""])
