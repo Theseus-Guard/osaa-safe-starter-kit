@@ -8,11 +8,14 @@ test database once (both seed versions) and check the rest against that seed. Th
 database of its own, runs migration 0046 on it, and then runs the upgrade.
 """
 
+import io
 import json
 import os
 import re
 import secrets
 import stat
+import urllib.error
+import urllib.parse
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -25,7 +28,7 @@ import pytest
 from fastapi.testclient import TestClient
 from psycopg import sql
 
-from safe_kit import api, demo_seed
+from safe_kit import api, cli, demo_seed
 from safe_kit import migrate as migrate_module
 from safe_kit.config_guard import ConfigError, is_demo
 from safe_kit.db import connect
@@ -693,4 +696,111 @@ def test_seeded_cases_are_visible_to_the_roles_their_real_role_allows(demo_datas
             for case_id in SEEDED_CASES:
                 detail = client.get(f"/api/v1/cases/{case_id}")
                 assert detail.status_code == (200 if case_id in expected else 404), (username, case_id)
+
+
+# --- the container CLI's demo sign-in against the real API (cli.py, scripts/demo.sh cli-show) ----------------------
+
+CASE_ONE = demo_seed.CASE_ONE
+
+
+class _CliResponse:
+    def __init__(self, body: bytes):
+        self.status = 200
+        self._body = body
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+
+def _cli_through_api(monkeypatch) -> list[tuple[str, str]]:
+    """Sends each request of the CLI to the real API app, from a loopback peer. Returns the log of (method, path)."""
+    log: list[tuple[str, str]] = []
+
+    def urlopen(request, timeout=None):
+        split = urllib.parse.urlsplit(request.full_url)
+        path = split.path + (f"?{split.query}" if split.query else "")
+        log.append((request.get_method(), split.path))
+        # A new client per request, so no cookie from an earlier sign-in is sent with a bearer request.
+        response = TestClient(api.app, client=LOOPBACK).request(
+            request.get_method(), path, content=request.data, headers=dict(request.header_items())
+        )
+        if response.status_code >= 400:
+            raise urllib.error.HTTPError(
+                request.full_url, response.status_code, "error", None, io.BytesIO(response.content)
+            )
+        return _CliResponse(response.content)
+
+    monkeypatch.setattr(cli.urllib.request, "urlopen", urlopen)
+    monkeypatch.setenv(cli.API_URL_ENV, "http://api.test:8000")
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO(""))
+    return log
+
+
+def _write_credential(tmp_path: Path, value: str) -> str:
+    path = tmp_path / "credential"
+    path.write_text(value + "\n", encoding="utf-8")
+    return str(path)
+
+
+@requires_database
+def test_cli_demo_sign_in_reads_a_seeded_case_through_the_real_api(demo_dataset, monkeypatch, tmp_path, capsys):
+    log = _cli_through_api(monkeypatch)
+    credential = _credential(demo_dataset, "demo-investigator")
+    path = _write_credential(tmp_path, credential)
+
+    with patch.dict(os.environ, demo_dataset["env"], clear=False):
+        code = cli.main(
+            ["--no-banner", "case", "show", CASE_ONE, "--json",
+             "--demo-username", "demo-investigator", "--demo-credential-file", path]
+        )
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    assert json.loads(output.out)["id"] == CASE_ONE
+    assert log[0] == ("POST", SIGN_IN)
+    assert ("POST", "/api/v1/auth/token") not in log
+    assert credential not in output.out + output.err
+
+
+@requires_database
+def test_cli_demo_sign_in_with_another_roles_credential_gets_the_normal_refusal(
+    demo_dataset, monkeypatch, tmp_path, capsys
+):
+    _cli_through_api(monkeypatch)
+    triager = _credential(demo_dataset, "demo-triager")
+    path = _write_credential(tmp_path, triager)
+
+    with patch.dict(os.environ, demo_dataset["env"], clear=False):
+        code = cli.main(
+            ["--no-banner", "case", "show", CASE_ONE, "--json",
+             "--demo-username", "demo-investigator", "--demo-credential-file", path]
+        )
+
+    output = capsys.readouterr()
+    assert code == 1
+    assert output.err == "error: invalid credentials\n"
+    assert triager not in output.out + output.err
+
+
+@requires_database
+def test_cli_demo_sign_in_refuses_a_non_demo_username_on_the_server(demo_dataset, monkeypatch, tmp_path, capsys):
+    log = _cli_through_api(monkeypatch)
+    path = _write_credential(tmp_path, _credential(demo_dataset, "demo-investigator"))
+
+    with patch.dict(os.environ, demo_dataset["env"], clear=False):
+        code = cli.main(
+            ["--no-banner", "case", "show", CASE_ONE, "--json",
+             "--demo-username", "demo-reporting-owner", "--demo-credential-file", path]
+        )
+
+    output = capsys.readouterr()
+    assert code == 1
+    assert log == [("POST", SIGN_IN)]
+    assert output.err == "error: invalid credentials\n"
 

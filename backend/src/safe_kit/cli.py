@@ -19,6 +19,14 @@ TITLE = "OSAA | SAFE Starter-Kit"
 API_URL_ENV = "SAFE_API_URL"
 DEFAULT_API_URL = "http://api:8000"
 REQUEST_TIMEOUT_SECONDS = 10
+# Demo sign-in (demo mode only): the demo role and the file that holds its credential. The API decides who may use it.
+DEMO_USERNAME_ENV = "SAFE_DEMO_USERNAME"
+DEMO_CREDENTIAL_FILE_ENV = "SAFE_DEMO_CREDENTIAL_FILE"
+DEMO_SIGN_IN_PATH = "/api/v1/demo/sign-in"
+# The API accepts at most 256 characters for a credential. Only the first line of the file is read, and at most this
+# many bytes of it, so a large or binary file is never loaded in full.
+DEMO_CREDENTIAL_MAX_LENGTH = 256
+DEMO_CREDENTIAL_READ_LIMIT = 1024
 
 # Same limits as the API and the web UI (the web UI pages cases 20 at a time).
 MAX_TITLE_LENGTH = 200
@@ -240,16 +248,89 @@ def _username(args: argparse.Namespace) -> str:
     return username
 
 
+DEMO_SIGN_IN_HTTP_MESSAGES = {
+    401: "invalid credentials",
+    403: "demo sign-in is not available: the server is not in demo mode, or this address is not allowed",
+    429: "too many login attempts; wait and try again",
+}
+
+
+def _demo_sign_in_options(args: argparse.Namespace) -> tuple[str, str] | None:
+    """The demo username and credential file when this command signs in as a demo role, otherwise None.
+
+    The command-line options win over their environment variables. Giving --username selects a password sign-in
+    unless a demo option is also given, which is refused. Demo sign-in needs both values.
+    """
+    if args.demo_username is not None or args.demo_credential_file is not None:
+        if args.username:
+            raise UsageError("use --username for a password sign-in or the demo options for a demo sign-in, not both")
+        username = (args.demo_username or "").strip()
+        path = (args.demo_credential_file or "").strip()
+    else:
+        if args.username:
+            return None
+        username = os.environ.get(DEMO_USERNAME_ENV, "").strip()
+        path = os.environ.get(DEMO_CREDENTIAL_FILE_ENV, "").strip()
+        if not username and not path:
+            return None
+    if not username or not path:
+        raise UsageError(
+            "demo sign-in needs a demo username and a credential file: "
+            "--demo-username and --demo-credential-file (or SAFE_DEMO_USERNAME and SAFE_DEMO_CREDENTIAL_FILE)"
+        )
+    return username, path
+
+
+def _read_demo_credential(path: str) -> str:
+    """The first line of the demo credential file, without surrounding whitespace.
+
+    Refusals name the file, never its content. The value is returned to the caller and is not stored anywhere else.
+    """
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(DEMO_CREDENTIAL_READ_LIMIT)
+    except FileNotFoundError:
+        raise UsageError(f"the demo credential file is missing: {path}") from None
+    except OSError:
+        raise UsageError(f"the demo credential file cannot be read: {path}") from None
+    try:
+        credential = head.split(b"\n", 1)[0].decode("utf-8").strip()
+    except UnicodeDecodeError:
+        raise UsageError(f"the demo credential file has no usable first line: {path}") from None
+    if not credential or len(credential) > DEMO_CREDENTIAL_MAX_LENGTH:
+        raise UsageError(f"the demo credential file has no usable first line: {path}")
+    return credential
+
+
+def _demo_sign_in(base_url: str, username: str, credential_file: str) -> dict:
+    """Signs in one demo role through POST /api/v1/demo/sign-in. The credential is sent once and not kept."""
+    credential = _read_demo_credential(credential_file)
+    return _json_object(
+        _call(
+            base_url,
+            "POST",
+            DEMO_SIGN_IN_PATH,
+            payload={"username": username, "credential": credential},
+            messages=DEMO_SIGN_IN_HTTP_MESSAGES,
+        )
+    )
+
+
 def _with_session(base_url: str, args: argparse.Namespace, action) -> None:
     """Log in once, run action with the access token, then end the session.
 
     The tokens are kept in memory for this command only. They are never printed or written to a file.
+    A demo sign-in (see _demo_sign_in_options) uses the demo endpoint instead of the password login.
     """
-    username = _username(args)
-    password = _read_password()
-    tokens = _json_object(
-        _call(base_url, "POST", "/api/v1/auth/token", payload={"username": username, "password": password})
-    )
+    demo = _demo_sign_in_options(args)
+    if demo is not None:
+        tokens = _demo_sign_in(base_url, *demo)
+    else:
+        username = _username(args)
+        password = _read_password()
+        tokens = _json_object(
+            _call(base_url, "POST", "/api/v1/auth/token", payload={"username": username, "password": password})
+        )
     if not isinstance(tokens.get("access_token"), str) or not isinstance(tokens.get("refresh_token"), str):
         raise RequestFailed("unexpected response from the server")
     try:
@@ -2315,6 +2396,18 @@ def _add_idempotency_option(parser: argparse.ArgumentParser) -> None:
 
 def _add_auth_options(parser: argparse.ArgumentParser, *, json_output: bool = True) -> None:
     parser.add_argument("--username", help="Account name. Defaults to the SAFE_USERNAME environment variable")
+    parser.add_argument(
+        "--demo-username",
+        metavar="USERNAME",
+        help="Sign in as this demo role (demo mode only). Needs --demo-credential-file. "
+        "Defaults to the SAFE_DEMO_USERNAME environment variable",
+    )
+    parser.add_argument(
+        "--demo-credential-file",
+        metavar="PATH",
+        help="File that holds the demo role's credential. Only its first line is read and never printed. "
+        "Defaults to the SAFE_DEMO_CREDENTIAL_FILE environment variable",
+    )
     if json_output:
         parser.add_argument("--json", action="store_true", help="Print the API response body as JSON")
 
