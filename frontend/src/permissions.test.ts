@@ -53,7 +53,23 @@ describe("permissions", () => {
       canWriteRecords: true,
       canReadFullView: true,
       canReadReporterContact: false,
+      canReadDisclosures: false,
+      canApproveDisclosures: false,
     });
+  });
+
+  it("maps the disclosure permissions: read with disclosures:read, approve with disclosures:approve", () => {
+    const approver = caseAbilities(["disclosures:read", "disclosures:approve", "cases:read_assigned"]);
+    expect(approver.canReadDisclosures).toBe(true);
+    expect(approver.canApproveDisclosures).toBe(true);
+
+    const reader = caseAbilities(["disclosures:read"]);
+    expect(reader.canReadDisclosures).toBe(true);
+    expect(reader.canApproveDisclosures).toBe(false);
+
+    const auditor = caseAbilities(["cases:read_all"]);
+    expect(auditor.canReadDisclosures).toBe(false);
+    expect(auditor.canApproveDisclosures).toBe(false);
   });
 
   it("lets only reporter_contact:read open the reporter contact", () => {

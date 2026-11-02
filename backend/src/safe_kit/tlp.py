@@ -123,33 +123,44 @@ def item_permitted(stored: "StoredEvidence", recipient: Recipient) -> bool:
     return row is not None
 
 
+def is_release_approved_on(conn, evidence_id: str) -> bool:
+    """The release check on the caller's connection, so it shares the caller's transaction."""
+    row = conn.execute(
+        "SELECT 1 FROM evidence_release_approvals WHERE evidence_id = %s AND NOT is_deleted", (evidence_id,)
+    ).fetchone()
+    return row is not None
+
+
 def is_release_approved(evidence_id: str) -> bool:
     with connect() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM evidence_release_approvals WHERE evidence_id = %s AND NOT is_deleted", (evidence_id,)
-        ).fetchone()
-    return row is not None
+        return is_release_approved_on(conn, evidence_id)
+
+
+def record_release_approval_on(conn, evidence_id: str, approved_by: str) -> None:
+    """Record the release approval on the caller's connection. Refused for any label but CLEAR (see record_release_approval)."""
+    row = conn.execute(
+        "SELECT tlp_label FROM evidence_items WHERE id = %s AND NOT is_deleted", (evidence_id,)
+    ).fetchone()
+    if row is None or row[0] != CLEAR:
+        raise ReleaseNotApproved()
+    conn.execute(
+        "INSERT INTO evidence_release_approvals (evidence_id, approved_by) VALUES (%s, %s)",
+        (evidence_id, approved_by),
+    )
+    audit.record(
+        conn,
+        audit.EVIDENCE_RELEASE_APPROVED,
+        "evidence",
+        evidence_id,
+        actor_id=approved_by,
+    )
 
 
 def record_release_approval(evidence_id: str, approved_by: str) -> None:
     """Record the human approval that lets a CLEAR item be released. Refused for any other label.
 
-    The approval flow that calls this is a later package. It is here so that the refusal has a record to check.
+    The disclosure approval (safe_kit.disclosure) calls the connection form of this, so approving a CLEAR package records
+    the release of its CLEAR items in the same transaction.
     """
     with connect() as conn:
-        row = conn.execute(
-            "SELECT tlp_label FROM evidence_items WHERE id = %s AND NOT is_deleted", (evidence_id,)
-        ).fetchone()
-        if row is None or row[0] != CLEAR:
-            raise ReleaseNotApproved()
-        conn.execute(
-            "INSERT INTO evidence_release_approvals (evidence_id, approved_by) VALUES (%s, %s)",
-            (evidence_id, approved_by),
-        )
-        audit.record(
-            conn,
-            audit.EVIDENCE_RELEASE_APPROVED,
-            "evidence",
-            evidence_id,
-            actor_id=approved_by,
-        )
+        record_release_approval_on(conn, evidence_id, approved_by)

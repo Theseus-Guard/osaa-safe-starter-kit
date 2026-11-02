@@ -1505,4 +1505,9 @@ from safe_kit.catalog_api import catalog_router  # noqa: E402
 
 app.include_router(catalog_router)
 
+# Disclosure packages: versions, the preview, and the human approval (see safe_kit.disclosure_api).
+from safe_kit.disclosure_api import disclosure_router  # noqa: E402
+
+app.include_router(disclosure_router)
+
 app.include_router(profile_router)
