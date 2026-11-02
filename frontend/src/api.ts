@@ -1494,7 +1494,7 @@ export function approveDisclosure(
 
 // External notices of a disclosure version (safe_kit.external_notices). A notice records a send that a person made. Nothing
 // is sent from here, and a notice is never resent automatically. Recording needs disclosures:approve, or disclosures:prepare
-// on the manual path with a reason. A receipt, follow-up or cancel is recorded with the command line for now.
+// on the manual path with a reason. A receipt, follow-up or cancel is recorded from the same list, with a new Idempotency-Key.
 export type NoticeChannel = "email" | "postal" | "webhook" | "secure_manual" | "other";
 export type NoticeState =
   | "sent"
@@ -1554,6 +1554,70 @@ export function recordNotice(caseId: string, versionId: string, body: ExternalNo
     `/cases/${encodeURIComponent(caseId)}/disclosures/${encodeURIComponent(versionId)}/notices`,
     { method: "POST", json: body, headers: idempotencyHeaders() },
   );
+}
+
+// The reason codes of a receipt that is unknown. They are the codes the API accepts.
+export type NoticeUnknownReason = "provider_accepted_no_receipt" | "timeout" | "no_answer";
+
+// A receipt: outcome received needs received_at and no reason_code; outcome unknown needs reason_code and no received_at.
+export interface ExternalNoticeReceiptBody {
+  outcome: "received" | "unknown";
+  received_at: string | null;
+  reason_code: NoticeUnknownReason | null;
+  reason: string | null;
+}
+
+export interface ExternalNoticeFollowUpBody {
+  action: "require" | "complete";
+  reason: string;
+}
+
+export interface ExternalNoticeCancelBody {
+  reason: string;
+}
+
+// The notice actions of one notice. Each sends a new Idempotency-Key. The server decides whether the state allows it.
+function noticePath(caseId: string, versionId: string, noticeId: string): string {
+  return `/cases/${encodeURIComponent(caseId)}/disclosures/${encodeURIComponent(versionId)}/notices/${encodeURIComponent(noticeId)}`;
+}
+
+export function recordNoticeReceipt(
+  caseId: string,
+  versionId: string,
+  noticeId: string,
+  body: ExternalNoticeReceiptBody,
+): Promise<ExternalNotice> {
+  return request<ExternalNotice>(`${noticePath(caseId, versionId, noticeId)}/receipt`, {
+    method: "POST",
+    json: body,
+    headers: idempotencyHeaders(),
+  });
+}
+
+export function recordNoticeFollowUp(
+  caseId: string,
+  versionId: string,
+  noticeId: string,
+  body: ExternalNoticeFollowUpBody,
+): Promise<ExternalNotice> {
+  return request<ExternalNotice>(`${noticePath(caseId, versionId, noticeId)}/follow-up`, {
+    method: "POST",
+    json: body,
+    headers: idempotencyHeaders(),
+  });
+}
+
+export function cancelNotice(
+  caseId: string,
+  versionId: string,
+  noticeId: string,
+  body: ExternalNoticeCancelBody,
+): Promise<ExternalNotice> {
+  return request<ExternalNotice>(`${noticePath(caseId, versionId, noticeId)}/cancel`, {
+    method: "POST",
+    json: body,
+    headers: idempotencyHeaders(),
+  });
 }
 
 export async function readiness(): Promise<Readiness> {

@@ -877,3 +877,96 @@ describe("start-up session restore", () => {
     await expect(api.restoreSession()).resolves.toMatchObject({ password_change_required: true });
   });
 });
+
+describe("disclosure export and external notice actions", () => {
+  const CASE = "case/1";
+  const VERSION = "version/2";
+  const NOTICE = "notice/3";
+  const BASE = "/api/v1/cases/case%2F1/disclosures/version%2F2/notices/notice%2F3";
+
+  function bodyOf(call: number): unknown {
+    return JSON.parse((fetchMock.mock.calls[call][1] as RequestInit).body as string);
+  }
+
+  function methodOf(call: number): string {
+    return (fetchMock.mock.calls[call][1] as RequestInit | undefined)?.method ?? "GET";
+  }
+
+  it("exports one disclosure version from its export route as a blob", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }));
+
+    const blob = await api.exportDisclosure(CASE, VERSION);
+
+    expect(blob).toBeInstanceOf(Blob);
+    expect(urlOf(0)).toBe("/api/v1/cases/case%2F1/disclosures/version%2F2/export");
+    expect(methodOf(0)).toBe("GET");
+  });
+
+  it("records a received receipt with its time and a new Idempotency-Key", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+
+    await api.recordNoticeReceipt(CASE, VERSION, NOTICE, {
+      outcome: "received",
+      received_at: "2026-11-02T10:00:00Z",
+      reason_code: null,
+      reason: null,
+    });
+
+    expect(urlOf(0)).toBe(`${BASE}/receipt`);
+    expect(methodOf(0)).toBe("POST");
+    expect(bodyOf(0)).toEqual({
+      outcome: "received",
+      received_at: "2026-11-02T10:00:00Z",
+      reason_code: null,
+      reason: null,
+    });
+    expect(headersOf(0).get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("records an unknown receipt with its reason code", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+
+    await api.recordNoticeReceipt(CASE, VERSION, NOTICE, {
+      outcome: "unknown",
+      received_at: null,
+      reason_code: "timeout",
+      reason: "No answer in five days",
+    });
+
+    expect(urlOf(0)).toBe(`${BASE}/receipt`);
+    expect(bodyOf(0)).toEqual({
+      outcome: "unknown",
+      received_at: null,
+      reason_code: "timeout",
+      reason: "No answer in five days",
+    });
+  });
+
+  it("marks a follow-up as required, and as done, each with a new Idempotency-Key", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {})).mockResolvedValueOnce(jsonResponse(200, {}));
+
+    await api.recordNoticeFollowUp(CASE, VERSION, NOTICE, { action: "require", reason: "Call the CERT" });
+    await api.recordNoticeFollowUp(CASE, VERSION, NOTICE, { action: "complete", reason: "Reached by phone" });
+
+    expect(urlOf(0)).toBe(`${BASE}/follow-up`);
+    expect(bodyOf(0)).toEqual({ action: "require", reason: "Call the CERT" });
+    expect(urlOf(1)).toBe(`${BASE}/follow-up`);
+    expect(bodyOf(1)).toEqual({ action: "complete", reason: "Reached by phone" });
+    const first = headersOf(0).get("Idempotency-Key");
+    const second = headersOf(1).get("Idempotency-Key");
+    expect(first).toMatch(/^[0-9a-f-]{36}$/);
+    expect(second).toMatch(/^[0-9a-f-]{36}$/);
+    expect(first).not.toBe(second);
+  });
+
+  it("cancels a notice with its reason and a new Idempotency-Key", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+
+    await api.cancelNotice(CASE, VERSION, NOTICE, { reason: "Sent to the wrong address" });
+
+    expect(urlOf(0)).toBe(`${BASE}/cancel`);
+    expect(methodOf(0)).toBe("POST");
+    expect(bodyOf(0)).toEqual({ reason: "Sent to the wrong address" });
+    expect(headersOf(0).get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/);
+  });
+});

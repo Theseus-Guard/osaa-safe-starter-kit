@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
@@ -7,10 +7,14 @@ import {
   DisclosurePreview,
   DisclosureVersion,
   ExternalNotice,
+  NoticeState,
   approveDisclosure,
+  cancelNotice,
   exportDisclosure,
   getDisclosurePreview,
   listDisclosures,
+  recordNoticeFollowUp,
+  recordNoticeReceipt,
   saveBlob,
   listNotices,
   recordNotice,
@@ -28,6 +32,9 @@ vi.mock("../../api", async (importOriginal) => {
     saveBlob: vi.fn(),
     listNotices: vi.fn(),
     recordNotice: vi.fn(),
+    recordNoticeReceipt: vi.fn(),
+    recordNoticeFollowUp: vi.fn(),
+    cancelNotice: vi.fn(),
   };
 });
 
@@ -44,6 +51,9 @@ const exportOne = vi.mocked(exportDisclosure);
 const save = vi.mocked(saveBlob);
 const notices = vi.mocked(listNotices);
 const record = vi.mocked(recordNotice);
+const receipt = vi.mocked(recordNoticeReceipt);
+const followUp = vi.mocked(recordNoticeFollowUp);
+const cancel = vi.mocked(cancelNotice);
 
 const CASE_ID = "11111111-2222-4333-8444-555555555555";
 const VERSION_ID = "aaaaaaaa-bbbb-4ccc-8ddd-000000000002";
@@ -111,6 +121,9 @@ beforeEach(() => {
   vi.mocked(toast.error).mockClear();
   notices.mockReset();
   record.mockReset();
+  receipt.mockReset();
+  followUp.mockReset();
+  cancel.mockReset();
   list.mockResolvedValue({ items: [VERSION] });
   preview.mockResolvedValue(PREVIEW);
   notices.mockResolvedValue({ items: [] });
@@ -469,5 +482,188 @@ describe("CaseDisclosures", () => {
     expect(screen.getByRole("button", { name: "Record notice" })).toBeDisabled();
     expect(screen.getByLabelText("Recipient reference")).toBeDisabled();
     expect(record).not.toHaveBeenCalled();
+  });
+
+  // A notice sent in the past, so a receipt dated in the test is never later than now.
+  const NOTICE_OLD: ExternalNotice = { ...NOTICE_SENT, sent_at: "2020-01-01T09:00:00Z" };
+
+  function noticeRow(recipient: string): HTMLElement {
+    return screen.getByText(recipient, { selector: "td" }).closest("tr") as HTMLElement;
+  }
+
+  it.each<[NoticeState, string[]]>([
+    ["sent", ["Record receipt", "Mark follow-up", "Cancel notice"]],
+    ["receipt_unknown", ["Record receipt", "Mark follow-up", "Cancel notice"]],
+    ["follow_up_required", ["Complete follow-up", "Cancel notice"]],
+    ["follow_up_done", ["Mark follow-up", "Cancel notice"]],
+    ["receipt_received", []],
+    ["cancelled", []],
+  ])("offers in state %s only the actions the server allows", async (state, expected) => {
+    notices.mockResolvedValue({ items: [{ ...NOTICE_OLD, state }] });
+    render(<CaseDisclosures caseId={CASE_ID} closed={false} canApprove canRecordNotices />);
+
+    await screen.findByText("cert-07", { selector: "td" });
+    const buttons = within(noticeRow("cert-07")).queryAllByRole("button");
+    expect(buttons.map((button) => button.textContent)).toEqual(expected);
+  });
+
+  it("offers no notice action to a caller without disclosures:approve or disclosures:prepare, or on a closed case", async () => {
+    notices.mockResolvedValue({ items: [NOTICE_OLD] });
+    const { unmount } = render(
+      <CaseDisclosures caseId={CASE_ID} closed={false} canApprove={false} canRecordNotices={false} />,
+    );
+
+    await screen.findByText("cert-07", { selector: "td" });
+    expect(screen.queryByRole("columnheader", { name: "Actions" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Record receipt" })).not.toBeInTheDocument();
+    unmount();
+
+    render(<CaseDisclosures caseId={CASE_ID} closed canApprove canRecordNotices />);
+    await screen.findByText("cert-07", { selector: "td" });
+    expect(screen.queryByRole("button", { name: "Cancel notice" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Mark follow-up" })).not.toBeInTheDocument();
+  });
+
+  it("records a receipt that came in, with its time in UTC, and refreshes the list", async () => {
+    const user = userEvent.setup();
+    notices.mockResolvedValue({ items: [NOTICE_OLD] });
+    receipt.mockResolvedValue({ ...NOTICE_OLD, state: "receipt_received" });
+    render(<CaseDisclosures caseId={CASE_ID} closed={false} canApprove canRecordNotices />);
+
+    await user.click(await screen.findByRole("button", { name: "Record receipt" }));
+    const form = screen.getByRole("form", { name: "Record receipt" });
+    fireEvent.change(within(form).getByLabelText("Receipt came in on"), { target: { value: "2020-01-02" } });
+    fireEvent.change(within(form).getByLabelText("Time the receipt came in"), { target: { value: "10:30" } });
+    await user.click(within(form).getByRole("button", { name: "Save receipt" }));
+
+    await waitFor(() => expect(receipt).toHaveBeenCalledTimes(1));
+    const [caseArg, versionArg, noticeArg, body] = receipt.mock.calls[0];
+    expect([caseArg, versionArg, noticeArg]).toEqual([CASE_ID, VERSION_ID, NOTICE_OLD.id]);
+    expect(body).toMatchObject({ outcome: "received", reason_code: null, reason: null });
+    expect(new Date(String(body.received_at)).toISOString()).toBe("2020-01-02T10:30:00.000Z");
+    expect(toast.success).toHaveBeenCalledWith("Receipt recorded. The notice is now marked as received.");
+    await waitFor(() => expect(notices).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("form", { name: "Record receipt" })).not.toBeInTheDocument();
+  });
+
+  it("refuses a receipt dated in the future before any request is sent", async () => {
+    const user = userEvent.setup();
+    notices.mockResolvedValue({ items: [NOTICE_OLD] });
+    render(<CaseDisclosures caseId={CASE_ID} closed={false} canApprove canRecordNotices />);
+
+    await user.click(await screen.findByRole("button", { name: "Record receipt" }));
+    const form = screen.getByRole("form", { name: "Record receipt" });
+    fireEvent.change(within(form).getByLabelText("Receipt came in on"), { target: { value: "2999-01-01" } });
+    await user.click(within(form).getByRole("button", { name: "Save receipt" }));
+
+    expect(await within(form).findByText("The time cannot be in the future. Enter the time the receipt came in.")).toBeInTheDocument();
+    expect(receipt).not.toHaveBeenCalled();
+  });
+
+  it("records an unknown receipt only with a reason code, and sends the code with its note", async () => {
+    const user = userEvent.setup();
+    notices.mockResolvedValue({ items: [NOTICE_OLD] });
+    receipt.mockResolvedValue({ ...NOTICE_OLD, state: "receipt_unknown", state_reason_code: "no_answer" });
+    render(<CaseDisclosures caseId={CASE_ID} closed={false} canApprove canRecordNotices />);
+
+    await user.click(await screen.findByRole("button", { name: "Record receipt" }));
+    const form = screen.getByRole("form", { name: "Record receipt" });
+    await user.click(within(form).getByLabelText("Receipt"));
+    await user.click(await screen.findByRole("option", { name: "No receipt known" }));
+    await user.click(within(form).getByRole("button", { name: "Save receipt" }));
+
+    expect(await within(form).findByText("Choose the reason why no receipt is known.")).toBeInTheDocument();
+    expect(receipt).not.toHaveBeenCalled();
+
+    await user.click(within(form).getByLabelText("Why no receipt is known"));
+    await user.click(await screen.findByRole("option", { name: "The recipient did not answer" }));
+    await user.type(within(form).getByLabelText("Note (optional)"), "Phone call not answered");
+    await user.click(within(form).getByRole("button", { name: "Save receipt" }));
+
+    await waitFor(() => expect(receipt).toHaveBeenCalledTimes(1));
+    expect(receipt.mock.calls[0][2]).toBe(NOTICE_OLD.id);
+    expect(receipt.mock.calls[0][3]).toEqual({
+      outcome: "unknown",
+      received_at: null,
+      reason_code: "no_answer",
+      reason: "Phone call not answered",
+    });
+    expect(toast.success).toHaveBeenCalledWith("No receipt is known for this notice. It stays unknown.");
+  });
+
+  it("marks a follow-up as required with its reason, and refuses an empty reason before any request", async () => {
+    const user = userEvent.setup();
+    notices.mockResolvedValue({ items: [NOTICE_OLD] });
+    followUp.mockResolvedValue({ ...NOTICE_OLD, state: "follow_up_required" });
+    render(<CaseDisclosures caseId={CASE_ID} closed={false} canApprove canRecordNotices />);
+
+    await user.click(await screen.findByRole("button", { name: "Mark follow-up" }));
+    const form = screen.getByRole("form", { name: "Mark follow-up" });
+    await user.click(within(form).getByRole("button", { name: "Save follow-up" }));
+    expect(await within(form).findByText("Enter the text. It is kept with the notice.")).toBeInTheDocument();
+    expect(followUp).not.toHaveBeenCalled();
+
+    await user.type(within(form).getByLabelText("Reason for the follow-up"), "Call the CERT on Monday");
+    await user.click(within(form).getByRole("button", { name: "Save follow-up" }));
+
+    await waitFor(() => expect(followUp).toHaveBeenCalledTimes(1));
+    expect(followUp.mock.calls[0].slice(0, 3)).toEqual([CASE_ID, VERSION_ID, NOTICE_OLD.id]);
+    expect(followUp.mock.calls[0][3]).toEqual({ action: "require", reason: "Call the CERT on Monday" });
+    expect(toast.success).toHaveBeenCalledWith("Follow-up marked as required.");
+  });
+
+  it("completes a required follow-up with what was done", async () => {
+    const user = userEvent.setup();
+    notices.mockResolvedValue({ items: [{ ...NOTICE_OLD, state: "follow_up_required" }] });
+    followUp.mockResolvedValue({ ...NOTICE_OLD, state: "follow_up_done" });
+    render(<CaseDisclosures caseId={CASE_ID} closed={false} canApprove canRecordNotices />);
+
+    await user.click(await screen.findByRole("button", { name: "Complete follow-up" }));
+    const form = screen.getByRole("form", { name: "Complete follow-up" });
+    await user.type(within(form).getByLabelText("What was done"), "Reached by phone");
+    await user.click(within(form).getByRole("button", { name: "Mark follow-up done" }));
+
+    await waitFor(() => expect(followUp).toHaveBeenCalledTimes(1));
+    expect(followUp.mock.calls[0][3]).toEqual({ action: "complete", reason: "Reached by phone" });
+    expect(toast.success).toHaveBeenCalledWith("Follow-up marked as done.");
+  });
+
+  it("cancels a notice with its reason, then refreshes the list", async () => {
+    const user = userEvent.setup();
+    notices.mockResolvedValue({ items: [NOTICE_OLD] });
+    cancel.mockResolvedValue({ ...NOTICE_OLD, state: "cancelled" });
+    render(<CaseDisclosures caseId={CASE_ID} closed={false} canApprove canRecordNotices />);
+
+    await user.click(await screen.findByRole("button", { name: "Cancel notice" }));
+    const form = screen.getByRole("form", { name: "Cancel notice" });
+    await user.type(within(form).getByLabelText("Reason for cancelling"), "Sent to the wrong address");
+    await user.click(within(form).getByRole("button", { name: "Confirm cancellation" }));
+
+    await waitFor(() => expect(cancel).toHaveBeenCalledTimes(1));
+    expect(cancel.mock.calls[0].slice(0, 3)).toEqual([CASE_ID, VERSION_ID, NOTICE_OLD.id]);
+    expect(cancel.mock.calls[0][3]).toEqual({ reason: "Sent to the wrong address" });
+    expect(toast.success).toHaveBeenCalledWith("Notice cancelled. It stays in the record with its reason.");
+    await waitFor(() => expect(notices).toHaveBeenCalledTimes(2));
+  });
+
+  it("shows the server refusal for a notice action, keeps the form open and does not refresh the list", async () => {
+    const user = userEvent.setup();
+    notices.mockResolvedValue({ items: [NOTICE_OLD] });
+    cancel.mockRejectedValue(new ApiError(409, "state_conflict"));
+    render(<CaseDisclosures caseId={CASE_ID} closed={false} canApprove canRecordNotices />);
+
+    await user.click(await screen.findByRole("button", { name: "Cancel notice" }));
+    const form = screen.getByRole("form", { name: "Cancel notice" });
+    await user.type(within(form).getByLabelText("Reason for cancelling"), "Sent twice");
+    await user.click(within(form).getByRole("button", { name: "Confirm cancellation" }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "The notice is no longer in a state that allows this change. Reload it and check its state.",
+      ),
+    );
+    expect(screen.getByRole("form", { name: "Cancel notice" })).toBeInTheDocument();
+    expect(within(form).getByLabelText("Reason for cancelling")).toHaveValue("Sent twice");
+    expect(notices).toHaveBeenCalledTimes(1);
   });
 });
