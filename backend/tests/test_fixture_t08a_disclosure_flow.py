@@ -106,9 +106,5 @@ def test_an_approved_package_is_noticed_and_a_change_revokes_the_approval_and_re
     assert own.status_code == 201, own.text
     open_attempt(dworld, second["id"])
     assert disclosure.check_release(second["id"]).outcome is ReleaseOutcome.RELEASABLE
-    assert (
-        record(
-            dworld, "approver", second["id"], payload(recipient_ref="cert-08")
-        ).status_code
-        == 201
-    )
+    # The approved recipient reference is cert-07, so the notice names it (cert-08 is refused for this version).
+    assert record(dworld, "approver", second["id"], payload()).status_code == 201

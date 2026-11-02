@@ -271,7 +271,12 @@ def test_an_invalid_version_request_is_refused(changes):
 
 
 def test_an_approval_needs_a_sha256_digest_and_no_extra_fields():
-    ok = {"recipient": "Member CERT", "purpose": "Rapid alert", "digest": DIGEST_B}
+    ok = {
+        "recipient": "Member CERT",
+        "purpose": "Rapid alert",
+        "digest": DIGEST_B,
+        "recipient_ref": "cert-07",
+    }
     assert disclosure_api.ApprovalRequest.model_validate(ok).digest == DIGEST_B
     with pytest.raises(ValidationError):
         disclosure_api.ApprovalRequest.model_validate({**ok, "digest": "not-a-digest"})
@@ -281,6 +286,21 @@ def test_an_approval_needs_a_sha256_digest_and_no_extra_fields():
         )
     with pytest.raises(ValidationError):
         disclosure_api.ApprovalRequest.model_validate({**ok, "extra": True})
+
+
+def test_an_approval_needs_a_recipient_reference_that_is_an_identifier():
+    ok = {"recipient": "Member CERT", "purpose": "Rapid alert", "digest": DIGEST_B}
+    with pytest.raises(ValidationError):
+        disclosure_api.ApprovalRequest.model_validate(ok)
+    for reference in ("Member CERT", "cert 07", "-cert", "x" * 65, ""):
+        with pytest.raises(ValidationError):
+            disclosure_api.ApprovalRequest.model_validate(
+                {**ok, "recipient_ref": reference}
+            )
+    accepted = disclosure_api.ApprovalRequest.model_validate(
+        {**ok, "recipient_ref": "org.cert-07"}
+    )
+    assert accepted.recipient_ref == "org.cert-07"
 
 
 def test_the_routes_are_mounted_under_the_case_and_follow_the_api_draft():

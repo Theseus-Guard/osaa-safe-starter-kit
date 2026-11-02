@@ -1411,6 +1411,8 @@ export interface DisclosureEvidence {
 export interface DisclosureApproval {
   id: string;
   recipient: string;
+  // The identifier of the approved recipient kept outside SAFE. Null for an approval made before it was recorded.
+  recipient_ref: string | null;
   purpose: string;
   digest: string;
   preparer_id: string;
@@ -1468,6 +1470,7 @@ export interface DisclosureApprovalBody {
   recipient: string;
   purpose: string;
   digest: string;
+  recipient_ref: string;
 }
 
 export function listDisclosures(caseId: string): Promise<DisclosureList> {
@@ -1569,11 +1572,13 @@ export function recordNotice(caseId: string, versionId: string, body: ExternalNo
 export type NoticeUnknownReason = "provider_accepted_no_receipt" | "timeout" | "no_answer";
 
 // A receipt: outcome received needs received_at and no reason_code; outcome unknown needs reason_code and no received_at.
+// An unknown receipt also needs follow_up_reason: the follow-up is recorded with it, in the same change.
 export interface ExternalNoticeReceiptBody {
   outcome: "received" | "unknown";
   received_at: string | null;
   reason_code: NoticeUnknownReason | null;
   reason: string | null;
+  follow_up_reason: string | null;
 }
 
 export interface ExternalNoticeFollowUpBody {

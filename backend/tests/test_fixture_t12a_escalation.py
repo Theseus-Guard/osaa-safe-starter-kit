@@ -191,25 +191,21 @@ def test_the_escalated_notice_is_followed_through_by_the_same_independent_person
         payload(manual_fallback=True, fallback_reason="Approver unavailable"),
     ).json()
 
+    # The unknown answer comes with its follow-up in the same change, so the notice is open for the follow-up at once.
     unknown = receipt(
         dw,
         version["id"],
         notice["id"],
-        {"outcome": "unknown", "reason_code": "provider_accepted_no_receipt"},
+        {
+            "outcome": "unknown",
+            "reason_code": "provider_accepted_no_receipt",
+            "follow_up_reason": REASON,
+        },
         who="independent",
     )
     assert unknown.status_code == 200, unknown.text
-    assert unknown.json()["state"] == "receipt_unknown"
+    assert unknown.json()["state"] == "follow_up_required"
 
-    required = notice_action(
-        dw,
-        "independent",
-        version["id"],
-        notice["id"],
-        "follow-up",
-        {"action": "require", "reason": REASON},
-    )
-    assert required.status_code == 200, required.text
     done = notice_action(
         dw,
         "independent",

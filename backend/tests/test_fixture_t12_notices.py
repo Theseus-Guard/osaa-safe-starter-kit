@@ -21,11 +21,12 @@ from datetime import UTC, datetime, timedelta
 import psycopg
 import pytest
 
-from safe_kit import audit
+from safe_kit import audit, external_notices
 from safe_kit.db import connect
 from test_evidence import db_user, request_as
 from test_evidence_lifecycle import provider, requires_database  # provider: fixture
 from test_fixture_p6_disclosure import (  # dworld: fixture
+    APPROVED_RECIPIENT_REF,
     approve,
     body,
     case_url,
@@ -44,11 +45,20 @@ def sent_now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def approved_version(dw, label: str = "AMBER") -> tuple[dict, str]:
-    """A version of the package that is approved for its own recipient, purpose and digest, and its derivative ID."""
+def approved_version(
+    dw, label: str = "AMBER", recipient_ref: str = APPROVED_RECIPIENT_REF
+) -> tuple[dict, str]:
+    """A version of the package that is approved for its own recipient, purpose and digest, and its derivative ID.
+    The approver confirms recipient_ref, and only a notice that names it is accepted."""
     view, derived = first_version(dw, label)
     response = approve(
-        dw, "approver", view["id"], view["recipient"], view["purpose"], view["digest"]
+        dw,
+        "approver",
+        view["id"],
+        view["recipient"],
+        view["purpose"],
+        view["digest"],
+        recipient_ref=recipient_ref,
     )
     assert response.status_code == 201, response.text
     return response.json(), derived
@@ -59,7 +69,11 @@ def notices_url(dw, version_id: str, suffix: str = "") -> str:
 
 
 def payload(**changes) -> dict:
-    values = {"channel": "email", "recipient_ref": "cert-07", "sent_at": sent_now()}
+    values = {
+        "channel": "email",
+        "recipient_ref": APPROVED_RECIPIENT_REF,
+        "sent_at": sent_now(),
+    }
     values.update(changes)
     return values
 
@@ -114,8 +128,11 @@ def read_list(dw, who: str, version_id: str):
 
 
 def recorded_notice(dw, label: str = "AMBER", **changes) -> tuple[dict, dict]:
-    """An approved version with one notice recorded against it: (version view, notice view)."""
-    version, _ = approved_version(dw, label)
+    """An approved version with one notice recorded against it: (version view, notice view). The approval names the
+    notice's recipient reference, so the notice is accepted."""
+    version, _ = approved_version(
+        dw, label, recipient_ref=changes.get("recipient_ref", APPROVED_RECIPIENT_REF)
+    )
     response = record(dw, "approver", version["id"], payload(**changes))
     assert response.status_code == 201, response.text
     return version, response.json()
@@ -202,7 +219,7 @@ def test_a_notice_is_refused_for_a_superseded_version_and_the_new_one_needs_its_
 
 @requires_database
 def test_a_notice_records_the_channel_time_recipient_reference_and_recorder(dworld):
-    version, _ = approved_version(dworld)
+    version, _ = approved_version(dworld, recipient_ref="org.cert-07")
     sent_at = sent_now()
     response = record(
         dworld,
@@ -312,7 +329,7 @@ def test_a_receipt_moves_the_notice_to_received_and_the_history_keeps_both_state
         dworld,
         version["id"],
         notice["id"],
-        {"outcome": "unknown", "reason_code": "timeout"},
+        {"outcome": "unknown", "reason_code": "timeout", "follow_up_reason": REASON},
     )
     assert again.status_code == 409
     assert again.json()["detail"] == {
@@ -346,14 +363,6 @@ def test_a_receipt_cannot_be_earlier_than_the_send(dworld):
 @requires_database
 def test_a_follow_up_is_required_and_then_done_and_each_step_needs_a_reason(dworld):
     version, notice = recorded_notice(dworld)
-    unknown = receipt(
-        dworld,
-        version["id"],
-        notice["id"],
-        {"outcome": "unknown", "reason_code": "no_answer"},
-    )
-    assert unknown.status_code == 200, unknown.text
-
     no_reason = notice_action(
         dworld,
         "approver",
@@ -387,7 +396,6 @@ def test_a_follow_up_is_required_and_then_done_and_each_step_needs_a_reason(dwor
     assert done.json()["state"] == "follow_up_done"
     assert revision_states(notice["id"]) == [
         "sent",
-        "receipt_unknown",
         "follow_up_required",
         "follow_up_done",
     ]
@@ -454,7 +462,11 @@ def test_a_cancel_needs_a_reason_and_is_refused_after_a_receipt_or_a_second_canc
             dworld,
             version["id"],
             notice["id"],
-            {"outcome": "unknown", "reason_code": "timeout"},
+            {
+                "outcome": "unknown",
+                "reason_code": "timeout",
+                "follow_up_reason": REASON,
+            },
         ).status_code
         == 409
     )
@@ -464,22 +476,34 @@ def test_a_cancel_needs_a_reason_and_is_refused_after_a_receipt_or_a_second_canc
 
 
 @requires_database
-def test_provider_acceptance_without_a_receipt_stays_unknown(dworld):
+def test_provider_acceptance_without_a_receipt_is_unknown_and_never_received(dworld):
     version, notice = recorded_notice(dworld, channel="webhook", recipient_ref="hook-3")
     response = receipt(
         dworld,
         version["id"],
         notice["id"],
-        {"outcome": "unknown", "reason_code": "provider_accepted_no_receipt"},
+        {
+            "outcome": "unknown",
+            "reason_code": "provider_accepted_no_receipt",
+            "follow_up_reason": REASON,
+        },
     )
     assert response.status_code == 200, response.text
+    # The unknown answer is kept in the history; the current state is the follow-up it came with.
     body_out = response.json()
-    assert body_out["state"] == "receipt_unknown"
-    assert body_out["state_reason_code"] == "provider_accepted_no_receipt"
+    assert body_out["state"] == "follow_up_required"
     assert body_out["received_at"] is None
+    history = read_one(dworld, "approver", version["id"], notice["id"]).json()[
+        "history"
+    ]
+    assert [(entry["state"], entry["state_reason_code"]) for entry in history] == [
+        ("sent", None),
+        ("receipt_unknown", "provider_accepted_no_receipt"),
+        ("follow_up_required", None),
+    ]
 
     listed = read_list(dworld, "approver", version["id"]).json()["items"]
-    assert [item["state"] for item in listed] == ["receipt_unknown"]
+    assert [item["state"] for item in listed] == ["follow_up_required"]
     assert "receipt_received" not in revision_states(notice["id"])
 
 
@@ -493,11 +517,22 @@ def test_a_timeout_or_no_answer_is_unknown_and_a_receipt_needs_its_time(
         dworld,
         version["id"],
         notice["id"],
-        {"outcome": "unknown", "reason_code": reason_code},
+        {
+            "outcome": "unknown",
+            "reason_code": reason_code,
+            "follow_up_reason": REASON,
+        },
     )
     assert unknown.status_code == 200, unknown.text
-    assert unknown.json()["state"] == "receipt_unknown"
-    assert unknown.json()["state_reason_code"] == reason_code
+    assert unknown.json()["state"] == "follow_up_required"
+    history = read_one(dworld, "approver", version["id"], notice["id"]).json()[
+        "history"
+    ]
+    assert [(entry["state"], entry["state_reason_code"]) for entry in history] == [
+        ("sent", None),
+        ("receipt_unknown", reason_code),
+        ("follow_up_required", None),
+    ]
 
     # A received receipt without its time, and an unknown one without its reason, are refused by the request itself.
     assert (
@@ -519,7 +554,11 @@ def test_a_timeout_or_no_answer_is_unknown_and_a_receipt_needs_its_time(
         ).status_code
         == 400
     )
-    assert revision_states(notice["id"]) == ["sent", "receipt_unknown"]
+    assert revision_states(notice["id"]) == [
+        "sent",
+        "receipt_unknown",
+        "follow_up_required",
+    ]
 
 
 @requires_database
@@ -551,14 +590,16 @@ def test_a_repeat_notice_needs_a_reason_and_is_a_new_record_and_nothing_is_resen
     assert repeat.json()["id"] != first["id"]
     assert repeat.json()["repeat_reason"] is not None
 
+    # Another recipient is refused for this version (see test_a_notice_to_another_recipient_...), so nothing is added.
     other_recipient = record(
         dworld, "approver", version["id"], payload(recipient_ref="cert-08")
     )
-    assert other_recipient.status_code == 201
+    assert other_recipient.status_code == 422
+    assert other_recipient.json()["detail"] == {"status": "recipient_mismatch"}
 
     # Reading never sends or changes anything: the states stay as they were recorded.
     listed = read_list(dworld, "approver", version["id"]).json()["items"]
-    assert len(listed) == 3
+    assert len(listed) == 2
     assert all(item["state"] == "sent" for item in listed)
     assert revision_states(first["id"]) == ["sent"]
 
@@ -577,11 +618,15 @@ def test_a_timeout_on_a_repeat_is_a_new_unknown_record_not_a_second_delivery(dwo
         dworld,
         version["id"],
         repeat.json()["id"],
-        {"outcome": "unknown", "reason_code": "timeout"},
+        {"outcome": "unknown", "reason_code": "timeout", "follow_up_reason": REASON},
     )
     assert unknown.status_code == 200
     assert revision_states(first["id"]) == ["sent"]
-    assert revision_states(repeat.json()["id"]) == ["sent", "receipt_unknown"]
+    assert revision_states(repeat.json()["id"]) == [
+        "sent",
+        "receipt_unknown",
+        "follow_up_required",
+    ]
 
 
 @requires_database
@@ -825,7 +870,7 @@ def test_a_closed_case_refuses_new_notices_and_changes(dworld):
         dworld,
         version["id"],
         notice["id"],
-        {"outcome": "unknown", "reason_code": "timeout"},
+        {"outcome": "unknown", "reason_code": "timeout", "follow_up_reason": REASON},
     )
     assert response.status_code == 409
     assert response.json()["detail"] == {"status": "case_closed"}
@@ -841,7 +886,7 @@ def test_a_repeated_record_with_the_same_key_returns_the_first_answer_and_writes
 ):
     version, _ = approved_version(dworld)
     key = uuid.uuid4().hex
-    values = payload(recipient_ref="cert-20")
+    values = payload()
     first = record(dworld, "approver", version["id"], values, key=key)
     again = record(dworld, "approver", version["id"], values, key=key)
     assert first.status_code == again.status_code == 201
@@ -853,9 +898,9 @@ def test_a_repeated_record_with_the_same_key_returns_the_first_answer_and_writes
 def test_a_key_used_for_another_body_is_refused_without_writing(dworld):
     version, _ = approved_version(dworld)
     key = uuid.uuid4().hex
-    record(dworld, "approver", version["id"], payload(recipient_ref="cert-21"), key=key)
+    record(dworld, "approver", version["id"], payload(), key=key)
     other = record(
-        dworld, "approver", version["id"], payload(recipient_ref="cert-22"), key=key
+        dworld, "approver", version["id"], payload(channel="postal"), key=key
     )
     assert other.status_code == 409
     assert other.json()["detail"] == {"status": "idempotency_key_reused"}
@@ -894,6 +939,180 @@ def test_a_write_without_a_key_or_with_a_malformed_key_is_refused(dworld):
     )
     assert bad_key.status_code == 400
     assert row_count(version["id"]) == 0
+
+
+# --- recipient binding and the unknown receipt's follow-up (F2 gap C) -------------------------------------------------
+
+
+def release_outcomes(version_id: str) -> list[tuple[str, str | None]]:
+    """The outcome rows of the release attempts of one version: (state, reason_code), oldest first."""
+    with connect() as conn:
+        return conn.execute(
+            "SELECT state, reason_code FROM release_attempts "
+            "WHERE version_id = %s AND NOT is_deleted AND state <> 'attempted' ORDER BY recorded_at, id",
+            (version_id,),
+        ).fetchall()
+
+
+@requires_database
+def test_a_notice_to_another_recipient_for_the_same_version_is_refused_and_nothing_is_stored(
+    dworld,
+):
+    version, _ = approved_version(dworld, recipient_ref="cert-07")
+    other = record(dworld, "approver", version["id"], payload(recipient_ref="cert-08"))
+    assert other.status_code == 422
+    assert other.json()["detail"] == {"status": "recipient_mismatch"}
+    assert row_count(version["id"]) == 0
+    # The refusal is kept as a refused release attempt, which never counts as a release.
+    assert release_outcomes(version["id"]) == [("refused", "recipient_mismatch")]
+    # The approved recipient still gets its notice, and that release is counted.
+    assert record(dworld, "approver", version["id"], payload()).status_code == 201
+    assert release_outcomes(version["id"]) == [
+        ("refused", "recipient_mismatch"),
+        ("done", None),
+    ]
+
+
+@requires_database
+def test_a_version_approved_before_the_recipient_reference_takes_no_notice(dworld):
+    # An approval made before migration 0049 has no recipient_ref, and the application cannot write such a row any
+    # more. The test writes it the way the earlier code did, and the NOT VALID check is restored in the same step.
+    view, _ = first_version(dworld)
+    with connect() as conn:
+        conn.execute(
+            "ALTER TABLE disclosure_approvals DROP CONSTRAINT disclosure_approvals_recipient_ref_set"
+        )
+        conn.execute(
+            """
+            INSERT INTO disclosure_approvals (version_id, package_id, case_id, recipient, purpose, digest,
+                preparer_id, approved_by, separation_rule)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'preparer_differs_from_approver')
+            """,
+            (
+                view["id"],
+                view["package_id"],
+                view["case_id"],
+                view["recipient"],
+                view["purpose"],
+                view["digest"],
+                view["created_by"],
+                dworld["people"]["approver"],
+            ),
+        )
+        conn.execute(
+            """
+            ALTER TABLE disclosure_approvals ADD CONSTRAINT disclosure_approvals_recipient_ref_set
+            CHECK (recipient_ref IS NOT NULL AND recipient_ref ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$') NOT VALID
+            """
+        )
+    response = record(dworld, "approver", view["id"], payload())
+    assert response.status_code == 422
+    assert response.json()["detail"] == {"status": "recipient_mismatch"}
+    assert row_count(view["id"]) == 0
+
+
+@requires_database
+def test_an_unknown_receipt_without_its_follow_up_is_refused_and_nothing_is_recorded(
+    dworld,
+):
+    version, notice = recorded_notice(dworld)
+    response = receipt(
+        dworld,
+        version["id"],
+        notice["id"],
+        {"outcome": "unknown", "reason_code": "timeout"},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == {"status": "unknown_needs_follow_up"}
+    assert revision_states(notice["id"]) == ["sent"]
+
+
+@requires_database
+def test_an_unknown_receipt_takes_its_follow_up_in_the_same_transaction_or_not_at_all(
+    dworld, monkeypatch
+):
+    version, notice = recorded_notice(dworld)
+    real_insert = external_notices._insert_revision
+    written: list[str] = []
+
+    def fail_the_follow_up(conn, current, revision, change, scope):
+        written.append(change.state)
+        if change.state == "follow_up_required":
+            raise RuntimeError("the follow-up could not be written")
+        return real_insert(conn, current, revision, change, scope)
+
+    values = {
+        "outcome": "unknown",
+        "reason_code": "no_answer",
+        "follow_up_reason": REASON,
+    }
+    monkeypatch.setattr(external_notices, "_insert_revision", fail_the_follow_up)
+    with pytest.raises(RuntimeError, match="could not be written"):
+        receipt(dworld, version["id"], notice["id"], values)
+    assert written == ["receipt_unknown", "follow_up_required"]
+    # The unknown revision was written in the same transaction, so it is rolled back with the failed follow-up.
+    assert revision_states(notice["id"]) == ["sent"]
+
+    monkeypatch.setattr(external_notices, "_insert_revision", real_insert)
+    done = receipt(dworld, version["id"], notice["id"], values)
+    assert done.status_code == 200, done.text
+    assert revision_states(notice["id"]) == [
+        "sent",
+        "receipt_unknown",
+        "follow_up_required",
+    ]
+
+
+@requires_database
+def test_an_unknown_notice_from_before_the_rule_stays_open_and_blocks_the_case_close(
+    dworld,
+):
+    version, notice = recorded_notice(dworld)
+    # The row an earlier version of the code wrote: unknown, with no follow-up after it.
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO external_notices (
+                notice_id, revision, case_id, package_id, version_id, version, channel, channel_other, recipient_ref,
+                sent_at, recorded_at, recorded_by, manual_fallback, fallback_reason, repeat_reason,
+                state, state_reason_code, state_reason, received_at, changed_by, changed_at
+            )
+            SELECT notice_id, 2, case_id, package_id, version_id, version, channel, channel_other, recipient_ref,
+                   sent_at, recorded_at, recorded_by, manual_fallback, fallback_reason, repeat_reason,
+                   'receipt_unknown', 'timeout', NULL, NULL, changed_by, now()
+            FROM external_notices
+            WHERE notice_id = %s AND revision = 1
+            """,
+            (notice["id"],),
+        )
+
+    def close_case():
+        return request_as(
+            dworld["people"]["triager"],
+            "post",
+            f"/api/v1/cases/{dworld['case_id']}/close",
+            json={"reason": REASON},
+            headers={"Idempotency-Key": uuid.uuid4().hex},
+        )
+
+    blocked = close_case()
+    assert blocked.status_code == 409
+    assert (
+        "external notice(s) have no receipt and no follow-up recorded"
+        in blocked.json()["detail"]
+    )
+    # A follow-up on the old notice is recorded like any other, and it no longer blocks the close.
+    required = notice_action(
+        dworld,
+        "approver",
+        version["id"],
+        notice["id"],
+        "follow-up",
+        {"action": "require", "reason": REASON},
+    )
+    assert required.status_code == 200, required.text
+    assert required.json()["state"] == "follow_up_required"
+    assert "external notice" not in str(close_case().json())
 
 
 # --- the database guards and the audit trail --------------------------------------------------------------------------
