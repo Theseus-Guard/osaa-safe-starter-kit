@@ -1,4 +1,5 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listCases } from "../../api";
 import { CasesPage } from "./CasesPage";
@@ -32,7 +33,7 @@ describe("CasesPage", () => {
     expect(screen.queryByRole("button", { name: "New case" })).not.toBeInTheDocument();
   });
 
-  it("shows a Risk column with the score of each case, or Not assessed", async () => {
+  it("shows a Risk score column with the score of each case, or Not assessed", async () => {
     const item = { reference: "SAFE-2026-000001", title: "Phishing", awareness_time: "2026-10-30T09:00:00Z", status: "open", created_at: "2026-10-31T10:00:00Z" };
     list.mockResolvedValue({
       items: [
@@ -46,9 +47,20 @@ describe("CasesPage", () => {
     render(<CasesPage permissions={["cases:read_all"]} />);
 
     const table = await screen.findByRole("table");
-    expect(within(table).getByRole("columnheader", { name: "Risk" })).toBeInTheDocument();
+    expect(within(table).getByRole("columnheader", { name: "Risk score" })).toBeInTheDocument();
     const rows = within(table).getAllByRole("row").slice(1);
     expect(within(rows[0]).getByText("3.7")).toBeInTheDocument();
     expect(within(rows[1]).getByText("Not assessed")).toBeInTheDocument();
+  });
+
+  it("sends the search to the server and says when nothing matches", async () => {
+    const user = userEvent.setup();
+    render(<CasesPage permissions={["cases:read_all"]} />);
+
+    await screen.findByText("You have not opened any cases yet.");
+    await user.type(screen.getByRole("searchbox", { name: "Search cases" }), "  SAFE-2026 ");
+
+    await waitFor(() => expect(list).toHaveBeenLastCalledWith(20, 0, "SAFE-2026"));
+    expect(await screen.findByText("No cases match this search.")).toBeInTheDocument();
   });
 });

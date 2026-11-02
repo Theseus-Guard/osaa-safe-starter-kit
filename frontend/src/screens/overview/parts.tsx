@@ -1,7 +1,15 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { TriangleAlert } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { SegmentedControl } from "@/components/segmented-control";
 import type { LoadState } from "./useLoad";
 
 export const NO_DATA_MESSAGE = "No data in this period.";
@@ -19,10 +27,10 @@ export function StatCard({ label, value, hint, warning = false }: StatCardProps)
     <Card>
       <CardHeader>
         <CardDescription>{label}</CardDescription>
-        <CardTitle className={`text-2xl ${warning ? "text-destructive" : ""}`}>{value}</CardTitle>
+        <CardTitle className={`text-2xl tabular-nums ${warning ? "text-destructive" : ""}`}>{value}</CardTitle>
       </CardHeader>
       <CardContent>
-        <p className="flex items-center gap-1 text-sm text-muted-foreground">
+        <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
           {warning && <TriangleAlert aria-hidden="true" className="size-4 shrink-0" />}
           <span>{hint}</span>
         </p>
@@ -38,6 +46,39 @@ export function pendingValue<T>(state: LoadState<T>): string | null {
   return null;
 }
 
+// How many rows a table view shows before "Show all" is pressed.
+export const TABLE_PREVIEW_ROWS = 8;
+
+// Most x-axis labels a date chart shows. Ticks are skipped beyond this, so labels never stack or overlap.
+const MAX_AXIS_LABELS = 6;
+
+// The Recharts interval for a series of this length: show every (interval + 1)th point.
+export function axisInterval(pointCount: number): number {
+  return Math.max(0, Math.ceil(pointCount / MAX_AXIS_LABELS) - 1);
+}
+
+const CHART_DATE = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+
+// Axis and tooltip label for a YYYY-MM-DD date, for example "15 Oct". Parsed as UTC so the day never shifts.
+export function formatChartDate(date: string): string {
+  return CHART_DATE.format(new Date(`${date}T00:00:00Z`));
+}
+
+// Seconds as a short label: "4 s", "3 min", "2 h", "5 d".
+export function formatAge(seconds: number): string {
+  if (seconds < 60) return `${seconds} s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} h`;
+  return `${Math.floor(seconds / 86400)} d`;
+}
+
+type ChartView = "chart" | "table";
+
+const VIEW_OPTIONS: { value: ChartView; label: string }[] = [
+  { value: "chart", label: "Chart" },
+  { value: "table", label: "Table" },
+];
+
 interface ChartPanelProps<T> {
   title: string;
   description: string;
@@ -46,17 +87,27 @@ interface ChartPanelProps<T> {
   chart: (data: T) => ReactNode;
   table: (data: T) => ReactNode;
   footer?: (data: T) => ReactNode;
+  // Spans both columns on wide screens. Used when the card would otherwise stand alone in its row.
+  wide?: boolean;
 }
 
-// One chart with its table view next to it. Loading, error and empty states are rendered here, once.
-export function ChartPanel<T>({ title, description, state, isEmpty, chart, table, footer }: ChartPanelProps<T>) {
+// One card per chart. The Chart / Table toggle shows one view at a time. Loading, error and empty states are rendered here.
+export function ChartPanel<T>({ title, description, state, isEmpty, chart, table, footer, wide = false }: ChartPanelProps<T>) {
+  const [view, setView] = useState<ChartView>("chart");
+  const hasData = state.status === "ready" && !isEmpty(state.data);
+
   return (
-    <Card>
+    <Card className={wide ? "xl:col-span-2" : undefined}>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
         <CardDescription>{description}</CardDescription>
+        {hasData && (
+          <CardAction>
+            <SegmentedControl label={`${title} view`} options={VIEW_OPTIONS} value={view} onChange={setView} />
+          </CardAction>
+        )}
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="flex flex-col gap-4">
         {state.status === "loading" && (
           <p role="status" className="text-sm text-muted-foreground">
             Loading…
@@ -68,15 +119,10 @@ export function ChartPanel<T>({ title, description, state, isEmpty, chart, table
           </Alert>
         )}
         {state.status === "ready" &&
-          (isEmpty(state.data) ? (
-            <p className="text-sm text-muted-foreground">{NO_DATA_MESSAGE}</p>
+          (hasData ? (
+            <div className="min-w-0">{view === "chart" ? chart(state.data) : table(state.data)}</div>
           ) : (
-            <div className="grid gap-6 lg:grid-cols-2">
-              <div className="min-w-0" role="group" aria-label={`${title} chart`}>
-                {chart(state.data)}
-              </div>
-              <div className="min-w-0 overflow-x-auto">{table(state.data)}</div>
-            </div>
+            <p className="text-sm text-muted-foreground">{NO_DATA_MESSAGE}</p>
           ))}
         {state.status === "ready" && footer && footer(state.data)}
       </CardContent>
@@ -84,15 +130,7 @@ export function ChartPanel<T>({ title, description, state, isEmpty, chart, table
   );
 }
 
-// Seconds as a short label: "4 s", "3 min", "2 h", "5 d".
-export function formatAge(seconds: number): string {
-  if (seconds < 60) return `${seconds} s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)} min`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)} h`;
-  return `${Math.floor(seconds / 86400)} d`;
-}
-
-// Chart axis labels: the day part of a YYYY-MM-DD date.
-export function formatDay(date: string): string {
-  return date.slice(5);
-}
+// The responsive grid of stat cards: as many columns as fit, each at least 12 rem wide.
+export const STAT_GRID_CLASS = "grid gap-4 grid-cols-[repeat(auto-fit,minmax(12rem,1fr))]";
+// The responsive grid of chart cards: two columns on wide screens, one on narrow ones.
+export const CHART_GRID_CLASS = "grid gap-4 xl:grid-cols-2";
