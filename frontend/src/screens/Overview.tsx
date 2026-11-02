@@ -11,9 +11,21 @@ import {
   OverviewSummary,
 } from "../api";
 import { overviewSections } from "../overview-sections";
-import { AuditChart, CasesOverTimeChart, DeadlinesChart, LoginsChart, OutboxChart, UsersChart } from "./overview/charts";
-import { CHART_GRID_CLASS, formatAge, pendingValue, STAT_GRID_CLASS, StatCard } from "./overview/parts";
-import { LoadState, useLoad } from "./overview/useLoad";
+import {
+  ApprovalsPanel,
+  AuditChart,
+  CasesOverTimeChart,
+  DeadlinesChart,
+  formatDays,
+  LoginsChart,
+  MyCasesChart,
+  MyContributionsChart,
+  OutboxChart,
+  UsersChart,
+  WeeklyUpdatesPanel,
+} from "./overview/charts";
+import { CHART_GRID_CLASS, formatAge, formatChartDate, pendingValue, STAT_GRID_CLASS, StatCard } from "./overview/parts";
+import { type LoadState, useLoad } from "./overview/useLoad";
 
 interface Props {
   profile: Me;
@@ -33,11 +45,20 @@ export function Overview({ profile, notice }: Props) {
   const [days, setDays] = useState<OverviewRange>(DEFAULT_OVERVIEW_RANGE);
   // One summary request per range. It returns the stat cards for the caller's sections only.
   const summary = useLoad(() => getOverviewSummary(days), [days]);
-  const hasSections = sections.ownCases || sections.operations || sections.users || sections.logins;
+  const hasSections =
+    sections.ownCases || sections.operations || sections.users || sections.logins || sections.approvals || sections.weeklyUpdates;
 
   const charts: ChartEntry[] = [];
   if (sections.operations) charts.push({ key: "cases", render: (wide) => <CasesOverTimeChart days={days} wide={wide} /> });
+  if (sections.ownCases) charts.push({ key: "my-cases", render: (wide) => <MyCasesChart days={days} wide={wide} /> });
+  if (sections.ownCases) {
+    charts.push({ key: "my-contributions", render: (wide) => <MyContributionsChart days={days} wide={wide} /> });
+  }
   if (sections.ownCases) charts.push({ key: "deadlines", render: (wide) => <DeadlinesChart wide={wide} /> });
+  if (sections.approvals) charts.push({ key: "approvals", render: (wide) => <ApprovalsPanel state={summary} wide={wide} /> });
+  if (sections.weeklyUpdates) {
+    charts.push({ key: "weekly", render: (wide) => <WeeklyUpdatesPanel state={summary} wide={wide} /> });
+  }
   if (sections.operations) charts.push({ key: "audit", render: (wide) => <AuditChart days={days} wide={wide} /> });
   if (sections.operations) charts.push({ key: "outbox", render: (wide) => <OutboxChart wide={wide} /> });
   if (sections.logins) charts.push({ key: "logins", render: (wide) => <LoginsChart days={days} wide={wide} /> });
@@ -77,6 +98,8 @@ export function Overview({ profile, notice }: Props) {
           {sections.ownCases && <OwnCaseCards state={summary} days={days} />}
           {sections.operations && <OperationsCards state={summary} days={days} />}
           {sections.users && <UserCards state={summary} />}
+          {sections.approvals && <ApprovalCards state={summary} />}
+          {sections.weeklyUpdates && <WeeklyCards state={summary} />}
         </div>
         {summary.status === "error" && (
           <Alert variant="destructive">
@@ -177,6 +200,40 @@ function OperationsCards({ state, days }: { state: LoadState<OverviewSummary>; d
         />
       )}
     </>
+  );
+}
+
+function ApprovalCards({ state }: { state: LoadState<OverviewSummary> }) {
+  const approvals = state.status === "ready" ? state.data.approvals : null;
+  const pending = pendingValue(state);
+  const oldest = approvals?.oldest_pending_age_days ?? null;
+  return (
+    <>
+      <SummaryCard
+        state={state}
+        label="Versions awaiting approval"
+        count={approvals?.pending}
+        hint={approvals && approvals.pending > 0 ? "Latest versions with no approval yet." : "Nothing is waiting."}
+      />
+      <StatCard
+        label="Oldest waiting version"
+        value={pending ?? (approvals ? formatDays(oldest) : "Unavailable")}
+        hint={pending === null && approvals ? "Age of the oldest version still waiting." : ""}
+      />
+    </>
+  );
+}
+
+function WeeklyCards({ state }: { state: LoadState<OverviewSummary> }) {
+  const weekly = state.status === "ready" ? state.data.weekly_updates : null;
+  const latest = weekly?.latest_update_date ?? null;
+  return (
+    <SummaryCard
+      state={state}
+      label="Significant risks still open"
+      count={weekly?.open_significant_risk_cases}
+      hint={weekly ? (latest ? `Latest weekly update on ${formatChartDate(latest)}.` : "No weekly update yet.") : ""}
+    />
   );
 }
 
