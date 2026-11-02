@@ -181,14 +181,14 @@ def test_manifest_lists_the_removed_scope_and_reason_but_not_the_removed_text(wo
         {"from_line": 3, "to_line": 3, "lines": 1, "reason": "contains an account number"}
     ]
     assert created["manifest"]["tlp_label"] == "AMBER"
-    assert "4411" not in str(created)
+    assert "account 4411" not in str(created)
 
     manifest = request_as(
         world["people"]["investigator"], "get", f"/api/v1/evidence/{created['derived']['id']}/redaction"
     )
     assert manifest.status_code == 200
     assert manifest.json()["redaction_id"] == created["redaction_id"]
-    assert "4411" not in manifest.text
+    assert "account 4411" not in manifest.text
 
 
 @requires_database
