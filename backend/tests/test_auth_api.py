@@ -845,6 +845,22 @@ def test_refresh_by_cookie_needs_the_csrf_header(browser):
     assert browser.get("/api/v1/auth/me").status_code == 200
 
 
+def test_start_up_refresh_restores_the_session_after_the_access_cookie_is_gone(browser):
+    # A page reload after the access cookie expired: /auth/me is refused, the refresh with the CSRF header succeeds,
+    # and /auth/me works again with the rotated cookies.
+    login(browser, "alice")
+    browser.cookies.delete("safe_access")
+    assert browser.get("/api/v1/auth/me").status_code == 401
+
+    response = browser.post("/api/v1/auth/refresh", headers=csrf_header(browser))
+    assert response.status_code == 200
+    assert browser.cookies.get("safe_access")
+
+    me = browser.get("/api/v1/auth/me")
+    assert me.status_code == 200
+    assert me.json()["username"] == "alice"
+
+
 def test_refresh_without_any_refresh_credential_is_refused(client):
     assert client.post("/api/v1/auth/refresh").status_code == 401
 

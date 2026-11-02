@@ -174,8 +174,8 @@ async function send(path: string, options: RequestOptions): Promise<Response> {
 }
 
 // The refresh token travels in its HttpOnly cookie, so the request has no body. The server sets new cookies on success.
+// Callers decide whether a refresh is wanted. After a page reload there is no session in memory yet, so this does not check one.
 async function renew(): Promise<boolean> {
-  if (!session) return false;
   const response = await send("/auth/refresh", { method: "POST" });
   if (!response.ok) return false;
   startSession();
@@ -246,6 +246,22 @@ export async function login(username: string, password: string): Promise<void> {
 
 export function me(): Promise<Me> {
   return request<Me>("/auth/me");
+}
+
+// Start-up after a page load. The page cannot read the HttpOnly cookies, so it asks the server whether a session exists.
+// A 200 from /auth/me starts the session. A 401 gets one refresh (shared with any refresh already in flight), then one
+// more /auth/me. Any other result, including a failed refresh, resolves to null, which means the login page is shown.
+// It does not end a session or notify the session listener, because no session was running.
+export async function restoreSession(): Promise<Me | null> {
+  let response = await send("/auth/me", { method: "GET" });
+  if (response.status === 401) {
+    if (!(await refreshOnce())) return null;
+    response = await send("/auth/me", { method: "GET" });
+  }
+  if (!response.ok) return null;
+  const current = (await response.json()) as Me;
+  startSession();
+  return current;
 }
 
 // The server clears the session cookies and revokes the session. The local state is cleared even when the request fails.
