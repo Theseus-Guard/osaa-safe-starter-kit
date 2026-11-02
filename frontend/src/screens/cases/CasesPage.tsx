@@ -3,7 +3,7 @@ import { Search } from "lucide-react";
 import { toast } from "sonner";
 import { CASE_STATUSES, CaseDetail, CasePage, CaseStatus, listCases } from "../../api";
 import { describeError } from "../../messages";
-import { caseAbilities } from "../../permissions";
+import { caseAbilities, canReadCases } from "../../permissions";
 import { formatRiskScore, humanize, isOverdue } from "./case-format";
 import { NewCaseDialog } from "./NewCaseDialog";
 import { Timestamp } from "@/components/timestamp";
@@ -29,6 +29,24 @@ interface Props {
 }
 
 export function CasesPage({ permissions }: Props) {
+  if (!canReadCases(permissions)) return <NoCaseAccess isAdmin={permissions.includes("users:manage")} />;
+  return <CaseList permissions={permissions} />;
+}
+
+// Shown instead of the list for accounts without a case permission, so the page does not fail with a bare 403.
+function NoCaseAccess({ isAdmin }: { isAdmin: boolean }) {
+  return (
+    <Alert>
+      <AlertDescription>
+        {isAdmin
+          ? "Case records are not shown to administrators. Use Users and Roles to manage accounts, and Overview for counts."
+          : "Your role does not include access to case records."}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+function CaseList({ permissions }: Props) {
   const canSubmit = caseAbilities(permissions).canSubmit;
   const [query, setQuery] = useState("");
   // The trimmed search that is sent to the server. Changing it starts again at the first page.

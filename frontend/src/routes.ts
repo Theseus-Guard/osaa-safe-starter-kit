@@ -77,8 +77,11 @@ export const PAGE_PERMISSION: Partial<Record<Page, string>> = {
   catalog: "catalog:read",
 };
 
+const CASE_READ_PERMISSIONS = ["cases:read_own", "cases:read_all", "cases:read_assigned"] as const;
+
 export function pageInNavigation(page: Page, isAdmin: boolean, permissions: readonly string[]): boolean {
   if (PAGE_INFO[page].adminOnly && !isAdmin) return false;
+  if (page === "cases") return CASE_READ_PERMISSIONS.some((name) => permissions.includes(name));
   const required = PAGE_PERMISSION[page];
   return required === undefined || permissions.includes(required);
 }
