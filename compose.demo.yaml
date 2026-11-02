@@ -1,8 +1,10 @@
 # Demo overlay, used only by scripts/demo.sh:
 #   docker compose -p safe-demo -f compose.yaml -f compose.demo.yaml ...
-# It gives the demo its own image names, so that building the demo never moves the dev tags, and it mounts the host
-# credential directory into the API container for the one-time seed (python -m safe_kit.demo_seed seed). The production
-# stack does not use this file.
+# The default stack runs in production mode. This overlay switches api and worker to demo mode with the synthetic
+# dataset (the startup guard in config_guard.py requires SAFE_BIND_HOST to be loopback in demo mode). It gives the demo
+# its own image names, so that building the demo never moves the dev tags, and it mounts the host credential directory
+# into the API container for the one-time seed (python -m safe_kit.demo_seed seed). migrate does not run the startup
+# guard, so it needs no demo value. The production stack does not use this file.
 
 services:
   migrate:
@@ -10,6 +12,11 @@ services:
   api:
     image: safe-demo-app:local
     environment:
+      SAFE_MODE: demo
+      SAFE_BIND_HOST: 127.0.0.1
+      SAFE_DATASET: synthetic-demo
+      # The Docker host's address on the edge network (see the gateway note in compose.yaml). Demo sign-in only.
+      SAFE_DEMO_HOST_ADDRESS: "172.28.0.1"
       SAFE_DEMO_CREDENTIAL_DIR: /run/safe-demo
     volumes:
       # The host path is set by scripts/demo.sh. The directory is owned by the operator; the script hands it to the
@@ -19,6 +26,11 @@ services:
         target: /run/safe-demo
   worker:
     image: safe-demo-app:local
+    environment:
+      # The worker opens no listening socket; the loopback value only satisfies the demo-mode rule of the startup guard.
+      SAFE_MODE: demo
+      SAFE_BIND_HOST: 127.0.0.1
+      SAFE_DATASET: synthetic-demo
   cli:
     image: safe-demo-app:local
   gateway:

@@ -13,6 +13,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
+import yaml
 
 from safe_kit import api, db
 from safe_kit.config_guard import ConfigError, load_settings
@@ -226,14 +227,49 @@ def test_compose_does_not_publish_the_api():
     assert "    ports:" not in api_block
 
 
-def test_compose_demo_api_binds_the_published_address_to_loopback():
-    compose = (Path(__file__).resolve().parents[2] / "compose.yaml").read_text(
-        encoding="utf-8"
-    )
-    api_block = compose.split("\n  api:\n", 1)[1].split("\n  worker:\n", 1)[0]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
-    assert "SAFE_BIND_HOST: 127.0.0.1" in api_block
-    assert "SAFE_MODE: demo" in api_block
+
+def _compose_environment(path: Path, service: str) -> dict[str, str]:
+    services = yaml.safe_load(path.read_text(encoding="utf-8"))["services"]
+    return {
+        name: str(value) for name, value in services[service]["environment"].items()
+    }
+
+
+@pytest.mark.parametrize("service", ["api", "worker"])
+def test_compose_defaults_api_and_worker_to_production_mode(service):
+    environment = _compose_environment(REPO_ROOT / "compose.yaml", service)
+
+    assert environment["SAFE_MODE"] == "production"
+    # Production refuses a dataset marker and needs no loopback bind host; both are demo-only settings.
+    for demo_only in ("SAFE_DATASET", "SAFE_BIND_HOST", "SAFE_DEMO_HOST_ADDRESS"):
+        assert demo_only not in environment, demo_only
+
+
+@pytest.mark.parametrize("service", ["api", "worker"])
+def test_demo_overlay_switches_api_and_worker_to_demo_mode(service):
+    environment = _compose_environment(REPO_ROOT / "compose.demo.yaml", service)
+
+    assert environment["SAFE_MODE"] == "demo"
+    assert environment["SAFE_BIND_HOST"] == "127.0.0.1"
+    assert environment["SAFE_DATASET"] == "synthetic-demo"
+
+
+@pytest.mark.parametrize("service", ["api", "worker"])
+def test_compose_environment_passes_the_startup_guard_in_production(service):
+    environment = _compose_environment(REPO_ROOT / "compose.yaml", service)
+
+    assert load_settings(environment).mode == "production"
+
+
+@pytest.mark.parametrize("service", ["api", "worker"])
+def test_demo_overlay_environment_passes_the_startup_guard_in_demo_mode(service):
+    environment = _compose_environment(REPO_ROOT / "compose.yaml", service) | (
+        _compose_environment(REPO_ROOT / "compose.demo.yaml", service)
+    )
+
+    assert load_settings(environment).mode == "demo"
 
 
 def test_compose_api_trusts_only_the_gateway_address_on_a_fixed_backend_subnet():

@@ -95,13 +95,9 @@ services:
     command: ["uvicorn", "safe_kit.api:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       <<: *db-target
-      # Demo mode: SAFE_BIND_HOST must be a loopback address for the startup guard. Nothing publishes this port; the
-      # process listens on 0.0.0.0 inside the container so that the gateway (on backend) can reach it.
-      SAFE_MODE: demo
-      SAFE_BIND_HOST: 127.0.0.1
-      SAFE_DATASET: synthetic-demo
-      # The Docker host's address on the edge network (see the gateway note below). Demo mode only.
-      SAFE_DEMO_HOST_ADDRESS: "172.28.0.1"
+      # Production mode is the default. The demo overlay (compose.demo.yaml, started by scripts/demo.sh) sets SAFE_MODE=demo,
+      # SAFE_DATASET, SAFE_BIND_HOST and SAFE_DEMO_HOST_ADDRESS for api and worker.
+      SAFE_MODE: production
       SAFE_DB_USER: safe_api
       SAFE_DB_PASSWORD_FILE: /run/secrets/db_app_password
       SAFE_JWT_KEY_FILE: /run/secrets/jwt_signing_key
@@ -121,7 +117,8 @@ services:
       #   2. nginx overwrites X-Forwarded-For with $remote_addr, that is 172.28.0.1, and connects to the API from
       #      172.29.0.10 (the gateway's address on backend).
       #   3. The API takes the socket peer 172.29.0.10 as trusted, walks X-Forwarded-For from the right, and resolves
-      #      the client to 172.28.0.1. Demo sign-in accepts that address through SAFE_DEMO_HOST_ADDRESS (demo mode only).
+      #      the client to 172.28.0.1. In demo mode, demo sign-in accepts that address through SAFE_DEMO_HOST_ADDRESS
+      #      (set by the demo overlay only).
       SAFE_TRUSTED_PROXIES: "172.29.0.10"
     secrets:
       - db_app_password
@@ -147,10 +144,8 @@ services:
     command: ["python", "-m", "safe_kit.worker"]
     environment:
       <<: *db-target
-      # The worker opens no listening socket; the loopback value only satisfies the demo-mode rule of the startup guard.
-      SAFE_MODE: demo
-      SAFE_BIND_HOST: 127.0.0.1
-      SAFE_DATASET: synthetic-demo
+      # Production mode is the default; the demo overlay sets the demo values for the worker as well.
+      SAFE_MODE: production
       SAFE_DB_USER: safe_worker
       SAFE_DB_PASSWORD_FILE: /run/secrets/db_worker_password
       # The startup guard checks the same settings in every process, so the worker carries them too.

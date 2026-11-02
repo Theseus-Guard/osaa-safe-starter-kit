@@ -48,6 +48,8 @@ sh scripts/make-dev-cert.sh
 docker compose up -d --build --wait
 ```
 
+A normal install runs in production mode, the default in `compose.yaml`. The demo is not started this way; see [Demo](#demo).
+
 The gateway serves HTTPS only, at `https://127.0.0.1:8443`, with a development certificate. Your browser will warn until you trust the local CA. See [gateway/README-TLS.md](gateway/README-TLS.md).
 
 The first admin is created once from the command line. The password is read from stdin and must be at least 12 characters:
@@ -67,7 +69,7 @@ docker compose --profile cli run --rm cli health
 
 ## Demo
 
-The demo runs on this machine only, with synthetic data. It uses its own Compose project, `safe-demo`, and the overlay `compose.demo.yaml`.
+The demo runs on this machine only, with synthetic data. It is started with `scripts/demo.sh`, which uses its own Compose project, `safe-demo`, and the overlay `compose.demo.yaml`. The overlay switches `api` and `worker` to demo mode with the synthetic dataset; the default stack never runs in demo mode.
 
 ```sh
 export SAFE_DEMO_DIR="$HOME/safe-demo"   # required: an absolute path outside this repository
@@ -75,6 +77,8 @@ scripts/demo.sh start --timeout 300      # build, start, seed once, and wait for
 scripts/demo.sh status                   # service states, readiness, and which credential files exist
 scripts/demo.sh cli-show <CASE_ID>       # read one case with the CLI, as a demo role
 ```
+
+To run other Compose commands against the demo stack, pass both files: `docker compose -p safe-demo -f compose.yaml -f compose.demo.yaml <command>`.
 
 - The script creates `SAFE_DEMO_DIR` and a `credentials` directory in it. The seed writes one credential file per demo role there, with mode 0600. No credential is printed, logged, or put in a command line.
 - Each demo role has its own credential. The login screen lists the demo roles when the server runs in demo mode, and a banner shows the demo mode.

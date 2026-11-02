@@ -8,6 +8,9 @@ Every release entry states the **SAFE compatibility baseline**: the SAFE version
 
 Changes after 0.2.0 go here.
 
+### Changed
+- The default stack (`compose.yaml`) runs in production mode: `SAFE_MODE=production` for `api` and `worker`, with no demo dataset, so the sign-in page takes a username and password. The demo is an overlay: `scripts/demo.sh` starts it with `compose.demo.yaml`, which sets demo mode and the synthetic dataset for `api` and `worker`.
+
 ## 0.2.0 - 2026-11-03
 
 **SAFE compatibility baseline:** SAFE v1.0 (2026-10-21), wg-safe commit `08c0d6a11163d10ac878a15dc9f53b5b322fd7cb`. This version is not tagged in git yet.
