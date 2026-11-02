@@ -7,7 +7,7 @@ process. Error messages name the setting that is wrong and never echo its value.
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from ipaddress import IPv4Network, IPv6Network, ip_network
+from ipaddress import IPv4Network, IPv6Network, ip_address, ip_network
 
 MODE_DEMO = "demo"
 MODE_PRODUCTION = "production"
@@ -154,3 +154,19 @@ def is_demo(env: Mapping[str, str]) -> bool:
 def is_loopback(address: str | None) -> bool:
     """True when a client address is a loopback address. The address comes from client_address.resolve_client_address."""
     return address in LOOPBACK_HOSTS
+
+
+def demo_host_address(env: Mapping[str, str]) -> str | None:
+    """The Docker host's address on the edge network, from SAFE_DEMO_HOST_ADDRESS. Demo mode only.
+
+    The stack publishes the gateway on 127.0.0.1 only, so a request that reaches the gateway from the host arrives from
+    this address. Demo sign-in treats it as local. Empty or unset means no host address is accepted.
+    """
+    value = env.get("SAFE_DEMO_HOST_ADDRESS", "").strip()
+    if not value:
+        return None
+    try:
+        ip_address(value)
+    except ValueError as error:
+        raise ConfigError("SAFE_DEMO_HOST_ADDRESS must be an IP address") from error
+    return value

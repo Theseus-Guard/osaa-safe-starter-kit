@@ -99,6 +99,8 @@ services:
       SAFE_MODE: demo
       SAFE_BIND_HOST: 127.0.0.1
       SAFE_DATASET: synthetic-demo
+      # The Docker host's address on the edge network (see the gateway note below). Demo mode only.
+      SAFE_DEMO_HOST_ADDRESS: "172.28.0.1"
       SAFE_DB_USER: safe_api
       SAFE_DB_PASSWORD_FILE: /run/secrets/db_app_password
       SAFE_JWT_KEY_FILE: /run/secrets/jwt_signing_key

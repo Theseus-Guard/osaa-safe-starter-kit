@@ -9,7 +9,7 @@ verifier. The API then issues the same session as a password login. No default c
 
 from collections.abc import Mapping
 
-from safe_kit.config_guard import SYNTHETIC_DEMO_DATASET, is_demo, is_loopback
+from safe_kit.config_guard import SYNTHETIC_DEMO_DATASET, demo_host_address, is_demo, is_loopback
 from safe_kit.db import connect
 from safe_kit.security import verify_password
 
@@ -38,5 +38,8 @@ def demo_sign_in_allowed(env: Mapping[str, str], client_address: str | None) -> 
     """Route-level check that needs no database: demo mode and a loopback resolved client address.
 
     client_address must come from client_address.resolve_client_address, never from a header read here.
+    In demo mode the Docker host address from SAFE_DEMO_HOST_ADDRESS also counts as local (see config_guard).
     """
-    return is_demo(env) and is_loopback(client_address)
+    if not is_demo(env) or client_address is None:
+        return False
+    return is_loopback(client_address) or client_address == demo_host_address(env)
