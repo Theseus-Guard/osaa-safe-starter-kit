@@ -590,7 +590,7 @@ def test_reading_evidence_is_404_when_the_case_is_not_visible(client, monkeypatc
 
 def test_listing_with_evidence_read_returns_the_page(client, monkeypatch):
     monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"evidence:read"}))
-    monkeypatch.setattr(evidence, "list_evidence", lambda case_id, limit, offset: ([], 0))
+    monkeypatch.setattr(evidence, "list_evidence", lambda case_id, limit, offset, recipient=None: ([], 0))
     response = client.get(f"/api/v1/cases/{uuid.uuid4()}/evidence")
     assert response.status_code == 200
     assert response.json() == {"items": [], "total": 0, "limit": 50, "offset": 0}
