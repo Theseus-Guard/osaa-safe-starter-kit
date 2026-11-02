@@ -55,6 +55,8 @@ export interface UserSummary extends UserProfile {
   is_protected: boolean;
   password_change_required: boolean;
   created_at: string;
+  // Starts at 1 and rises with each change to the account. Sent as If-Match when the account is changed.
+  revision: number;
 }
 
 export interface UserPage {
@@ -343,10 +345,13 @@ export function listUsers(limit: number, offset: number): Promise<UserPage> {
   return request<UserPage>(`/users?limit=${limit}&offset=${offset}`);
 }
 
-export function updateUser(userId: string, changes: UserUpdate): Promise<UserSummary> {
+// revision is the account revision the caller read (UserSummary.revision), sent as If-Match. A stale revision answers
+// 412 with ApiError.currentRevision and changes nothing.
+export function updateUser(userId: string, changes: UserUpdate, revision: number): Promise<UserSummary> {
   return request<UserSummary>(`/users/${encodeURIComponent(userId)}`, {
     method: "PATCH",
     json: changes,
+    headers: { "If-Match": `"${revision}"` },
   });
 }
 
@@ -386,6 +391,9 @@ export interface DeadlineTask {
   due_at: string;
   status: string;
   not_applicable_reason: string | null;
+  // Starts at 1 and rises with each change to this task. Sent as If-Match when the task is changed. Null only for a
+  // task that is not stored yet.
+  revision: number | null;
 }
 
 export type DeadlineStatus = "open" | "done" | "not_applicable";
@@ -487,17 +495,19 @@ export function reopenCase(caseId: string, reason: string): Promise<CaseDetail> 
   return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}/reopen`, { method: "POST", json: { reason }, headers: idempotencyHeaders() });
 }
 
-// The reason is required for not_applicable and rejected for every other status.
+// The reason is required for not_applicable and rejected for every other status. revision is the task revision the
+// caller read (DeadlineTask.revision), sent as If-Match. A stale revision answers 412 and changes nothing.
 export function updateDeadline(
   caseId: string,
   taskId: string,
   status: DeadlineStatus,
-  reason?: string,
+  reason: string | undefined,
+  revision: number,
 ): Promise<CaseDetail> {
   return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}/deadlines/${encodeURIComponent(taskId)}`, {
     method: "PATCH",
     json: { status, reason },
-    headers: idempotencyHeaders(),
+    headers: { ...idempotencyHeaders(), "If-Match": `"${revision}"` },
   });
 }
 
@@ -1010,6 +1020,8 @@ export interface LegalDuty {
   status: DutyStatus;
   created_by: string;
   created_at: string;
+  // Starts at 1 and rises with each change to the duty. Sent as If-Match when the duty is changed.
+  revision: number;
 }
 
 export interface LegalDutyCreateBody {
@@ -1038,10 +1050,17 @@ export function addLegalDuty(caseId: string, body: LegalDutyCreateBody): Promise
   return request<LegalDuty>(`/cases/${encodeURIComponent(caseId)}/legal-duties`, { method: "POST", json: body, headers: idempotencyHeaders() });
 }
 
-export function updateLegalDuty(caseId: string, dutyId: string, changes: LegalDutyChanges): Promise<LegalDuty> {
+// revision is the duty revision the caller read (LegalDuty.revision), sent as If-Match. A stale revision answers 412
+// and changes nothing.
+export function updateLegalDuty(
+  caseId: string,
+  dutyId: string,
+  changes: LegalDutyChanges,
+  revision: number,
+): Promise<LegalDuty> {
   return request<LegalDuty>(
     `/cases/${encodeURIComponent(caseId)}/legal-duties/${encodeURIComponent(dutyId)}`,
-    { method: "PATCH", json: changes },
+    { method: "PATCH", json: changes, headers: { "If-Match": `"${revision}"` } },
   );
 }
 

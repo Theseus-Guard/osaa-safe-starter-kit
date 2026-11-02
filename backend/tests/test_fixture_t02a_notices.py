@@ -20,6 +20,7 @@ import pytest
 
 from safe_kit import api, audit, system_timezone
 from safe_kit.migrate import main as migrate
+from if_match import task_if_match
 from test_case_records_db import ActingClient, new_user
 from test_evidence_lifecycle import requires_database
 from test_fixture_t02_timelines import (
@@ -108,7 +109,9 @@ def test_a_restriction_on_the_public_package_applies_to_that_task_and_the_other_
     reason = "investigation hold on public release"
 
     response = triager.patch(
-        url, json={"status": "not_applicable", "reason": reason}, headers=idem()
+        url,
+        json={"status": "not_applicable", "reason": reason},
+        headers={**idem(), **task_if_match(triager, url)},
     )
 
     assert response.status_code == 200, response.text
@@ -141,13 +144,14 @@ def test_a_safe_exception_and_its_restore_never_change_the_legal_duty(notice_peo
     legal_before = legal_duties(triager, case_id)
     task_id = tasks_by_kind(triager, case_id)["affected_customers"]["id"]
 
+    task_url = f"/api/v1/cases/{case_id}/deadlines/{task_id}"
     marked = triager.patch(
-        f"/api/v1/cases/{case_id}/deadlines/{task_id}",
+        task_url,
         json={
             "status": "not_applicable",
             "reason": "the partner informed the customers",
         },
-        headers=idem(),
+        headers={**idem(), **task_if_match(triager, task_url)},
     )
     assert marked.status_code == 200, marked.text
     assert legal_duties(triager, case_id) == legal_before
@@ -172,10 +176,11 @@ def test_the_conditional_14_day_advisory_keeps_its_due_date_when_it_is_opened(
     assert advisory["not_applicable_reason"]
     assert datetime.fromisoformat(advisory["due_at"]) == t0 + timedelta(days=14)
 
+    advisory_url = f"/api/v1/cases/{case_id}/deadlines/{advisory['id']}"
     opened = triager.patch(
-        f"/api/v1/cases/{case_id}/deadlines/{advisory['id']}",
+        advisory_url,
         json={"status": "open"},
-        headers=idem(),
+        headers={**idem(), **task_if_match(triager, advisory_url)},
     )
 
     assert opened.status_code == 200, opened.text

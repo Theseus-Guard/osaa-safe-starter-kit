@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from safe_kit import api, auth, users
 from safe_kit.case_records import IMPACT_AREAS
 from safe_kit.db import connect
+from if_match import duty_if_match
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("SAFE_TEST_DATABASE") != "1",
@@ -534,14 +535,23 @@ def test_legal_duty_leaves_the_safe_deadlines_alone_and_its_changes_are_audited(
         triager.get(f"/api/v1/cases/{case_id}").json()["deadlines"] == deadlines_before
     )
 
+    duty_url = f"/api/v1/cases/{case_id}/legal-duties/{duty_id}"
     done = triager.patch(
-        f"/api/v1/cases/{case_id}/legal-duties/{duty_id}", json={"status": "done"}
+        duty_url,
+        json={"status": "done"},
+        headers=duty_if_match(triager, duty_url),
     )
     assert done.status_code == 200 and done.json()["status"] == "done"
+    assert done.headers["ETag"] == '"2"'
     assert audit_count("case.legal_duty_changed", case_id) == 1
-    triager.patch(
-        f"/api/v1/cases/{case_id}/legal-duties/{duty_id}", json={"status": "done"}
+    # The same status again changes nothing, so the revision stays at 2 and a repeat is not audited.
+    repeat = triager.patch(
+        duty_url,
+        json={"status": "done"},
+        headers=duty_if_match(triager, duty_url),
     )
+    assert repeat.status_code == 200
+    assert repeat.headers["ETag"] == '"2"'
     assert audit_count("case.legal_duty_changed", case_id) == 1
 
 
@@ -571,9 +581,12 @@ def test_legal_duty_patch_refuses_nulls_and_unknown_duties(people):
         == 400
     )
     unknown = str(uuid.uuid4())
+    unknown_url = f"/api/v1/cases/{case_id}/legal-duties/{unknown}"
     assert (
         triager.patch(
-            f"/api/v1/cases/{case_id}/legal-duties/{unknown}", json={"status": "done"}
+            unknown_url,
+            json={"status": "done"},
+            headers=duty_if_match(triager, unknown_url),
         ).status_code
         == 404
     )

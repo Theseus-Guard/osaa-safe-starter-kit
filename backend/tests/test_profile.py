@@ -395,6 +395,7 @@ def full_row(email: str) -> tuple:
         "Analyst",
         email,
         datetime.now(UTC),
+        1,
     )
 
 
@@ -450,7 +451,11 @@ def test_only_changed_fields_are_written_and_named(audited, monkeypatch):
     assert audited[0]["details"] == {"fields": ["email"]}
     statement, params = connection.update_sql[0]
     assert '"first_name"' not in statement
-    assert statement == 'UPDATE users SET "email" = %s WHERE id = %s'
+    # The account revision rises with the change (api-draft 3.5).
+    assert (
+        statement
+        == 'UPDATE users SET "email" = %s, revision = revision + 1 WHERE id = %s'
+    )
     assert params == ["new.address@example.org", ALICE_ID]
 
 

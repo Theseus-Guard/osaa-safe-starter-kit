@@ -17,7 +17,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
 
 from safe_kit.auth import permissions_of, require_any_permission, require_permission
@@ -42,6 +42,7 @@ from safe_kit.case_records import (
 )
 from safe_kit.cases import CaseScope
 from safe_kit.idempotency import KeyScope, checked_key, key_scope
+from safe_kit.revisions import etag_for, if_match_revision
 from safe_kit.users import User
 
 TEXT_LIMIT = 1000
@@ -393,6 +394,8 @@ class LegalDutyResponse(BaseModel):
     status: str
     created_by: str
     created_at: datetime
+    # Sent back as If-Match on a change to this duty (the ETag of PATCH legal-duties/{duty_id}).
+    revision: int
 
 
 def _duty_response(duty: LegalDuty, scope: CaseScope) -> LegalDutyResponse:
@@ -408,6 +411,7 @@ def _duty_response(duty: LegalDuty, scope: CaseScope) -> LegalDutyResponse:
         status=duty.status,
         created_by=duty.created_by,
         created_at=duty.created_at,
+        revision=duty.revision,
     )
 
 
@@ -471,11 +475,17 @@ def update_case_legal_duty(
     case_id: uuid.UUID,
     duty_id: uuid.UUID,
     body: LegalDutyUpdateRequest,
+    response: Response,
     actor: User = Depends(require_permission("cases:triage")),
+    # The revision of the duty the caller read (the ETag of its list entry). Required: a change without it is a 428.
+    if_match: str | None = Header(default=None, alias="If-Match"),
 ) -> LegalDutyResponse:
+    expected_revision = if_match_revision(if_match)
     scope = _scope(actor)
     changes = {name: getattr(body, name) for name in body.model_fields_set}
-    outcome, duty = update_legal_duty(str(case_id), str(duty_id), changes, scope)
+    outcome, duty = update_legal_duty(
+        str(case_id), str(duty_id), changes, scope, expected_revision
+    )
     if outcome is RecordOutcome.NOT_FOUND:
         raise CASE_NOT_FOUND
     if outcome is RecordOutcome.CLOSED:
@@ -483,6 +493,17 @@ def update_case_legal_duty(
     if outcome is RecordOutcome.DUTY_NOT_FOUND:
         raise HTTPException(status_code=404, detail="legal duty not found")
     assert duty is not None
+    if outcome is RecordOutcome.REVISION_MISMATCH:
+        # Only the current revision, in the body and as the ETag. Nothing of the duty is returned.
+        raise HTTPException(
+            status_code=412,
+            detail={
+                "status": "precondition_failed",
+                "current_revision": duty.revision,
+            },
+            headers={"ETag": etag_for(duty.revision)},
+        )
+    response.headers["ETag"] = etag_for(duty.revision)
     return _duty_response(duty, scope)
 
 

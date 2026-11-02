@@ -9,6 +9,8 @@ from safe_kit.users import UpdateOutcome, User
 
 ADMIN_ID = "33333333-3333-3333-3333-333333333333"
 TARGET_ID = "11111111-1111-1111-1111-111111111111"
+# The revision a new account starts at. A change to the account names it in If-Match (api-draft 3.5).
+IF_MATCH = {"If-Match": '"1"'}
 
 
 def make_user(user_id, username, role, *, active=True):
@@ -76,7 +78,10 @@ def test_admin_lists_users_with_pagination(client, users):
         "first_name",
         "last_name",
         "title",
+        "revision",
     }
+    # Each user carries its own revision, to be sent back in If-Match.
+    assert body["items"][0]["revision"] == 1
 
 
 def test_list_rejects_out_of_range_paging(client, users):
@@ -97,7 +102,9 @@ def test_admin_changes_role(client, users, monkeypatch):
         lambda user_id, role=None, is_active=None, **kwargs: UpdateOutcome.OK,
     )
     users[TARGET_ID] = make_user(TARGET_ID, "alice", "reviewer")
-    response = client.patch(f"/api/v1/users/{TARGET_ID}", json={"role": "reviewer"})
+    response = client.patch(
+        f"/api/v1/users/{TARGET_ID}", json={"role": "reviewer"}, headers=IF_MATCH
+    )
     assert response.status_code == 200
     assert response.json()["role"] == "reviewer"
 
@@ -111,25 +118,56 @@ def test_admin_disables_user(client, users, monkeypatch):
 
     monkeypatch.setattr(api, "update_user", fake_update)
     users[TARGET_ID] = make_user(TARGET_ID, "alice", "triager", active=False)
-    response = client.patch(f"/api/v1/users/{TARGET_ID}", json={"is_active": False})
+    response = client.patch(
+        f"/api/v1/users/{TARGET_ID}", json={"is_active": False}, headers=IF_MATCH
+    )
     assert response.status_code == 200
     assert calls == [(TARGET_ID, None, False)]
 
 
 def test_admin_cannot_change_own_role_or_status(client, users):
-    response = client.patch(f"/api/v1/users/{ADMIN_ID}", json={"is_active": False})
+    response = client.patch(
+        f"/api/v1/users/{ADMIN_ID}", json={"is_active": False}, headers=IF_MATCH
+    )
     assert response.status_code == 409
 
 
 def test_empty_update_is_rejected(client, users):
-    assert client.patch(f"/api/v1/users/{TARGET_ID}", json={}).status_code == 422
+    response = client.patch(f"/api/v1/users/{TARGET_ID}", json={}, headers=IF_MATCH)
+    assert response.status_code == 422
 
 
 def test_unknown_role_in_update_is_rejected(client, users):
-    assert (
-        client.patch(f"/api/v1/users/{TARGET_ID}", json={"role": "root"}).status_code
-        == 400
+    response = client.patch(
+        f"/api/v1/users/{TARGET_ID}", json={"role": "root"}, headers=IF_MATCH
     )
+    assert response.status_code == 400
+
+
+def test_update_without_if_match_is_refused_with_428(client, users, monkeypatch):
+    monkeypatch.setattr(
+        api,
+        "update_user",
+        lambda *args, **kwargs: pytest.fail("the change must not reach the service"),
+    )
+    response = client.patch(f"/api/v1/users/{TARGET_ID}", json={"is_active": False})
+    assert response.status_code == 428
+    assert response.json()["detail"] == {"status": "precondition_required"}
+
+
+def test_update_with_malformed_if_match_is_refused_with_400(client, users, monkeypatch):
+    monkeypatch.setattr(
+        api,
+        "update_user",
+        lambda *args, **kwargs: pytest.fail("the change must not reach the service"),
+    )
+    response = client.patch(
+        f"/api/v1/users/{TARGET_ID}",
+        json={"is_active": False},
+        headers={"If-Match": "1"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == {"status": "invalid_if_match"}
 
 
 def test_last_active_admin_cannot_be_removed(client, users, monkeypatch):
@@ -138,7 +176,9 @@ def test_last_active_admin_cannot_be_removed(client, users, monkeypatch):
         "update_user",
         lambda user_id, role=None, is_active=None, **kwargs: UpdateOutcome.LAST_ADMIN,
     )
-    response = client.patch(f"/api/v1/users/{TARGET_ID}", json={"role": "auditor"})
+    response = client.patch(
+        f"/api/v1/users/{TARGET_ID}", json={"role": "auditor"}, headers=IF_MATCH
+    )
     assert response.status_code == 409
     assert "last active admin" in response.json()["detail"]
 
@@ -150,7 +190,9 @@ def test_update_of_unknown_user_returns_404(client, users, monkeypatch):
         lambda user_id, role=None, is_active=None, **kwargs: UpdateOutcome.NOT_FOUND,
     )
     response = client.patch(
-        "/api/v1/users/55555555-5555-5555-5555-555555555555", json={"is_active": False}
+        "/api/v1/users/55555555-5555-5555-5555-555555555555",
+        json={"is_active": False},
+        headers=IF_MATCH,
     )
     assert response.status_code == 404
 
@@ -213,7 +255,9 @@ def test_protected_admin_cannot_be_demoted_or_disabled(client, users, monkeypatc
         "update_user",
         lambda user_id, role=None, is_active=None, **kwargs: UpdateOutcome.PROTECTED,
     )
-    response = client.patch(f"/api/v1/users/{TARGET_ID}", json={"is_active": False})
+    response = client.patch(
+        f"/api/v1/users/{TARGET_ID}", json={"is_active": False}, headers=IF_MATCH
+    )
     assert response.status_code == 409
     assert "protected admin" in response.json()["detail"]
 
@@ -230,19 +274,22 @@ def test_protected_admin_cannot_be_deleted(client, users, monkeypatch):
 def test_update_is_attributed_to_the_acting_admin(client, users, monkeypatch):
     seen = {}
 
-    def fake_update(user_id, role=None, is_active=None, actor_id=None):
+    def fake_update(user_id, role=None, is_active=None, actor_id=None, **kwargs):
         seen["actor_id"] = actor_id
+        seen["expected_revision"] = kwargs.get("expected_revision")
         return UpdateOutcome.OK
 
     monkeypatch.setattr(api, "update_user", fake_update)
     users[TARGET_ID] = make_user(TARGET_ID, "alice", "reviewer")
     assert (
         client.patch(
-            f"/api/v1/users/{TARGET_ID}", json={"role": "reviewer"}
+            f"/api/v1/users/{TARGET_ID}", json={"role": "reviewer"}, headers=IF_MATCH
         ).status_code
         == 200
     )
     assert seen["actor_id"] == ADMIN_ID
+    # The If-Match revision is the one the service checks.
+    assert seen["expected_revision"] == 1
 
 
 def test_soft_delete_is_attributed_to_the_acting_admin(client, users, monkeypatch):

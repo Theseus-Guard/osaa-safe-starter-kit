@@ -74,7 +74,11 @@ def test_a_stale_revision_is_refused_and_the_second_writer_changes_nothing(
     )
 
     assert second.status_code == 412
-    assert second.json()["detail"] == {"status": "precondition_failed"}
+    # The body carries the current revision, like the review layer 412 (item 2 of the F2 gap backlog).
+    assert second.json()["detail"] == {
+        "status": "precondition_failed",
+        "current_revision": 2,
+    }
     assert second.json()["error"]["code"] == "precondition_failed"
     assert second.json()["error"]["retryable"] is False
     assert second.headers["ETag"] == '"2"'

@@ -134,6 +134,8 @@ class DeadlineTask:
     status: str
     id: str | None = None
     not_applicable_reason: str | None = None
+    # Starts at 1 and rises by one with each change to the task. Only stored tasks have one (None for a preview).
+    revision: int | None = None
 
 
 @dataclass(frozen=True)
@@ -255,7 +257,7 @@ def resync_deadlines(conn, case_id: str) -> tuple[datetime, dict[str, dict[str, 
     for task_id, kind, due_at in stored:
         if due_at != expected[kind]:
             conn.execute(
-                "UPDATE deadline_tasks SET due_at = %s WHERE id = %s",
+                "UPDATE deadline_tasks SET due_at = %s, revision = revision + 1 WHERE id = %s",
                 (expected[kind], task_id),
             )
             moved[kind] = {"old": due_at.isoformat(), "new": expected[kind].isoformat()}
@@ -338,7 +340,7 @@ def _to_case(row: tuple) -> Case:
 def _load_tasks(conn, case_id: str) -> list[DeadlineTask]:
     rows = conn.execute(
         """
-        SELECT id::text, kind, due_at, status, not_applicable_reason FROM deadline_tasks
+        SELECT id::text, kind, due_at, status, not_applicable_reason, revision FROM deadline_tasks
         WHERE case_id = %s AND NOT is_deleted
         ORDER BY due_at, kind
         """,
@@ -351,6 +353,7 @@ def _load_tasks(conn, case_id: str) -> list[DeadlineTask]:
             due_at=row[2],
             status=row[3],
             not_applicable_reason=row[4],
+            revision=row[5],
         )
         for row in rows
     ]
@@ -449,12 +452,13 @@ def insert_case(conn, title: str, awareness_time: datetime, created_by: str) -> 
     case = _to_case(row)
     stored_tasks = []
     for task in tasks:
+        # A new task starts at revision 1 (the column default).
         task_id = conn.execute(
             "INSERT INTO deadline_tasks (case_id, kind, due_at, status, not_applicable_reason) "
             "VALUES (%s, %s, %s, %s, %s) RETURNING id::text",
             (case.id, task.kind, task.due_at, task.status, task.not_applicable_reason),
         ).fetchone()[0]
-        stored_tasks.append(replace(task, id=task_id))
+        stored_tasks.append(replace(task, id=task_id, revision=1))
     audit.record(
         conn,
         audit.CASE_CREATE,
@@ -580,11 +584,10 @@ def _write_task_change(
     old_due: datetime | None = None,
     new_due: datetime | None = None,
 ) -> None:
-    """Write one deadline change and its audit row. A new_due that is given also moves the due date."""
-    conn.execute(
-        "UPDATE deadline_tasks SET status = %s, not_applicable_reason = %s, due_at = COALESCE(%s, due_at) WHERE id = %s",
-        (new_status, new_reason, new_due, task_id),
-    )
+    """Write one deadline change and its audit row. A new_due that is given also moves the due date.
+
+    The task revision rises by one only when a field really changes.
+    """
     changes: dict[str, Any] = {}
     if old_status != new_status:
         changes["status"] = _change(old_status, new_status)
@@ -596,6 +599,11 @@ def _write_task_change(
         changes["due_at"] = _change(
             old_due.isoformat() if old_due else None, new_due.isoformat()
         )
+    conn.execute(
+        "UPDATE deadline_tasks SET status = %s, not_applicable_reason = %s, due_at = COALESCE(%s, due_at), "
+        "revision = revision + %s WHERE id = %s",
+        (new_status, new_reason, new_due, int(bool(changes)), task_id),
+    )
     audit.record(
         conn,
         audit.CASE_DEADLINE_UPDATE,
@@ -999,14 +1007,17 @@ def update_deadline(
     reason: str | None,
     scope: CaseScope,
     may_mark_not_applicable: bool,
+    expected_revision: int,
     *,
     idempotency: KeyScope | None = None,
     render: Callable[[Case], Any] | None = None,
-) -> Outcome:
-    """Set a deadline task to done, open, or not applicable.
+) -> tuple[Outcome, int | None]:
+    """Set a deadline task to done, open, or not applicable. Returns the outcome and the task revision.
 
-    Changing a task to or from not applicable needs the triager permission (may_mark_not_applicable).
-    A request that changes nothing writes no audit row. With an idempotency scope, a replay raises Replayed and a
+    expected_revision is the task revision the caller read. A different revision is refused with REVISION_MISMATCH
+    and nothing changes. Changing a task to or from not applicable needs the triager permission
+    (may_mark_not_applicable). A request that changes nothing writes no audit row and keeps the revision. The revision
+    rises by one with a change, in the same transaction. With an idempotency scope, a replay raises Replayed and a
     reused key raises KeyReused; a successful request stores render(case) in the same transaction.
     """
     new_reason = reason if status == "not_applicable" else None
@@ -1014,22 +1025,24 @@ def update_deadline(
         check(conn, idempotency)
         locked = _lock_visible_case(conn, case_id, scope)
         if locked is None:
-            return Outcome.NOT_FOUND
+            return Outcome.NOT_FOUND, None
         if locked[0] == "closed":
-            return Outcome.CLOSED
+            return Outcome.CLOSED, None
         task = conn.execute(
             """
-            SELECT kind, status, not_applicable_reason FROM deadline_tasks
+            SELECT kind, status, not_applicable_reason, revision FROM deadline_tasks
             WHERE id = %s AND case_id = %s AND NOT is_deleted
             FOR UPDATE
             """,
             (task_id, case_id),
         ).fetchone()
         if task is None:
-            return Outcome.TASK_NOT_FOUND
-        kind, old_status, old_reason = task
+            return Outcome.TASK_NOT_FOUND, None
+        kind, old_status, old_reason, revision = task
         if "not_applicable" in (status, old_status) and not may_mark_not_applicable:
-            return Outcome.NOT_APPLICABLE_FORBIDDEN
+            return Outcome.NOT_APPLICABLE_FORBIDDEN, revision
+        if revision != expected_revision:
+            return Outcome.REVISION_MISMATCH, revision
         changes: dict[str, Any] = {}
         if status != old_status:
             changes["status"] = _change(old_status, status)
@@ -1039,9 +1052,11 @@ def update_deadline(
             )
         if changes:
             conn.execute(
-                "UPDATE deadline_tasks SET status = %s, not_applicable_reason = %s WHERE id = %s",
+                "UPDATE deadline_tasks SET status = %s, not_applicable_reason = %s, revision = revision + 1 "
+                "WHERE id = %s",
                 (status, new_reason, task_id),
             )
+            revision += 1
             audit.record(
                 conn,
                 audit.CASE_DEADLINE_UPDATE,
@@ -1051,7 +1066,7 @@ def update_deadline(
                 details={"task_id": task_id, "kind": kind, **changes},
             )
         _remember_case(conn, idempotency, render, case_id)
-    return Outcome.OK
+    return Outcome.OK, revision
 
 
 def update_case_title(

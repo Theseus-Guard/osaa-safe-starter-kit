@@ -38,6 +38,7 @@ from safe_kit.rbac import (
 )
 from safe_kit.users import User
 from error_body import without_request_id
+from if_match import task_if_match
 
 
 def idem() -> dict:
@@ -692,7 +693,7 @@ def test_deadline_update_passes_the_triage_permission_to_the_service(
         case_id, task_id, status, reason, scope, may_mark_not_applicable, **kwargs
     ):
         seen.update(status=status, reason=reason, may=may_mark_not_applicable)
-        return Outcome.OK
+        return Outcome.OK, 2
 
     monkeypatch.setattr(api, "update_deadline", fake_update)
     monkeypatch.setattr(api, "find_visible_case", lambda case_id, scope: sample_case())
@@ -701,7 +702,7 @@ def test_deadline_update_passes_the_triage_permission_to_the_service(
     response = client.patch(
         f"/api/v1/cases/{CASE_ID}/deadlines/{TASK_ID}",
         json={"status": "not_applicable", "reason": " out of scope "},
-        headers=idem(),
+        headers={**idem(), "If-Match": '"1"'},
     )
     assert response.status_code == 200
     assert seen == {"status": "not_applicable", "reason": "out of scope", "may": True}
@@ -710,7 +711,7 @@ def test_deadline_update_passes_the_triage_permission_to_the_service(
     client.patch(
         f"/api/v1/cases/{CASE_ID}/deadlines/{TASK_ID}",
         json={"status": "done"},
-        headers=idem(),
+        headers={**idem(), "If-Match": '"1"'},
     )
     assert seen["may"] is False
 
@@ -730,11 +731,11 @@ def test_deadline_update_passes_the_triage_permission_to_the_service(
 )
 def test_deadline_update_refusals(client, caller, monkeypatch, outcome, status, detail):
     as_role(caller, INVESTIGATOR_ID, "investigator")
-    monkeypatch.setattr(api, "update_deadline", lambda *args, **kwargs: outcome)
+    monkeypatch.setattr(api, "update_deadline", lambda *args, **kwargs: (outcome, 1))
     response = client.patch(
         f"/api/v1/cases/{CASE_ID}/deadlines/{TASK_ID}",
         json={"status": "done"},
-        headers=idem(),
+        headers={**idem(), "If-Match": '"1"'},
     )
     assert response.status_code == status
     assert response.json()["detail"] == detail
@@ -1106,10 +1107,11 @@ def test_close_is_refused_with_an_open_weekly_update(db_client, people):
     )
     tasks = task_ids(db_client, people["triager"], case_id)
     for kind, task_id in tasks.items():
+        url = f"/api/v1/cases/{case_id}/deadlines/{task_id}"
         response = triager.patch(
-            f"/api/v1/cases/{case_id}/deadlines/{task_id}",
+            url,
             json={"status": "done"},
-            headers=idem(),
+            headers={**idem(), **task_if_match(triager, url)},
         )
         assert response.status_code == 200, (kind, response.text)
     with connect() as conn:
@@ -1159,27 +1161,29 @@ def test_close_succeeds_after_review_and_tasks_done_or_not_applicable(
         "preliminary_safe_report",
         "preliminary_public_report",
     ):
+        url = f"/api/v1/cases/{case_id}/deadlines/{tasks[kind]}"
         assert (
             investigator.patch(
-                f"/api/v1/cases/{case_id}/deadlines/{tasks[kind]}",
+                url,
                 json={"status": "done"},
-                headers=idem(),
+                headers={**idem(), **task_if_match(investigator, url)},
             ).status_code
             == 200
         )
+    remediation = f"/api/v1/cases/{case_id}/deadlines/{tasks['remediation_status']}"
     forbidden = investigator.patch(
-        f"/api/v1/cases/{case_id}/deadlines/{tasks['remediation_status']}",
+        remediation,
         json={"status": "not_applicable", "reason": "not in scope"},
-        headers=idem(),
+        headers={**idem(), **task_if_match(investigator, remediation)},
     )
     assert forbidden.status_code == 403
     applied = triager.patch(
-        f"/api/v1/cases/{case_id}/deadlines/{tasks['remediation_status']}",
+        remediation,
         json={
             "status": "not_applicable",
             "reason": "  Remediation tracked elsewhere  ",
         },
-        headers=idem(),
+        headers={**idem(), **task_if_match(triager, remediation)},
     )
     assert applied.status_code == 200
     statuses = {
@@ -1217,13 +1221,14 @@ def test_closed_case_refuses_changes_and_reopen_is_audited(db_client, people):
     )
     tasks = task_ids(db_client, people["triager"], case_id)
     for kind, task_id in tasks.items():
+        url = f"/api/v1/cases/{case_id}/deadlines/{task_id}"
         triager.patch(
-            f"/api/v1/cases/{case_id}/deadlines/{task_id}",
+            url,
             json={
                 "status": "not_applicable",
                 "reason": f"{kind} is not applicable here",
             },
-            headers=idem(),
+            headers={**idem(), **task_if_match(triager, url)},
         )
     assert (
         triager.post(
@@ -1249,11 +1254,12 @@ def test_closed_case_refuses_changes_and_reopen_is_audited(db_client, people):
     )
     assert refused.json()["detail"] == "case is closed"
     first_task = next(iter(tasks.values()))
+    first_url = f"/api/v1/cases/{case_id}/deadlines/{first_task}"
     assert (
         triager.patch(
-            f"/api/v1/cases/{case_id}/deadlines/{first_task}",
+            first_url,
             json={"status": "open"},
-            headers=idem(),
+            headers={**idem(), **task_if_match(triager, first_url)},
         ).json()["detail"]
         == "case is closed"
     )
@@ -1354,13 +1360,14 @@ def test_close_and_reopen_reasons_are_stored_as_text(db_client, people):
         db_client(people["reviewer"]), case_id, "fail", reason="Reviewed for this test"
     )
     for kind, task_id in task_ids(db_client, people["triager"], case_id).items():
+        url = f"/api/v1/cases/{case_id}/deadlines/{task_id}"
         triager.patch(
-            f"/api/v1/cases/{case_id}/deadlines/{task_id}",
+            url,
             json={
                 "status": "not_applicable",
                 "reason": f"{kind} is not applicable here",
             },
-            headers=idem(),
+            headers={**idem(), **task_if_match(triager, url)},
         )
     close_reason = "Confirmed root cause in the vendor patch"
     reopen_reason = "New facts found"
@@ -1462,7 +1469,11 @@ def test_only_triagers_may_mark_a_deadline_not_applicable(db_client, people):
     url = f"/api/v1/cases/{case_id}/deadlines/{task_id}"
     assert (
         db_client(people["investigator"])
-        .patch(url, json={"status": "not_applicable", "reason": "x"}, headers=idem())
+        .patch(
+            url,
+            json={"status": "not_applicable", "reason": "x"},
+            headers={**idem(), **task_if_match(db_client(people["investigator"]), url)},
+        )
         .status_code
         == 403
     )
@@ -1476,13 +1487,17 @@ def test_only_triagers_may_mark_a_deadline_not_applicable(db_client, people):
         triager.patch(
             url,
             json={"status": "not_applicable", "reason": "Not needed"},
-            headers=idem(),
+            headers={**idem(), **task_if_match(triager, url)},
         ).status_code
         == 200
     )
     assert (
         db_client(people["investigator"])
-        .patch(url, json={"status": "open"}, headers=idem())
+        .patch(
+            url,
+            json={"status": "open"},
+            headers={**idem(), **task_if_match(db_client(people["investigator"]), url)},
+        )
         .status_code
         == 403
     )
@@ -1552,15 +1567,17 @@ def test_unassigned_investigator_gets_404_on_deadline_change_and_403_without_per
     case_id = create_case_via_api(db_client, people["reporter"])
     task_id = task_ids(db_client, people["triager"], case_id)["broader_advisory"]
     investigator = db_client(people["investigator"])
+    hidden_url = f"/api/v1/cases/{case_id}/deadlines/{task_id}"
     hidden = investigator.patch(
-        f"/api/v1/cases/{case_id}/deadlines/{task_id}",
+        hidden_url,
         json={"status": "done"},
-        headers=idem(),
+        headers={**idem(), **task_if_match(investigator, hidden_url)},
     )
+    absent_url = f"/api/v1/cases/{case_id}/deadlines/{uuid.uuid4()}"
     absent = investigator.patch(
-        f"/api/v1/cases/{case_id}/deadlines/{uuid.uuid4()}",
+        absent_url,
         json={"status": "done"},
-        headers=idem(),
+        headers={**idem(), **task_if_match(investigator, absent_url)},
     )
     assert hidden.status_code == absent.status_code == 404
     assert without_request_id(hidden) == without_request_id(absent)

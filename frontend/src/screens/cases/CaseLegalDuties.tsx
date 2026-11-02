@@ -60,7 +60,7 @@ export function CaseLegalDuties({ caseId, closed, canWrite, canReadFullView, onR
   async function changeStatus(duty: LegalDuty, status: DutyStatus) {
     setBusyDutyId(duty.id);
     try {
-      const updated = await updateLegalDuty(caseId, duty.id, { status });
+      const updated = await updateLegalDuty(caseId, duty.id, { status }, duty.revision);
       setItems((current) => current?.map((row) => (row.id === updated.id ? updated : row)) ?? null);
       toast.success(`${humanize(duty.kind)} duty is now ${humanize(status).toLowerCase()}.`);
       onRecorded();

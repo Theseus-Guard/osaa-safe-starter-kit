@@ -593,10 +593,11 @@ def close_reporter_case(db_client, people, case_id: str) -> None:
     assert reviewed.status_code == 200, reviewed.text
     body = triager.get(f"/api/v1/cases/{case_id}").json()
     for task in body["deadlines"]:
+        url = f"/api/v1/cases/{case_id}/deadlines/{task['id']}"
         patched = triager.patch(
-            f"/api/v1/cases/{case_id}/deadlines/{task['id']}",
+            url,
             json={"status": "done"},
-            headers=idem(),
+            headers={**idem(), "If-Match": f'"{task["revision"]}"'},
         )
         assert patched.status_code == 200, patched.text
     closed = triager.post(

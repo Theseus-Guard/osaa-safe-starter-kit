@@ -99,6 +99,8 @@ class RecordOutcome(Enum):
     NOT_FOUND = "not_found"
     CLOSED = "closed"
     DUTY_NOT_FOUND = "duty_not_found"
+    # The caller read an older revision of the duty than the current one. Nothing changed.
+    REVISION_MISMATCH = "revision_mismatch"
     # The caller read an older classification version than the current one.
     VERSION_CONFLICT = "version_conflict"
 
@@ -138,6 +140,8 @@ class LegalDuty:
     status: str
     created_by: str
     created_at: datetime
+    # Starts at 1 and rises by one with each change to the duty (see update_legal_duty). Sent back as If-Match.
+    revision: int = 1
 
 
 @dataclass(frozen=True)
@@ -274,7 +278,7 @@ def _lock_case_for_change(conn, case_id: str, scope: CaseScope) -> str | None:
 
 
 _AWARENESS_COLUMNS = "id::text, case_id::text, awareness_kind, event_kind, occurred_at, basis, recorded_by::text, created_at"
-_DUTY_COLUMNS = "id::text, case_id::text, kind, description, source_reference, jurisdiction, due_at, status, created_by::text, created_at"
+_DUTY_COLUMNS = "id::text, case_id::text, kind, description, source_reference, jurisdiction, due_at, status, created_by::text, created_at, revision"
 _CLASSIFICATION_COLUMNS = (
     "version, triggers, event_kind, classification_rationale, responsible_operator, "
     "affected_versions, approved_scope, scope_permission_source, containment, evidence_gap_plan, "
@@ -588,9 +592,18 @@ def add_legal_duty(
 
 
 def update_legal_duty(
-    case_id: str, duty_id: str, changes: Mapping[str, Any], scope: CaseScope
+    case_id: str,
+    duty_id: str,
+    changes: Mapping[str, Any],
+    scope: CaseScope,
+    expected_revision: int,
 ) -> tuple[RecordOutcome, LegalDuty | None]:
-    """Change the given fields of a duty. Fields not in changes keep their value. Each real change is audited."""
+    """Change the given fields of a duty. Fields not in changes keep their value. Each real change is audited.
+
+    expected_revision is the duty revision the caller read. A different revision returns REVISION_MISMATCH with the
+    current duty and changes nothing. A change raises the revision by one in the same transaction; a change that
+    changes nothing keeps it. The case revision is not raised.
+    """
     unknown = set(changes) - set(DUTY_EDITABLE_FIELDS)
     if unknown:
         raise ValueError("fields that cannot be changed: " + ", ".join(sorted(unknown)))
@@ -607,13 +620,16 @@ def update_legal_duty(
         if row is None:
             return RecordOutcome.DUTY_NOT_FOUND, None
         duty = LegalDuty(*row)
+        if duty.revision != expected_revision:
+            return RecordOutcome.REVISION_MISMATCH, duty
         current = {name: getattr(duty, name) for name in DUTY_EDITABLE_FIELDS}
         new = {**current, **changes}
         diff = duty_changes(current, new)
         if diff:
             conn.execute(
                 """
-                UPDATE legal_duties SET description = %s, source_reference = %s, jurisdiction = %s, due_at = %s, status = %s
+                UPDATE legal_duties SET description = %s, source_reference = %s, jurisdiction = %s, due_at = %s, status = %s,
+                    revision = revision + 1
                 WHERE id = %s
                 """,
                 (
@@ -633,7 +649,7 @@ def update_legal_duty(
                 actor_id=scope.user_id,
                 details={"legal_duty_id": duty_id, **diff},
             )
-            duty = replace(duty, **new)
+            duty = replace(duty, **new, revision=duty.revision + 1)
     return RecordOutcome.OK, duty
 
 

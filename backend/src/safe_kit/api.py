@@ -532,6 +532,8 @@ class UserSummary(BaseModel):
     first_name: str | None = None
     last_name: str | None = None
     title: str | None = None
+    # Sent back as If-Match on PATCH users/{user_id}. A list has one ETag per response, so each user carries its own.
+    revision: int
 
 
 class UserPage(BaseModel):
@@ -591,6 +593,7 @@ def _summary(user: User) -> UserSummary:
         password_change_required=user.must_change_password,
         created_at=user.created_at,
         is_protected=user.is_protected,
+        revision=user.revision,
         **profile_fields(user),
     )
 
@@ -898,8 +901,12 @@ def admin_create_user(
 def admin_update_user(
     user_id: uuid.UUID,
     body: UserUpdateRequest,
+    response: Response,
     actor: User = Depends(require_permission("users:manage")),
+    # The revision of the account the caller read (its UserSummary in the list). Required: missing is a 428.
+    if_match: str | None = Header(default=None, alias="If-Match"),
 ) -> UserSummary:
+    expected_revision = if_match_revision(if_match)
     if body.role is None and body.is_active is None:
         raise HTTPException(status_code=422, detail="nothing to change")
     # Admins cannot change their own role or status. This keeps a single admin mistake from locking
@@ -909,10 +916,26 @@ def admin_update_user(
             status_code=409, detail="cannot change your own role or status"
         )
     outcome = update_user(
-        str(user_id), role=body.role, is_active=body.is_active, actor_id=actor.id
+        str(user_id),
+        role=body.role,
+        is_active=body.is_active,
+        actor_id=actor.id,
+        expected_revision=expected_revision,
     )
     if outcome is UpdateOutcome.NOT_FOUND:
         raise HTTPException(status_code=404, detail="user not found")
+    if outcome is UpdateOutcome.REVISION_MISMATCH:
+        current = find_user_by_id(str(user_id))
+        assert current is not None
+        # Only the current revision, in the body and as the ETag. Nothing of the account is returned.
+        raise HTTPException(
+            status_code=412,
+            detail={
+                "status": "precondition_failed",
+                "current_revision": current.revision,
+            },
+            headers={"ETag": etag_for(current.revision)},
+        )
     if outcome is UpdateOutcome.PROTECTED:
         raise HTTPException(status_code=409, detail=PROTECTED_DETAIL)
     if outcome is UpdateOutcome.LAST_ADMIN:
@@ -921,6 +944,7 @@ def admin_update_user(
         )
     updated = find_user_by_id(str(user_id))
     assert updated is not None
+    response.headers["ETag"] = etag_for(updated.revision)
     return _summary(updated)
 
 
@@ -1022,6 +1046,9 @@ class DeadlineTaskResponse(BaseModel):
     due_at: datetime
     status: str
     not_applicable_reason: str | None
+    # Sent back as If-Match on PATCH cases/{case_id}/deadlines/{task_id}. Null for a task that is not stored yet.
+    # The case ETag is the case revision, not this one.
+    revision: int | None = None
 
 
 class CaseCreateRequest(BaseModel):
@@ -1259,6 +1286,7 @@ def _case_response(case: Case, scope: CaseScope) -> CaseResponse:
                 due_at=task.due_at,
                 status=task.status,
                 not_applicable_reason=task.not_applicable_reason,
+                revision=task.revision,
             )
             for task in case.deadlines
         ],
@@ -1633,9 +1661,10 @@ def update_case(
     if outcome is Outcome.CLOSED:
         raise CASE_CLOSED
     if outcome is Outcome.REVISION_MISMATCH:
+        # Only the current revision, in the body and as the ETag, like the review layer (reviews_api.py).
         raise HTTPException(
             status_code=412,
-            detail={"status": "precondition_failed"},
+            detail={"status": "precondition_failed", "current_revision": revision},
             headers={"ETag": etag_for(revision)},
         )
     case = _visible_case_or_404(case_id, scope)
@@ -1811,6 +1840,7 @@ def update_case_deadline(
     case_id: uuid.UUID,
     task_id: uuid.UUID,
     body: DeadlineUpdateRequest,
+    response: Response,
     # The disclosure approver holds cases:read_all to read the case it approves, and may not change deadlines.
     actor: User = Depends(
         require_any_permission_except_role(
@@ -1818,7 +1848,10 @@ def update_case_deadline(
         )
     ),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    # The revision of the task the caller read (DeadlineTaskResponse.revision). Required: a change without it is a 428.
+    if_match: str | None = Header(default=None, alias="If-Match"),
 ) -> CaseResponse:
+    expected_revision = if_match_revision(if_match)
     scope = _scope(actor)
     scope_key = key_scope(
         actor.id,
@@ -1828,16 +1861,30 @@ def update_case_deadline(
         f"/api/v1/cases/{case_id}/deadlines/{task_id}",
         body.model_dump(mode="json"),
     )
-    outcome = update_deadline(
-        str(case_id),
-        str(task_id),
-        body.status,
-        body.reason,
-        scope,
-        may_mark_not_applicable="cases:triage" in permissions_of(actor),
-        idempotency=scope_key,
-        render=lambda changed: _case_response(changed, scope).model_dump(mode="json"),
-    )
+    try:
+        outcome, revision = update_deadline(
+            str(case_id),
+            str(task_id),
+            body.status,
+            body.reason,
+            scope,
+            may_mark_not_applicable="cases:triage" in permissions_of(actor),
+            expected_revision=expected_revision,
+            idempotency=scope_key,
+            render=lambda changed: _case_response(changed, scope).model_dump(
+                mode="json"
+            ),
+        )
+    except Replayed as replayed:
+        # The same request again: the first answer. The ETag is the task's current revision.
+        case = _visible_case_or_404(case_id, scope)
+        task = next((t for t in case.deadlines if t.id == str(task_id)), None)
+        headers = {"ETag": etag_for(task.revision)} if task and task.revision else {}
+        return JSONResponse(
+            status_code=replayed.stored.status_code,
+            content=replayed.stored.body,
+            headers=headers,
+        )
     if outcome is Outcome.NOT_FOUND:
         raise CASE_NOT_FOUND
     if outcome is Outcome.CLOSED:
@@ -1848,6 +1895,16 @@ def update_case_deadline(
         raise HTTPException(
             status_code=403, detail="only a triager may mark a deadline not applicable"
         )
+    assert revision is not None
+    if outcome is Outcome.REVISION_MISMATCH:
+        # Only the task's current revision, in the body and as the ETag. Nothing of the task is returned.
+        raise HTTPException(
+            status_code=412,
+            detail={"status": "precondition_failed", "current_revision": revision},
+            headers={"ETag": etag_for(revision)},
+        )
+    # The ETag names the task that changed (its revision), not the case. The body is the case.
+    response.headers["ETag"] = etag_for(revision)
     return _case_response(_visible_case_or_404(case_id, scope), scope)
 
 

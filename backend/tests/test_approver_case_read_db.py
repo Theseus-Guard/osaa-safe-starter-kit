@@ -65,9 +65,14 @@ def test_the_approver_may_not_change_a_deadline_and_a_triager_still_may(world):
     ):
         assert response.status_code == 403
         assert response.json()["detail"] == "forbidden"
+    # The revision the case response above carried for this task.
     assert (
         request_as(
-            triager, "patch", url, json={"status": "done"}, headers=idem()
+            triager,
+            "patch",
+            url,
+            json={"status": "done"},
+            headers={**idem(), "If-Match": f'"{task["revision"]}"'},
         ).status_code
         == 200
     )

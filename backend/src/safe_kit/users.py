@@ -149,11 +149,13 @@ class User:
     title: str | None = None
     # NULL only for accounts created before the email requirement (migration 0016).
     email: str | None = None
+    # Starts at 1 and rises by one with each change to the account (see update_user). Sent back as If-Match.
+    revision: int = 1
 
 
 _COLUMNS = (
     "id::text, username, role, is_active, password_hash, sessions_valid_after, must_change_password, created_at, "
-    "is_protected, first_name, last_name, title, email, password_changed_at"
+    "is_protected, first_name, last_name, title, email, password_changed_at, revision"
 )
 
 
@@ -174,6 +176,7 @@ def _to_user(row: tuple) -> User:
         last_name=row[10],
         title=row[11],
         email=row[12],
+        revision=row[14],
     )
 
 
@@ -367,7 +370,7 @@ def _set_password(
             """
             UPDATE users
             SET password_hash = %s, must_change_password = %s, password_changed_at = now(),
-                sessions_valid_after = now()
+                sessions_valid_after = now(), revision = revision + 1
             WHERE id = %s
             """,
             (password_hash, must_change, user_id),
@@ -418,6 +421,8 @@ class UpdateOutcome(Enum):
     NOT_FOUND = "not_found"
     LAST_ADMIN = "last_admin"
     PROTECTED = "protected"
+    # The If-Match revision is not the account's current revision. Nothing changed.
+    REVISION_MISMATCH = "revision_mismatch"
 
 
 def update_user(
@@ -425,20 +430,28 @@ def update_user(
     role: str | None = None,
     is_active: bool | None = None,
     actor_id: str | None = None,
+    *,
+    expected_revision: int | None = None,
 ) -> UpdateOutcome:
     """Change a user's role and/or active state. Refuses if the change would leave no active admin.
+
+    expected_revision is the account revision the caller read. The API always passes it; None skips the check and is
+    only for server-side callers that hold no client revision. A change that changes nothing keeps the revision;
+    otherwise the revision rises by one in the same transaction as the change.
 
     The audit row records only the fields whose value actually changed, and commits with the change.
     """
     with connect() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (ADMIN_SET_LOCK_KEY,))
         current = conn.execute(
-            "SELECT role, is_active, is_protected FROM users WHERE id = %s AND NOT is_deleted",
+            "SELECT role, is_active, is_protected, revision FROM users WHERE id = %s AND NOT is_deleted FOR UPDATE",
             (user_id,),
         ).fetchone()
         if current is None:
             return UpdateOutcome.NOT_FOUND
-        current_role, current_active, protected = current
+        current_role, current_active, protected, revision = current
+        if expected_revision is not None and revision != expected_revision:
+            return UpdateOutcome.REVISION_MISMATCH
         new_role = role if role is not None else current_role
         new_active = is_active if is_active is not None else current_active
         if protected and (new_role != "admin" or not new_active):
@@ -460,8 +473,8 @@ def update_user(
         if new_active != current_active:
             changes["is_active"] = {"from": current_active, "to": new_active}
         conn.execute(
-            "UPDATE users SET role = %s, is_active = %s WHERE id = %s",
-            (new_role, new_active, user_id),
+            "UPDATE users SET role = %s, is_active = %s, revision = revision + %s WHERE id = %s",
+            (new_role, new_active, int(bool(changes)), user_id),
         )
         if not new_active:
             _end_sessions(conn, user_id)
@@ -498,7 +511,8 @@ def soft_delete_user(user_id: str, actor_id: str | None = None) -> UpdateOutcome
             if others == 0:
                 return UpdateOutcome.LAST_ADMIN
         conn.execute(
-            "UPDATE users SET is_deleted = true, deleted_at = now(), is_active = false WHERE id = %s",
+            "UPDATE users SET is_deleted = true, deleted_at = now(), is_active = false, revision = revision + 1 "
+            "WHERE id = %s",
             (user_id,),
         )
         _end_sessions(conn, user_id)
@@ -574,7 +588,9 @@ def update_profile(
             )
             try:
                 conn.execute(
-                    sql.SQL("UPDATE users SET {} WHERE id = %s").format(assignments),
+                    sql.SQL(
+                        "UPDATE users SET {}, revision = revision + 1 WHERE id = %s"
+                    ).format(assignments),
                     [changes[field] for field in changed] + [user_id],
                 )
             except psycopg.errors.UniqueViolation as error:
