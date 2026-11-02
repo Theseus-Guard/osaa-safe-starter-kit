@@ -87,6 +87,8 @@ const MESSAGES: Record<string, string> = {
   "disclosure version not found": "That disclosure version does not exist on this case.",
   manual_fallback_required:
     "Your account can record a notice only on the manual path. Choose the manual path and give the reason.",
+  preparer_cannot_record:
+    "You prepared this version, so another person must record its notice. Ask an independent person to record it.",
   repeat_reason_required: "This recipient already has a notice for this version. Give a reason for the second notice.",
   time_out_of_range:
     "The time is before the approval or the send, or it is in the future. Enter the time it happened.",

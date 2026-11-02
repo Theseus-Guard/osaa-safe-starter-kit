@@ -2232,6 +2232,9 @@ NOTICE_STATUS_TEXT = {
     "manual_fallback_required": (
         "your account records notices on the manual path only. Give --manual-fallback and --fallback-reason"
     ),
+    "preparer_cannot_record": (
+        "you prepared this version, so another person must record its notice. Ask an independent person to record it"
+    ),
     "idempotency_key_reused": "this Idempotency-Key was used with another request. Run again without --idempotency-key",
 }
 

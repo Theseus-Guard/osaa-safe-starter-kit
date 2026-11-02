@@ -27,6 +27,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from safe_kit import api, system_timezone
+from safe_kit.db import connect
 from safe_kit.case_records import (
     IMPACT_AREAS,
     REPORT_CLASSIFICATION_FIELDS,
@@ -239,3 +240,54 @@ def test_each_new_version_records_its_next_update_and_the_report_shows_the_lates
     report = triager.get(f"/api/v1/cases/{case_id}/preliminary-report").json()
     assert report["classification"]["version"] == 2
     assert datetime.fromisoformat(report["classification"]["next_update_due_at"]) == datetime.fromisoformat(later)
+
+
+@requires_database
+def test_open_gaps_are_stored_as_gaps_and_every_read_lists_them(record_people):
+    """Nothing fills a gap in: a missing containment stays NULL in the stored version, an impact area with no row stays
+    not assessed, and an area recorded as unknown stays unknown. The report and each read show the same open items."""
+    case_id = new_case(record_people["reporter"])
+    triager = record_people["triager"]
+    body = classification_body(0)
+    body["containment"] = None
+    body["evidence_gap_plan"] = None
+    assert triager.put(f"/api/v1/cases/{case_id}/classification", json=body, headers=idem()).status_code == 200
+    scale = triager.put(
+        f"/api/v1/cases/{case_id}/impacts/scale", json={"severity": "unknown", "scope": "to research"}, headers=idem()
+    )
+    assert scale.status_code == 200, scale.text
+
+    with connect() as conn:
+        stored_classification = conn.execute(
+            """
+            SELECT containment, evidence_gap_plan FROM case_classifications
+            WHERE case_id = %s AND NOT is_deleted ORDER BY version DESC LIMIT 1
+            """,
+            (case_id,),
+        ).fetchone()
+        stored_impacts = conn.execute(
+            "SELECT area, severity FROM impacts WHERE case_id = %s AND NOT is_deleted ORDER BY area", (case_id,)
+        ).fetchall()
+    assert stored_classification == (None, None)
+    assert stored_impacts == [("scale", "unknown")]
+
+    impacts = {item["area"]: item for item in triager.get(f"/api/v1/cases/{case_id}/impacts").json()}
+    assert set(impacts) == set(IMPACT_AREAS)
+    assert impacts["scale"]["assessed"] is True and impacts["scale"]["severity"] == "unknown"
+    assert all(not impacts[area]["assessed"] for area in IMPACT_AREAS if area != "scale")
+
+    classification = triager.get(f"/api/v1/cases/{case_id}/classification").json()
+    assert classification["containment"] is None and classification["evidence_gap_plan"] is None
+
+    report = triager.get(f"/api/v1/cases/{case_id}/preliminary-report").json()
+    assert report["complete"] is False
+    missing = {(item["field"], item["state"]) for item in report["missing_fields"]}
+    assert {
+        ("classification.containment", "missing"),
+        ("classification.evidence_gap_plan", "missing"),
+        ("impacts.scale", "unknown"),
+    } <= missing
+    assert {(f"impacts.{area}", "missing") for area in IMPACT_AREAS if area != "scale"} <= missing
+    # Reading again gives the same open items, so nothing was filled in by the read.
+    again = triager.get(f"/api/v1/cases/{case_id}/preliminary-report").json()
+    assert again["missing_fields"] == report["missing_fields"]

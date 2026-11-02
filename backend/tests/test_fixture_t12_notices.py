@@ -419,19 +419,25 @@ def test_the_notice_and_disclosure_modules_hold_no_sender_and_no_retry_queue():
 # --- manual fallback, cancel and the permissions -----------------------------------------------------------------------
 
 
+def with_independent_triager(dw) -> dict:
+    """The same case, with a second triager who did not prepare the versions. The manual path is open to them."""
+    return {**dw, "people": {**dw["people"], "independent": db_user("triager")}}
+
+
 @requires_database
-def test_the_manual_path_needs_a_reason_and_is_open_to_a_preparer_who_is_not_the_approver(dworld):
-    version, _ = approved_version(dworld)
-    normal = record(dworld, "triager", version["id"], payload())
+def test_the_manual_path_needs_a_reason_and_is_open_to_an_independent_preparer_role(dworld):
+    dw = with_independent_triager(dworld)
+    version, _ = approved_version(dw)
+    normal = record(dw, "independent", version["id"], payload())
     assert normal.status_code == 403
     assert normal.json()["detail"] == {"status": "manual_fallback_required"}
 
-    no_reason = record(dworld, "triager", version["id"], payload(manual_fallback=True))
+    no_reason = record(dw, "independent", version["id"], payload(manual_fallback=True))
     assert no_reason.status_code == 400
 
     manual = record(
-        dworld,
-        "triager",
+        dw,
+        "independent",
         version["id"],
         payload(manual_fallback=True, fallback_reason="The approver is on leave and the member needs the notice today"),
     )
@@ -439,22 +445,49 @@ def test_the_manual_path_needs_a_reason_and_is_open_to_a_preparer_who_is_not_the
     notice = manual.json()
     assert notice["manual_fallback"] is True
     assert notice["fallback_reason"].startswith("The approver is on leave")
-    assert notice["recorded_by"] == dworld["people"]["triager"]
+    assert notice["recorded_by"] == dw["people"]["independent"]
     assert notice["state"] == "sent"
 
 
 @requires_database
-def test_the_manual_path_does_not_pause_or_change_the_deadlines(dworld):
+def test_the_person_who_prepared_the_version_cannot_record_its_notice_on_either_path(dworld):
     version, _ = approved_version(dworld)
-    before = open_deadline_tasks(dworld["case_id"])
-    response = record(
+    manual = record(
         dworld,
         "triager",
+        version["id"],
+        payload(manual_fallback=True, fallback_reason="The approver is unavailable and I prepared the package"),
+    )
+    assert manual.status_code == 403, manual.text
+    assert manual.json()["detail"] == {"status": "preparer_cannot_record"}
+    assert row_count(version["id"]) == 0
+
+
+@requires_database
+def test_the_manual_path_does_not_pause_or_change_the_deadlines(dworld):
+    dw = with_independent_triager(dworld)
+    version, _ = approved_version(dw)
+    before = open_deadline_tasks(dw["case_id"])
+    response = record(
+        dw,
+        "independent",
         version["id"],
         payload(manual_fallback=True, fallback_reason="Approver unavailable during the deadline window"),
     )
     assert response.status_code == 201
+    assert open_deadline_tasks(dw["case_id"]) == before
+
+
+@requires_database
+def test_an_internal_reminder_is_not_an_external_notice(dworld):
+    """An open deadline task for an external notice (an internal reminder) is not a notice: the list stays empty, and
+    reading it neither completes the task nor records anything."""
+    version, _ = approved_version(dworld)
+    before = open_deadline_tasks(dworld["case_id"])
+    assert any(kind == "affected_customers" and status == "open" for kind, status in before)
+    assert read_list(dworld, "approver", version["id"]).json()["items"] == []
     assert open_deadline_tasks(dworld["case_id"]) == before
+    assert row_count(version["id"]) == 0
 
 
 @requires_database

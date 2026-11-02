@@ -226,6 +226,7 @@ def test_a_repeat_notice_sends_its_reason(api, capsys):
         ),
         (422, {"status": "repeat_reason_required"}, "--repeat-reason"),
         (403, {"status": "manual_fallback_required"}, "--manual-fallback"),
+        (403, {"status": "preparer_cannot_record"}, "another person must record its notice"),
         (422, {"status": "time_out_of_range"}, "Enter the time it happened"),
         (
             409,
