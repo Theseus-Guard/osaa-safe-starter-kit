@@ -172,6 +172,8 @@ def test_readiness_is_503_when_the_database_cannot_be_reached_and_liveness_stays
     monkeypatch.setenv("SAFE_DB_PASSWORD_FILE", str(password_file))
     monkeypatch.setenv("SAFE_DB_HOST", "127.0.0.1")
     monkeypatch.setenv("SAFE_DB_PORT", str(_closed_local_port()))
+    monkeypatch.setenv("SAFE_DB_NAME", "safe")
+    monkeypatch.setenv("SAFE_DB_USER", "safe_api")
     client = TestClient(api.app)
 
     ready = client.get("/api/v1/health/ready")

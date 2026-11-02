@@ -2,11 +2,13 @@
 reconciliation that fails pending uploads left behind by a crash (see safe_kit.evidence.fail_stale_pending)."""
 
 import logging
+import os
 import signal
 import sys
 import time
 from types import FrameType
 
+from safe_kit.config_guard import ConfigError, load_settings
 from safe_kit.db import connect
 from safe_kit.evidence import fail_stale_pending
 from safe_kit.outbox import run_once
@@ -65,4 +67,10 @@ def main() -> int:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    # The startup guard runs before main() and before any database connection is opened.
+    try:
+        load_settings(os.environ)
+    except ConfigError as error:
+        logger.error("refusing to start: %s", error)
+        sys.exit(2)
     sys.exit(main())

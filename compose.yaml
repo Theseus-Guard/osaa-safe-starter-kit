@@ -21,6 +21,7 @@ x-app: &app
 
 x-db-target: &db-target
   SAFE_DB_HOST: db
+  SAFE_DB_PORT: "5432"
   SAFE_DB_NAME: safe
 
 services:
@@ -93,6 +94,11 @@ services:
     command: ["uvicorn", "safe_kit.api:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       <<: *db-target
+      # Demo mode: SAFE_BIND_HOST is the published host address (loopback only). The process itself listens on
+      # 0.0.0.0 inside the container so that the gateway can reach it.
+      SAFE_MODE: demo
+      SAFE_BIND_HOST: 127.0.0.1
+      SAFE_DATASET: synthetic-demo
       SAFE_DB_USER: safe_api
       SAFE_DB_PASSWORD_FILE: /run/secrets/db_app_password
       SAFE_JWT_KEY_FILE: /run/secrets/jwt_signing_key
@@ -104,6 +110,9 @@ services:
       - evidence_kek
     volumes:
       - evidence-data:/var/lib/safe/evidence
+    # Published on loopback only, for the demo. The gateway reaches the API over the edge network.
+    ports:
+      - "127.0.0.1:8000:8000"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -122,6 +131,10 @@ services:
     command: ["python", "-m", "safe_kit.worker"]
     environment:
       <<: *db-target
+      # The worker opens no listening socket; the loopback value only satisfies the demo-mode rule of the startup guard.
+      SAFE_MODE: demo
+      SAFE_BIND_HOST: 127.0.0.1
+      SAFE_DATASET: synthetic-demo
       SAFE_DB_USER: safe_worker
       SAFE_DB_PASSWORD_FILE: /run/secrets/db_worker_password
     secrets:

@@ -1,6 +1,9 @@
 import csv
 import io
+import os
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -49,6 +52,7 @@ from safe_kit.cases import (
     record_review,
     redact_history,
     reopen_case,
+from safe_kit.config_guard import load_settings
     unassign_member,
     update_deadline,
 )
@@ -111,7 +115,15 @@ from safe_kit.users import (
     update_user,
 )
 
-app = FastAPI(title="SAFE-Starter-Kit API", version="0.1.0")
+@asynccontextmanager
+async def _startup_guard(_app: FastAPI) -> AsyncIterator[None]:
+    # uvicorn imports this module and runs the lifespan before it serves any request. ConfigError makes the startup
+    # fail, so the server does not start. No database connection is opened before this check.
+    load_settings(os.environ)
+    yield
+
+
+app = FastAPI(title="SAFE-Starter-Kit API", version="0.1.0", lifespan=_startup_guard)
 
 
 @app.exception_handler(RequestValidationError)
