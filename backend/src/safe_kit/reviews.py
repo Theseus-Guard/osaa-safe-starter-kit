@@ -74,6 +74,8 @@ class RoundOutcome(Enum):
     WITHDRAWN = "withdrawn"
     REVISION_CONFLICT = "revision_conflict"
     REASON_REQUIRED = "reason_required"
+    # A pass is supported only by evidence: it cites at least one item (plans/03, T06).
+    EVIDENCE_REQUIRED = "evidence_required"
     UNKNOWN_EVIDENCE = "unknown_evidence"
     REPLAY = "replay"
     KEY_REUSED = "key_reused"
@@ -238,6 +240,9 @@ def set_layer(
 ) -> tuple[RoundOutcome, Round | None]:
     """Set one layer of a round.
 
+    A pass must cite at least one evidence item of the case, and every cited item must be available (T06): otherwise
+    the request is refused and nothing changes. The reason is optional for a pass and required for the other outcomes.
+
     A request that changes nothing stores nothing, writes no audit row, and keeps the revision. Otherwise the layer
     and the round revision change in one transaction. On a revision conflict the current round is returned, and the
     caller may read only its revision from it.
@@ -250,6 +255,8 @@ def set_layer(
     if outcome != "pass" and reason is None:
         return RoundOutcome.REASON_REQUIRED, None
     unique_evidence = list(dict.fromkeys(evidence_ids))
+    if outcome == "pass" and not unique_evidence:
+        return RoundOutcome.EVIDENCE_REQUIRED, None
     with connect() as conn:
         check(conn, idempotency)
         head = conn.execute(

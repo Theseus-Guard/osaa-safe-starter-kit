@@ -18,6 +18,7 @@ from safe_kit.cases import CaseScope
 from safe_kit.db import connect
 from safe_kit.idempotency import StoredResponse, fingerprint, valid_key
 from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS
+from safe_kit import reviews
 from safe_kit.reviews import TEMPLATE_LAYERS, LayerEntry, Round, RoundOutcome
 from safe_kit.users import User
 
@@ -310,13 +311,28 @@ def test_reason_is_required_for_every_outcome_except_pass(client, caller, monkey
     ).status_code == 422
 
 
-def test_pass_needs_no_reason(client, caller, monkeypatch):
+def test_pass_needs_evidence_and_is_refused_without_it(client, caller):
+    # A pass is supported only by evidence (T06). Refused before any database access, with or without a reason.
     as_role(caller, REVIEWER_ID, "reviewer")
-    monkeypatch.setattr(reviews_api, "set_layer", lambda *args, **kwargs: (RoundOutcome.OK, fake_round(revision=2)))
-    response = client.patch(
-        f"/api/v1/reviews/{ROUND_ID}/layers/model", json={"outcome": "pass", "expected_revision": 1}, headers=idem()
-    )
-    assert response.status_code == 200
+    url = f"/api/v1/reviews/{ROUND_ID}/layers/model"
+    for body in (
+        {"outcome": "pass", "expected_revision": 1},
+        {"outcome": "pass", "reason": "Checked", "evidence_ids": [], "expected_revision": 1},
+    ):
+        response = client.patch(url, json=body, headers=idem())
+        assert response.status_code == 422
+        assert response.json() == {"detail": "a pass needs at least one evidence item of this case"}
+
+
+def test_set_layer_refuses_a_pass_without_evidence_before_the_database_is_used(monkeypatch):
+    def no_database(*args, **kwargs):
+        raise AssertionError("the database must not be used for a pass without evidence")
+
+    monkeypatch.setattr(reviews, "connect", no_database)
+    scope = CaseScope.from_permissions(REVIEWER_ID, frozenset({"reviews:write"}))
+    outcome, review = reviews.set_layer(ROUND_ID, "model", "pass", None, [], 1, scope)
+    assert outcome is RoundOutcome.EVIDENCE_REQUIRED
+    assert review is None
 
 
 def test_expected_revision_is_required(client, caller, monkeypatch):
@@ -525,7 +541,7 @@ def test_each_change_increments_the_revision_and_a_stale_write_changes_nothing(d
     assert first.status_code == 200, first.text
     assert first.json()["revision"] == 2
 
-    stale = reviewer.patch(url, json={"outcome": "pass", "expected_revision": 1}, headers=idem())
+    stale = reviewer.patch(url, json={"outcome": "fail", "reason": "stale", "expected_revision": 1}, headers=idem())
     assert stale.status_code == 409
     assert stale.json() == {"detail": {"status": "revision_conflict", "current_revision": 2}}
 
@@ -539,10 +555,10 @@ def test_each_change_increments_the_revision_and_a_stale_write_changes_nothing(d
     assert unchanged.status_code == 200
     assert unchanged.json()["revision"] == 2
 
-    second = reviewer.patch(url, json={"outcome": "pass", "expected_revision": 2}, headers=idem())
+    second = reviewer.patch(url, json={"outcome": "fail", "reason": "second", "expected_revision": 2}, headers=idem())
     assert second.status_code == 200
     assert second.json()["revision"] == 3
-    assert layer(second.json(), "model")["reason"] is None
+    assert layer(second.json(), "model")["reason"] == "second"
 
 
 @requires_database
@@ -559,10 +575,69 @@ def test_reason_rules_on_the_stored_layer(db_client, people):
         url, json={"outcome": "not_applicable", "reason": "  ", "expected_revision": 1}, headers=idem()
     ).status_code == 422
 
-    passed = reviewer.patch(url, json={"outcome": "pass", "expected_revision": 1}, headers=idem())
+    refused = reviewer.patch(url, json={"outcome": "pass", "expected_revision": 1}, headers=idem())
+    assert refused.status_code == 422
+    assert refused.json() == {"detail": "a pass needs at least one evidence item of this case"}
+    assert layer(review_body(db_client, people["reviewer"], review_id), "tools")["outcome"] is None
+
+    evidence_id = insert_evidence(case_id, people["investigator"], "available")
+    passed = reviewer.patch(
+        url, json={"outcome": "pass", "evidence_ids": [evidence_id], "expected_revision": 1}, headers=idem()
+    )
     assert passed.status_code == 200
     assert layer(passed.json(), "tools")["outcome"] == "pass"
     assert layer(passed.json(), "tools")["reason"] is None
+
+
+@requires_database
+def test_a_pass_must_cite_an_available_item_of_its_own_case(db_client, people):
+    case_id = create_case_via_api(db_client, people["reporter"])
+    assign_reviewer(db_client, people, case_id)
+    reviewer = db_client(people["reviewer"])
+    review_id = open_round(db_client, people, case_id)["id"]
+    url = f"/api/v1/reviews/{review_id}/layers/model"
+    other_case = create_case_via_api(db_client, people["reporter"])
+    refused_for = {
+        "an item of another case": insert_evidence(other_case, people["investigator"], "available"),
+        "a pending item of this case": insert_evidence(case_id, people["investigator"], "pending"),
+    }
+    for label, evidence_id in refused_for.items():
+        response = reviewer.patch(
+            url, json={"outcome": "pass", "evidence_ids": [evidence_id], "expected_revision": 1}, headers=idem()
+        )
+        assert response.status_code == 422, label
+        assert response.json() == {"detail": "evidence is not available on this case"}, label
+    # Nothing was stored: the round still has its eleven layers not set, at revision 1.
+    body = review_body(db_client, people["reviewer"], review_id)
+    assert body["revision"] == 1
+    assert layer(body, "model")["outcome"] is None
+
+
+def insert_evidence(case_id: str, uploader_id: str, status: str) -> str:
+    """One evidence item row, written directly. Only the status and the case matter to the review rules."""
+    with connect() as conn:
+        return conn.execute(
+            """
+            INSERT INTO evidence_items (case_id, uploaded_by, original_filename, media_type, size_bytes, storage_key,
+                                        key_id, wrapped_data_key, nonce, status, sha256_plaintext, sha256_ciphertext)
+            VALUES (%s, %s, 'note.txt', 'text/plain', 1, %s, 'test', '\\x00'::bytea, '\\x00'::bytea, %s, %s, %s)
+            RETURNING id::text
+            """,
+            (
+                case_id,
+                uploader_id,
+                str(uuid.uuid4()),
+                status,
+                "0" * 64 if status == "available" else None,
+                "0" * 64 if status == "available" else None,
+            ),
+        ).fetchone()[0]
+
+
+def review_body(db_client, user: str, review_id: str) -> dict:
+    response = db_client(user).get(f"/api/v1/reviews/{review_id}")
+    assert response.status_code == 200, response.text
+    return response.json()
 
 
 @requires_database
@@ -634,7 +709,9 @@ def test_an_unassigned_reviewer_cannot_open_a_round_or_set_a_layer(db_client, pe
     review_id = open_round(db_client, people, case_id)["id"]
     investigator = db_client(people["investigator"])
     assert investigator.patch(
-        f"/api/v1/reviews/{review_id}/layers/model", json={"outcome": "pass", "expected_revision": 1}, headers=idem()
+        f"/api/v1/reviews/{review_id}/layers/model",
+        json={"outcome": "fail", "reason": "Reviewed for this test", "expected_revision": 1},
+        headers=idem(),
     ).status_code == 403
 
 

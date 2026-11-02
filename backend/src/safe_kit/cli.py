@@ -1035,6 +1035,8 @@ def _review_record(base_url: str, args: argparse.Namespace) -> None:
         raise UsageError("a reason is required for this outcome: pass --reason TEXT")
     round_id = _case_id_arg(args.round) if args.round is not None else None
     evidence_ids = [_case_id_arg(item) for item in args.evidence]
+    if args.outcome == "pass" and not evidence_ids:
+        raise UsageError("a pass needs at least one evidence item of this case: pass --evidence EVIDENCE_ID")
     payload = {
         "outcome": args.outcome,
         "reason": reason,
@@ -1859,7 +1861,7 @@ def _add_case_update_commands(case_commands) -> None:
     review_record.add_argument("--note", help="Same as --reason, kept for existing scripts")
     review_record.add_argument(
         "--evidence", action="append", default=[], metavar="EVIDENCE_ID",
-        help="Evidence item ID (UUID) of this case. Repeat for more than one",
+        help="Evidence item ID (UUID) of this case. Repeat for more than one. Required for a pass",
     )
     review_record.add_argument(
         "--round", metavar="ROUND_ID", help="Review round ID (UUID). Default: the open round of the case"

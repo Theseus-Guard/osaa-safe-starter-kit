@@ -125,7 +125,24 @@ describe("CaseReview", () => {
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("A reason is required for this outcome.");
   });
 
-  it("saves a pass without a reason, with the revision the editor read", async () => {
+  it("refuses a pass without evidence and sends nothing", async () => {
+    list.mockResolvedValue([roundAt(3, null)]);
+    const user = userEvent.setup();
+    render(<CaseReview caseId="case-1" closed={false} canReview onRecorded={() => {}} />);
+
+    await screen.findByText("Revision 3, open");
+    const dialog = await openLayerDialog(user, "Model");
+    await chooseOutcome(user, dialog, "Pass");
+    await user.click(within(dialog).getByRole("button", { name: "Save layer" }));
+
+    expect(setLayer).not.toHaveBeenCalled();
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "A pass needs at least one evidence item of this case.",
+    );
+  });
+
+  it("saves a pass that cites evidence, with the revision the editor read", async () => {
+    const evidenceId = "5b0c1d2e-3f4a-4b5c-8d6e-7f8091a2b3c4";
     list.mockResolvedValueOnce([roundAt(3, null)]).mockResolvedValueOnce([roundAt(4, "pass")]);
     setLayer.mockResolvedValue(roundAt(4, "pass"));
     const onRecorded = vi.fn();
@@ -135,19 +152,37 @@ describe("CaseReview", () => {
     await screen.findByText("Revision 3, open");
     const dialog = await openLayerDialog(user, "Model");
     await chooseOutcome(user, dialog, "Pass");
+    await user.type(within(dialog).getByLabelText("Evidence IDs"), evidenceId);
     await user.click(within(dialog).getByRole("button", { name: "Save layer" }));
 
     await waitFor(() =>
       expect(setLayer).toHaveBeenCalledWith("round-1", "model", {
         outcome: "pass",
         reason: null,
-        evidence_ids: [],
+        evidence_ids: [evidenceId],
         expected_revision: 3,
       }),
     );
     expect(toast.success).toHaveBeenCalledWith("Review layer saved.");
     expect(onRecorded).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("shows the refusal the server gives for a pass without an available evidence item", async () => {
+    list.mockResolvedValue([roundAt(3, null)]);
+    setLayer.mockRejectedValueOnce(new ApiError(422, "a pass needs at least one evidence item of this case"));
+    const user = userEvent.setup();
+    render(<CaseReview caseId="case-1" closed={false} canReview onRecorded={() => {}} />);
+
+    await screen.findByText("Revision 3, open");
+    const dialog = await openLayerDialog(user, "Model");
+    await chooseOutcome(user, dialog, "Pass");
+    await user.type(within(dialog).getByLabelText("Evidence IDs"), "5b0c1d2e-3f4a-4b5c-8d6e-7f8091a2b3c4");
+    await user.click(within(dialog).getByRole("button", { name: "Save layer" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "A pass needs at least one evidence item of this case.",
+    );
   });
 
   it("sends the trimmed reason and the evidence IDs for a fail", async () => {
@@ -202,7 +237,8 @@ describe("CaseReview", () => {
 
     await screen.findByText("Revision 3, open");
     const dialog = await openLayerDialog(user, "Model");
-    await chooseOutcome(user, dialog, "Pass");
+    await chooseOutcome(user, dialog, "Fail");
+    await user.type(within(dialog).getByLabelText("Reason"), "Gap found");
     await user.click(within(dialog).getByRole("button", { name: "Save layer" }));
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(

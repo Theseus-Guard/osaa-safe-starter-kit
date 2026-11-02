@@ -742,7 +742,7 @@ def test_close_is_refused_without_review_and_with_open_tasks(db_client, people):
     assert "no review is recorded" in refused.json()["detail"]
     assert "deadline task affected_customers is open" in refused.json()["detail"]
 
-    open_and_set_review(db_client(people["reviewer"]), case_id, "pass")
+    open_and_set_review(db_client(people["reviewer"]), case_id, "fail", reason="Reviewed for this test")
     refused = triager.post(f"/api/v1/cases/{case_id}/close", json={"reason": "all done"}, headers=idem())
     assert refused.status_code == 409
     assert "no review" not in refused.json()["detail"]
@@ -754,7 +754,7 @@ def test_close_is_refused_with_an_open_weekly_update(db_client, people):
     case_id = create_case_via_api(db_client, people["reporter"])
     triager = db_client(people["triager"])
     triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]}, headers=idem())
-    open_and_set_review(db_client(people["reviewer"]), case_id, "pass")
+    open_and_set_review(db_client(people["reviewer"]), case_id, "fail", reason="Reviewed for this test")
     tasks = task_ids(db_client, people["triager"], case_id)
     for kind, task_id in tasks.items():
         response = triager.patch(f"/api/v1/cases/{case_id}/deadlines/{task_id}", json={"status": "done"}, headers=idem())
@@ -811,7 +811,7 @@ def test_closed_case_refuses_changes_and_reopen_is_audited(db_client, people):
     case_id = create_case_via_api(db_client, people["reporter"])
     triager = db_client(people["triager"])
     triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]}, headers=idem())
-    open_and_set_review(db_client(people["reviewer"]), case_id, "pass")
+    open_and_set_review(db_client(people["reviewer"]), case_id, "fail", reason="Reviewed for this test")
     tasks = task_ids(db_client, people["triager"], case_id)
     for kind, task_id in tasks.items():
         triager.patch(
@@ -880,7 +880,7 @@ def test_close_and_reopen_reasons_are_stored_as_text(db_client, people):
     case_id = create_case_via_api(db_client, people["reporter"])
     triager = db_client(people["triager"])
     triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]}, headers=idem())
-    open_and_set_review(db_client(people["reviewer"]), case_id, "pass")
+    open_and_set_review(db_client(people["reviewer"]), case_id, "fail", reason="Reviewed for this test")
     for kind, task_id in task_ids(db_client, people["triager"], case_id).items():
         triager.patch(
             f"/api/v1/cases/{case_id}/deadlines/{task_id}",

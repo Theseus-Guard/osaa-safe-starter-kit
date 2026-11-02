@@ -56,7 +56,14 @@ def world(monkeypatch, provider):  # noqa: F811
     original = evidence.create_evidence(
         case.id, people["investigator"], "notes.txt", "text/plain", TEXT, storage, provider, scope,
     )
-    yield {"people": people, "case_id": case.id, "original_id": original.id, "storage": storage, "provider": provider}
+    # A second item of the same case that no claim cites: a pass citing only it makes no claim about the original.
+    other = evidence.create_evidence(
+        case.id, people["investigator"], "other.txt", "text/plain", b"Other notes\n", storage, provider, scope,
+    )
+    yield {
+        "people": people, "case_id": case.id, "original_id": original.id, "other_id": other.id,
+        "storage": storage, "provider": provider,
+    }
     api.app.dependency_overrides.clear()
 
 
@@ -189,7 +196,7 @@ def test_a_claim_citing_the_original_is_insufficient_evidence_on_the_derived_ite
     review, scope = fresh_round(world)
     outcome, _ = reviews.set_layer(review.id, "model", "pass", None, [world["original_id"]], 1, scope)
     assert outcome is RoundOutcome.OK
-    outcome, _ = reviews.set_layer(review.id, "instructions", "pass", None, [], 2, scope)
+    outcome, _ = reviews.set_layer(review.id, "instructions", "pass", None, [world["other_id"]], 2, scope)
     assert outcome is RoundOutcome.OK
 
     created = make_derived(world, "AMBER")
@@ -206,7 +213,7 @@ def test_a_claim_citing_the_original_is_insufficient_evidence_on_the_derived_ite
 @requires_database
 def test_a_claim_that_does_not_cite_the_original_is_not_assessed(world):
     review, scope = fresh_round(world)
-    outcome, _ = reviews.set_layer(review.id, "tools", "pass", None, [], 1, scope)
+    outcome, _ = reviews.set_layer(review.id, "tools", "pass", None, [world["other_id"]], 1, scope)
     assert outcome is RoundOutcome.OK
     assert make_derived(world, "AMBER")["claim_assessments"] == []
 

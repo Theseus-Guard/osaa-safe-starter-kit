@@ -279,6 +279,10 @@ def set_review_layer(
         raise HTTPException(
             status_code=422, detail="a reason is required for this outcome"
         )
+    if outcome is RoundOutcome.EVIDENCE_REQUIRED:
+        raise HTTPException(
+            status_code=422, detail="a pass needs at least one evidence item of this case"
+        )
     if outcome is RoundOutcome.UNKNOWN_EVIDENCE:
         raise HTTPException(
             status_code=422, detail="evidence is not available on this case"

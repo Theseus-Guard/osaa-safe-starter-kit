@@ -448,7 +448,7 @@ def close_reporter_case(db_client, people, case_id: str) -> None:
     assert opened.status_code == 201, opened.text
     reviewed = db_client(people["reviewer"]).patch(
         f"/api/v1/reviews/{opened.json()['id']}/layers/model",
-        json={"outcome": "pass", "expected_revision": opened.json()["revision"]},
+        json={"outcome": "fail", "reason": "Reviewed for this test", "expected_revision": opened.json()["revision"]},
         headers=idem(),
     )
     assert reviewed.status_code == 200, reviewed.text

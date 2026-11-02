@@ -138,7 +138,9 @@ def appeal(db_client, people: dict, who: str, round_id: str, grounds: str = "The
     )
 
 
-def set_layer(db_client, people: dict, who: str, round_id: str, revision: int, outcome: str = "pass", reason=None):
+def set_layer(
+    db_client, people: dict, who: str, round_id: str, revision: int, outcome: str = "fail", reason="Reviewed for this test"
+):
     body = {"outcome": outcome, "expected_revision": revision}
     if reason is not None:
         body["reason"] = reason

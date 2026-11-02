@@ -233,7 +233,7 @@ def test_closed_case_refuses_deadline_changes_until_it_is_reopened():
     reviewer_scope = CaseScope(reviewer, read_assigned=True)
     round_outcome, review_round, _ = reviews.open_round(case.id, reviewer_scope)
     assert round_outcome is RoundOutcome.OK
-    assert reviews.set_layer(review_round.id, "model", "pass", None, [], 1, reviewer_scope)[0] is RoundOutcome.OK
+    assert reviews.set_layer(review_round.id, "model", "fail", "Gap", [], 1, reviewer_scope)[0] is RoundOutcome.OK
     assert cases.close_case(case.id, "Closed for the test", triage) == (Outcome.OK, [])
 
     task = case.deadlines[0]
