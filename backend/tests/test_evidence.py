@@ -34,6 +34,7 @@ from safe_kit.db import connect
 from safe_kit.evidence_keys import KeyProviderError, LocalFileKeyProvider, VaultTransitKeyProvider
 from safe_kit.evidence_storage import InvalidObjectKey, LocalVolumeStorage, ObjectNotFound, StorageError
 from safe_kit.users import User
+from error_body import without_request_id
 
 PDF = b"%PDF-1.7\n" + b"incident detail " * 60 + b"\n%%EOF\n"
 MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
@@ -582,7 +583,7 @@ def test_reading_evidence_needs_evidence_read(client, monkeypatch, url_template)
     monkeypatch.setattr(evidence, "list_evidence", refuse)
     response = client.get(url_template.format(uuid.uuid4()))
     assert response.status_code == 403
-    assert response.json() == {"detail": "forbidden"}
+    assert response.json()["detail"] == "forbidden"
 
 
 @pytest.mark.parametrize("url_template", READ_ENDPOINTS)
@@ -732,7 +733,7 @@ def test_unassigned_investigator_gets_the_same_404_as_a_missing_item_or_case(evi
         hidden = request_as(other, method, hidden_url)
         absent = request_as(other, method, absent_url)
         assert hidden.status_code == absent.status_code == 404
-        assert hidden.json() == absent.json()
+        assert without_request_id(hidden) == without_request_id(absent)
 
 
 @requires_database
@@ -754,7 +755,7 @@ def test_unassigned_investigator_cannot_upload_to_a_case_it_cannot_see(evidence_
     hidden = request_as(other, "post", f"/api/v1/cases/{case_id}/evidence", content=body, headers=headers)
     absent = request_as(other, "post", f"/api/v1/cases/{uuid.uuid4()}/evidence", content=body, headers=headers)
     assert hidden.status_code == absent.status_code == 404
-    assert hidden.json() == absent.json()
+    assert without_request_id(hidden) == without_request_id(absent)
     assert evidence_count(case_id) == 1  # the refused upload wrote nothing
 
 

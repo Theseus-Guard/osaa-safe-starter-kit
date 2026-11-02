@@ -113,7 +113,7 @@ def test_case_the_caller_cannot_see_is_404(client, monkeypatch):
     monkeypatch.setattr(api, "list_assignable_users", lambda case_id, scope: None)
     response = client.get(url())
     assert response.status_code == 404
-    assert response.json() == {"detail": "case not found"}
+    assert response.json()["detail"] == "case not found"
 
 
 # --- database: which users are listed -----------------------------------------------------------------------------
@@ -249,7 +249,7 @@ def test_triager_with_cases_assign_is_not_listed_and_cannot_be_assigned(db_clien
     assert triager not in listed_ids(db_client, triager, case_id)
     response = db_client(triager).post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": triager}, headers=idem())
     assert response.status_code == 422
-    assert response.json() == {"detail": "assignee must be an investigator or reviewer"}
+    assert response.json()["detail"] == "assignee must be an investigator or reviewer"
 
 
 @requires_database
@@ -278,4 +278,4 @@ def test_unassigned_holder_of_cases_assign_gets_404_for_a_case_it_cannot_see(db_
     unassigned = new_user("investigator")
     response = db_client(unassigned).get(f"/api/v1/cases/{case_id}/assignable-users")
     assert response.status_code == 404
-    assert response.json() == {"detail": "case not found"}
+    assert response.json()["detail"] == "case not found"

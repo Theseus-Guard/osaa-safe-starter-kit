@@ -127,5 +127,5 @@ def test_an_invalid_cursor_is_refused_before_any_read(client):
 
 
 def test_a_limit_outside_the_page_bounds_is_refused(client):
-    assert client.get(f"{RECOMMENDATIONS}?limit=0").status_code == 422
-    assert client.get(f"{RECOMMENDATIONS}?limit=201").status_code == 422
+    assert client.get(f"{RECOMMENDATIONS}?limit=0").status_code == 400
+    assert client.get(f"{RECOMMENDATIONS}?limit=201").status_code == 400

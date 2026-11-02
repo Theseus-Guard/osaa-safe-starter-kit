@@ -23,6 +23,7 @@ from test_case_records_db import reporter_contact_granted_directly
 from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS, list_role_permissions, set_role_permissions
 from safe_kit.reporter_channel import REPORTER_CONTACT_READ, ContactOutcome, hide_reporter
 from safe_kit.users import User
+from error_body import without_request_id
 
 
 def idem() -> dict:
@@ -144,7 +145,7 @@ def test_contact_longer_than_200_characters_is_refused(client, caller, monkeypat
     response = client.post(
         "/api/v1/reports", json={"title": "Case", "awareness_time": PAST_AWARENESS, "contact": "x" * 201}, headers=idem()
     )
-    assert response.status_code == 422
+    assert response.status_code == 400
 
 
 def test_report_needs_the_submit_permission(client, caller, monkeypatch):
@@ -218,7 +219,7 @@ def test_contact_refused_after_the_window_is_409_with_a_stable_code(client, call
     monkeypatch.setattr(api, "read_reporter_contact", lambda case_id, scope: (ContactOutcome.WINDOW_CLOSED, None))
     response = client.get(f"/api/v1/reports/{CASE_ID}/contact")
     assert response.status_code == 409
-    assert response.json() == {"detail": {"status": "reporter_contact_window_closed"}}
+    assert response.json()["detail"] == {"status": "reporter_contact_window_closed"}
     assert "contact" not in response.json()
 
 
@@ -396,7 +397,7 @@ def test_contact_of_a_case_the_holder_cannot_see_is_404_and_not_audited(db_clien
         hidden = db_client(people["investigator"]).get(f"/api/v1/reports/{case_id}/contact")
         absent = db_client(people["investigator"]).get(f"/api/v1/reports/{uuid.uuid4()}/contact")
     assert hidden.status_code == absent.status_code == 404
-    assert hidden.json() == absent.json()
+    assert without_request_id(hidden) == without_request_id(absent)
     assert CONTACT not in hidden.text
     assert contact_audit_rows(case_id) == []
 
@@ -507,7 +508,7 @@ def test_contact_is_refused_73_hours_after_closure_and_writes_no_audit_row(db_cl
     backdate_closure(case_id, hours=73)
     response = read_contact_as_holder(db_client, people, case_id)
     assert response.status_code == 409, response.text
-    assert response.json() == {"detail": {"status": "reporter_contact_window_closed"}}
+    assert response.json()["detail"] == {"status": "reporter_contact_window_closed"}
     assert CONTACT not in response.text
     assert contact_audit_rows(case_id) == []
 

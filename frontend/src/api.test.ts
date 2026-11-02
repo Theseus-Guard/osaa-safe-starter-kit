@@ -107,6 +107,34 @@ describe("cookie session", () => {
     await expect(api.me()).rejects.toMatchObject({ status: 401, code: "not authenticated" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("maps a 400 validation body to http_400 when its detail is a list", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(400, {
+        detail: [{ type: "missing", loc: ["body", "password"], msg: "Field required" }],
+        error: {
+          code: "validation_failed",
+          message: "A field in the request is missing, has the wrong type, or is out of range.",
+          request_id: "9b1e6c52-0c8f-4a57-8f3e-5d2a7f1c0e10",
+          retryable: false,
+          fields: [{ path: "password", problem: "missing" }],
+        },
+      }),
+    );
+
+    await expect(api.me()).rejects.toMatchObject({ status: 400, code: "http_400" });
+  });
+
+  it("reads a 413 body by its detail status", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(413, {
+        detail: { status: "payload_too_large" },
+        error: { code: "payload_too_large", message: "x", request_id: "r", retryable: false },
+      }),
+    );
+
+    await expect(api.me()).rejects.toMatchObject({ status: 413, code: "payload_too_large" });
+  });
 });
 
 describe("browser storage", () => {

@@ -29,6 +29,7 @@ from safe_kit.catalog import (
 from safe_kit.db import connect
 from safe_kit.migrate import main as migrate
 from safe_kit.rbac import list_role_permissions
+from error_body import without_request_id
 
 requires_database = pytest.mark.skipif(
     os.environ.get("SAFE_TEST_DATABASE") != "1",
@@ -552,7 +553,7 @@ def test_a_repeated_entry_post_with_the_same_key_writes_once_and_a_changed_body_
         "/api/v1/catalog/entries", json=body, headers={"Idempotency-Key": key}
     )
     assert first.status_code == second.status_code == 201
-    assert first.json() == second.json()
+    assert without_request_id(first) == without_request_id(second)
 
     with connect() as conn:
         count = conn.execute(

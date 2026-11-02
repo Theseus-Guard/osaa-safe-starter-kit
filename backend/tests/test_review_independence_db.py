@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from safe_kit import api, audit, auth, system_timezone, users
 from safe_kit.db import connect
+from error_body import without_request_id
 
 requires_database = pytest.mark.skipif(
     os.environ.get("SAFE_TEST_DATABASE") != "1",
@@ -164,9 +165,7 @@ def test_t09_a_declared_conflict_blocks_the_reviewer_from_setting_a_layer_and_no
 
     blocked = set_layer(db_client, people, "reviewer", round_id, revision=1, outcome="fail", reason="Missing logs")
     assert blocked.status_code == 403
-    assert blocked.json() == {
-        "detail": "a conflict is declared on this review round, so this reviewer cannot set a layer"
-    }
+    assert blocked.json()["detail"] == "a conflict is declared on this review round, so this reviewer cannot set a layer"
 
     # Another assigned reviewer is not affected, and the refused write changed nothing.
     other = set_layer(db_client, people, "reviewer_b", round_id, revision=1)
@@ -181,7 +180,7 @@ def test_t09_a_correction_appends_and_a_withdrawal_lifts_the_block(db_client, pe
 
     again = declare(db_client, people, "reviewer", round_id, kind="declared", description="Second wording")
     assert again.status_code == 409
-    assert again.json() == {"detail": {"status": "conflict_already_declared"}}
+    assert again.json()["detail"] == {"status": "conflict_already_declared"}
 
     corrected = declare(
         db_client, people, "reviewer", round_id, kind="declared", description="Second wording",
@@ -199,7 +198,7 @@ def test_t09_a_correction_appends_and_a_withdrawal_lifts_the_block(db_client, pe
 
     stale = declare(db_client, people, "reviewer", round_id, kind="withdrawn", supersedes_id=first["id"])
     assert stale.status_code == 409
-    assert stale.json() == {"detail": {"status": "supersedes_mismatch"}}
+    assert stale.json()["detail"] == {"status": "supersedes_mismatch"}
 
     withdrawn = declare(db_client, people, "reviewer", round_id, kind="withdrawn", supersedes_id=second["id"])
     assert withdrawn.status_code == 201, withdrawn.text
@@ -207,7 +206,7 @@ def test_t09_a_correction_appends_and_a_withdrawal_lifts_the_block(db_client, pe
 
     nothing_left = declare(db_client, people, "reviewer", round_id, kind="withdrawn", supersedes_id=withdrawn.json()["id"])
     assert nothing_left.status_code == 409
-    assert nothing_left.json() == {"detail": {"status": "no_declared_conflict"}}
+    assert nothing_left.json()["detail"] == {"status": "no_declared_conflict"}
 
 
 @requires_database
@@ -285,10 +284,10 @@ def test_t09_a_second_recusal_needs_a_correction_and_a_correction_keeps_the_old_
 
     again = recuse(db_client, people, "reviewer", round_id, "reviewer_c")
     assert again.status_code == 409
-    assert again.json() == {"detail": {"status": "already_recused"}}
+    assert again.json()["detail"] == {"status": "already_recused"}
     wrong = recuse(db_client, people, "reviewer", round_id, "reviewer_c", supersedes_id=str(uuid.uuid4()))
     assert wrong.status_code == 409
-    assert wrong.json() == {"detail": {"status": "supersedes_mismatch"}}
+    assert wrong.json()["detail"] == {"status": "supersedes_mismatch"}
 
     corrected = recuse(db_client, people, "reviewer", round_id, "reviewer_c", supersedes_id=first["id"])
     assert corrected.status_code == 201, corrected.text
@@ -314,7 +313,7 @@ def test_t09_a_recusal_by_a_user_who_is_not_assigned_is_not_found(db_client, peo
     _, round_id = setup_round(db_client, people)
     response = recuse(db_client, people, "unassigned_reviewer", round_id, "reviewer_b")
     assert response.status_code == 404
-    assert response.json() == {"detail": "review not found"}
+    assert response.json()["detail"] == "review not found"
 
 
 # --- appeal to an independent reviewer (T09) ---------------------------------------------------------------------------
@@ -372,7 +371,7 @@ def test_t09_no_eligible_reviewer_refuses_the_appeal_and_stores_nothing(db_clien
 
     refused = appeal(db_client, people, "reporter", round_id)
     assert refused.status_code == 409
-    assert refused.json() == {"detail": {"status": "no_eligible_reviewer"}}
+    assert refused.json()["detail"] == {"status": "no_eligible_reviewer"}
     assert count("SELECT count(*) FROM review_appeals WHERE round_id = %s", (round_id,)) == 0
 
 
@@ -460,7 +459,7 @@ def test_t09_permissions_and_visibility_of_the_routes(db_client, people):
     hidden = db_client(people["other_investigator"]).get(f"/api/v1/reviews/{round_id}/conflicts")
     absent = db_client(people["triager"]).get(f"/api/v1/reviews/{uuid.uuid4()}/conflicts")
     assert hidden.status_code == absent.status_code == 404
-    assert hidden.json() == absent.json() == {"detail": "review not found"}
+    assert hidden.json()["detail"] == absent.json()["detail"] == "review not found"
     assert declare(db_client, people, "unassigned_reviewer", round_id, kind="declared", description="x").status_code == 404
 
 
@@ -476,7 +475,7 @@ def test_the_same_key_and_body_replays_the_first_conflict_and_writes_nothing_aga
     first = db_client(people["reviewer"]).post(url, headers=key, json=body)
     again = db_client(people["reviewer"]).post(url, headers=key, json=body)
     assert first.status_code == again.status_code == 201
-    assert again.json() == first.json()
+    assert without_request_id(again) == without_request_id(first)
     assert count("SELECT count(*) FROM review_conflicts WHERE round_id = %s", (round_id,)) == 1
     assert count(
         "SELECT count(*) FROM audit_events WHERE target_id = %s AND action = %s AND NOT is_deleted",
@@ -492,7 +491,7 @@ def test_the_same_key_with_another_request_is_refused_and_creates_nothing(db_cli
     assert db_client(people["reviewer"]).post(url, headers=key, json={"kind": "declared", "description": "one"}).status_code == 201
     other = db_client(people["reviewer"]).post(url, headers=key, json={"kind": "declared", "description": "two"})
     assert other.status_code == 409
-    assert other.json() == {"detail": {"status": "idempotency_key_reused"}}
+    assert other.json()["detail"] == {"status": "idempotency_key_reused"}
     assert count("SELECT count(*) FROM review_conflicts WHERE round_id = %s", (round_id,)) == 1
 
 
@@ -516,7 +515,7 @@ def test_recusal_and_appeal_replays_write_one_row_each(db_client, people):
     first = db_client(people["reviewer"]).post(url, headers=recusal_key, json=recusal_body)
     again = db_client(people["reviewer"]).post(url, headers=recusal_key, json=recusal_body)
     assert first.status_code == again.status_code == 201
-    assert again.json() == first.json()
+    assert without_request_id(again) == without_request_id(first)
     assert count("SELECT count(*) FROM review_recusals WHERE round_id = %s", (round_id,)) == 1
 
     appeal_key = {"Idempotency-Key": str(uuid.uuid4())}
@@ -525,7 +524,7 @@ def test_recusal_and_appeal_replays_write_one_row_each(db_client, people):
     first_appeal = db_client(people["reporter"]).post(appeal_url, headers=appeal_key, json=appeal_body)
     again_appeal = db_client(people["reporter"]).post(appeal_url, headers=appeal_key, json=appeal_body)
     assert first_appeal.status_code == again_appeal.status_code == 201
-    assert again_appeal.json() == first_appeal.json()
+    assert without_request_id(again_appeal) == without_request_id(first_appeal)
     assert count("SELECT count(*) FROM review_appeals WHERE round_id = %s", (round_id,)) == 1
 
 

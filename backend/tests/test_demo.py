@@ -31,6 +31,7 @@ from safe_kit.config_guard import ConfigError, is_demo
 from safe_kit.db import connect
 from safe_kit.demo_auth import DEMO_ADMIN_ID, DEMO_ADMIN_USERNAME, DEMO_ROLES, demo_credential_hash
 from safe_kit.evidence_keys import key_provider_from_env
+from error_body import without_request_id
 from safe_kit.evidence_storage import storage_from_env
 from safe_kit.migrate import main as migrate
 from safe_kit.security import hash_password, verify_password
@@ -243,7 +244,7 @@ def test_demo_sign_in_refuses_a_username_outside_the_demo_roles_without_a_lookup
     with process_env(demo_env()):
         response = client.post(SIGN_IN, json={"username": "example-user", "credential": "anything-at-all"})
     assert response.status_code == 401
-    assert response.json() == {"detail": "invalid credentials"}
+    assert response.json()["detail"] == "invalid credentials"
     assert audited == [(None, "unknown_user", "example-user", "127.0.0.1")]
 
 
@@ -605,7 +606,7 @@ def test_wrong_credential_and_non_demo_username_get_the_same_refusal(demo_datase
     ]
     responses = [_demo_sign_in(demo_dataset, username, credential) for username, credential in attempts]
     assert {response.status_code for response in responses} == {401}
-    assert len({json.dumps(response.json(), sort_keys=True) for response in responses}) == 1
+    assert len({json.dumps(without_request_id(response), sort_keys=True) for response in responses}) == 1
     assert all("safe_access" not in response.cookies for response in responses)
 
 

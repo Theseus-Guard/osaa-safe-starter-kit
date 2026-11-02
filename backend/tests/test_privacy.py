@@ -129,7 +129,7 @@ def test_inventory_export_csv(client):
 
 def test_export_rejects_unknown_format(client):
     test_client, _ = client
-    assert test_client.get("/api/v1/privacy/inventory/export?format=xml").status_code == 422
+    assert test_client.get("/api/v1/privacy/inventory/export?format=xml").status_code == 400
 
 
 def test_non_admin_cannot_read_inventory(client):

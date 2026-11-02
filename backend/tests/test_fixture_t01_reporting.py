@@ -256,7 +256,7 @@ def test_none_applies_is_stored_alone_and_refused_with_another_trigger(triage_pe
     url = f"/api/v1/cases/{case_id}/classification"
 
     refused = triager.put(url, json={**classification_body(0), "triggers": ["none_applies", "boundary_escape"]}, headers=idem())
-    assert refused.status_code == 422, refused.text
+    assert refused.status_code == 400, refused.text
     assert triager.get(url).json()["version"] == 0
 
     saved = triager.put(url, json={**classification_body(0), "triggers": ["none_applies", "none_applies"]}, headers=idem())
@@ -317,7 +317,7 @@ def test_a_per_task_exception_needs_a_reason(triage_people):
 
     refused = triager.patch(f"/api/v1/cases/{case_id}/deadlines/{task_id}", json={"status": "not_applicable"}, headers=idem())
 
-    assert refused.status_code == 422, refused.text
+    assert refused.status_code == 400, refused.text
     assert task_states(triager, case_id)["preliminary_safe_report"][0] == "open"
     assert deadline_audit_rows(case_id) == 0
 
@@ -377,7 +377,7 @@ def test_restore_refuses_a_task_that_is_not_marked_not_applicable(triage_people)
     refused = triager.post(f"/api/v1/cases/{case_id}/deadlines/{task_id}/restore", headers=idem())
 
     assert refused.status_code == 409, refused.text
-    assert refused.json() == {"detail": {"status": "deadline_not_marked_not_applicable"}}
+    assert refused.json()["detail"] == {"status": "deadline_not_marked_not_applicable"}
     assert task_states(triager, case_id) == before
 
 

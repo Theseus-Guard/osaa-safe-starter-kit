@@ -60,9 +60,9 @@ def test_admin_lists_users_with_pagination(client, users):
 
 
 def test_list_rejects_out_of_range_paging(client, users):
-    assert client.get("/api/v1/users?limit=0").status_code == 422
-    assert client.get("/api/v1/users?limit=201").status_code == 422
-    assert client.get("/api/v1/users?offset=-1").status_code == 422
+    assert client.get("/api/v1/users?limit=0").status_code == 400
+    assert client.get("/api/v1/users?limit=201").status_code == 400
+    assert client.get("/api/v1/users?offset=-1").status_code == 400
 
 
 def test_non_admin_cannot_list_users(client, actor, users):
@@ -102,7 +102,7 @@ def test_empty_update_is_rejected(client, users):
 
 
 def test_unknown_role_in_update_is_rejected(client, users):
-    assert client.patch(f"/api/v1/users/{TARGET_ID}", json={"role": "root"}).status_code == 422
+    assert client.patch(f"/api/v1/users/{TARGET_ID}", json={"role": "root"}).status_code == 400
 
 
 def test_last_active_admin_cannot_be_removed(client, users, monkeypatch):

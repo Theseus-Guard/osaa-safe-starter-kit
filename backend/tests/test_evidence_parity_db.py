@@ -38,7 +38,7 @@ def test_a_tlp_hidden_item_answers_the_same_404_as_a_missing_one(world):
     missing = read(world, "triager", f"/api/v1/evidence/{uuid.uuid4()}")
     assert hidden.status_code == 404
     assert missing.status_code == 404
-    assert hidden.json() == missing.json() == {"detail": "evidence not found"}
+    assert hidden.json()["detail"] == missing.json()["detail"] == "evidence not found"
 
 
 @requires_database
@@ -63,7 +63,7 @@ def test_the_derivative_list_and_the_item_need_the_permission_and_the_case(world
     # Not assigned: the case ACL hides the original, so the answer is the same 404 as for a missing item.
     hidden = read(world, "other_investigator", f"{original_path}/derivatives")
     assert hidden.status_code == 404
-    assert hidden.json() == {"detail": "evidence not found"}
+    assert hidden.json()["detail"] == "evidence not found"
     # The reporter holds no evidence:read, so RBAC refuses before any lookup.
     assert read(world, "reporter", f"{original_path}/derivatives").status_code == 403
     assert read(world, "reporter", original_path).status_code == 403

@@ -318,7 +318,7 @@ def test_an_exception_applies_to_one_task_only_needs_a_reason_and_is_audited_onc
     before = tasks_by_kind(triager, case_id)
     url = f"/api/v1/cases/{case_id}/deadlines/{before['affected_customers']['id']}"
 
-    assert triager.patch(url, json={"status": "not_applicable"}, headers=idem()).status_code == 422
+    assert triager.patch(url, json={"status": "not_applicable"}, headers=idem()).status_code == 400
     assert audit_count(audit.CASE_DEADLINE_UPDATE, case_id) == 0
 
     reason = "the partner informed the customers"

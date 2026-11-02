@@ -226,11 +226,11 @@ def test_a_case_the_caller_cannot_see_answers_as_a_missing_case(dworld, monkeypa
     hidden = request_as(stranger, "get", export_url(dworld, view["id"]))
     missing_case = request_as(stranger, "get", f"/api/v1/cases/{uuid.uuid4()}/disclosures/{view['id']}/export")
     assert hidden.status_code == missing_case.status_code == 404
-    assert hidden.json() == missing_case.json() == {"detail": "case not found"}
+    assert hidden.json()["detail"] == missing_case.json()["detail"] == "case not found"
 
     unknown_version = export_as(dworld, "triager", str(uuid.uuid4()))
     assert unknown_version.status_code == 404
-    assert unknown_version.json() == {"detail": "disclosure version not found"}
+    assert unknown_version.json()["detail"] == "disclosure version not found"
 
 
 @requires_database

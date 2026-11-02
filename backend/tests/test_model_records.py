@@ -208,7 +208,7 @@ def test_the_outcomes_map_to_the_documented_statuses(client, monkeypatch):
         monkeypatch.setattr(model_records_api, "add_model_record", lambda *a, _o=outcome, **k: (_o, None))
         response = client.post(f"/api/v1/cases/{CASE_ID}/model-records", json=valid_body(), headers=idem())
         assert response.status_code == status
-        assert response.json() == detail
+        assert response.json()["detail"] == detail["detail"]
 
     monkeypatch.setattr(
         model_records_api, "revoke_model_record", lambda *a, **k: (ModelRecordOutcome.ALREADY_REVOKED, None)
@@ -217,7 +217,7 @@ def test_the_outcomes_map_to_the_documented_statuses(client, monkeypatch):
         f"/api/v1/cases/{CASE_ID}/model-records/{RECORD_ID}/revoke", json={"reason": "x"}, headers=idem()
     )
     assert response.status_code == 409
-    assert response.json() == {"detail": "model record is already revoked"}
+    assert response.json()["detail"] == "model record is already revoked"
 
 
 def test_the_list_passes_the_current_only_flag_to_the_service(client, monkeypatch):
@@ -241,4 +241,4 @@ def test_a_record_the_caller_cannot_see_is_not_found(client, monkeypatch):
     as_role("investigator")
     response = client.get(f"/api/v1/cases/{CASE_ID}/model-records/{RECORD_ID}")
     assert response.status_code == 404
-    assert response.json() == {"detail": "model record not found"}
+    assert response.json()["detail"] == "model record not found"

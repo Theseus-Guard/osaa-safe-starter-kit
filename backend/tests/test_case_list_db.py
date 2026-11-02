@@ -255,7 +255,7 @@ def test_status_filter_combines_with_search_and_paging():
 
 def test_status_filter_refuses_an_unknown_value():
     reporter = ActingClient(new_user("reporter"))
-    assert reporter.get("/api/v1/cases?status=archived").status_code == 422
+    assert reporter.get("/api/v1/cases?status=archived").status_code == 400
 
 
 # --- last update ----------------------------------------------------------------------------------------------------

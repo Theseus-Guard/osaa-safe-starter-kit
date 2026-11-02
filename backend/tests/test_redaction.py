@@ -199,7 +199,7 @@ def test_case_acl_alone_denies_a_redaction(api_client, monkeypatch):
     monkeypatch.setattr(redaction, "create_derivative", refuse)
     response = post(api_client)
     assert response.status_code == 404
-    assert response.json() == {"detail": "evidence not found"}
+    assert response.json()["detail"] == "evidence not found"
 
 
 def test_tlp_alone_denies_a_redaction(api_client, monkeypatch):
@@ -209,7 +209,7 @@ def test_tlp_alone_denies_a_redaction(api_client, monkeypatch):
     monkeypatch.setattr(redaction, "create_derivative", refuse)
     response = post(api_client)
     assert response.status_code == 404
-    assert response.json() == {"detail": "evidence not found"}
+    assert response.json()["detail"] == "evidence not found"
 
 
 @pytest.mark.parametrize(
@@ -271,14 +271,14 @@ def test_missing_idempotency_key_is_refused(api_client, monkeypatch):
     allow_original(monkeypatch)
     response = post(api_client, key=None)
     assert response.status_code == 400
-    assert response.json() == {"detail": {"status": "idempotency_key_required"}}
+    assert response.json()["detail"] == {"status": "idempotency_key_required"}
 
 
 def test_malformed_idempotency_key_is_refused(api_client, monkeypatch):
     allow_original(monkeypatch)
     response = post(api_client, key="has a space")
     assert response.status_code == 400
-    assert response.json() == {"detail": {"status": "idempotency_key_invalid"}}
+    assert response.json()["detail"] == {"status": "idempotency_key_invalid"}
 
 
 @pytest.mark.parametrize(
@@ -367,7 +367,7 @@ def test_a_key_used_with_another_request_is_refused(api_client, monkeypatch):
     )
     response = post(api_client)
     assert response.status_code == 409
-    assert response.json() == {"detail": {"status": "idempotency_key_reused"}}
+    assert response.json()["detail"] == {"status": "idempotency_key_reused"}
 
 
 @pytest.mark.parametrize(

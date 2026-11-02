@@ -28,6 +28,7 @@ from safe_kit.disclosure import ReleaseOutcome
 from test_evidence import db_user, request_as
 from test_evidence_lifecycle import provider, requires_database  # provider: fixture
 from test_fixture_t06a_redaction import make_derived, world  # world: fixture
+from error_body import without_request_id
 
 # Text that only the original holds, or the redaction reason, or the file names. None may appear in a preview.
 ORIGINAL_MARKERS = (
@@ -631,7 +632,7 @@ def test_a_case_the_caller_cannot_see_answers_as_a_missing_case(dworld, monkeypa
     missing = request_as(stranger, "get", f"/api/v1/cases/{uuid.uuid4()}/disclosures")
     hidden = request_as(stranger, "get", case_url(dworld))
     assert missing.status_code == hidden.status_code == 404
-    assert missing.json() == hidden.json()
+    assert without_request_id(missing) == without_request_id(hidden)
 
 
 # --- the preview: structure only -------------------------------------------------------------------------------------

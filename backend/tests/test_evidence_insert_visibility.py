@@ -182,7 +182,7 @@ def test_upload_refused_at_insert_time_is_404_like_a_missing_case_and_stores_not
         files={"file": ("scan.pdf", PDF, "application/pdf")}, headers=idem(),
     )
     assert response.status_code == 404
-    assert response.json() == {"detail": "case not found"}
+    assert response.json()["detail"] == "case not found"
     assert db.inserts() == []
     assert storage.puts == []
 

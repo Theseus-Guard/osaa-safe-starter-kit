@@ -33,6 +33,7 @@ from safe_kit.users import User
 from test_cases import OTHER_ID, REPORTER_ID, caller, make_user, valid_body  # noqa: F401 - shared case fixtures
 from test_cases import store  # noqa: F401 - fixture: in-memory case store
 from test_cases import client  # noqa: F401 - API client bound to the case fixtures
+from error_body import without_request_id
 
 BASE_URL = "http://api.test:8000"
 PASSWORD = "pw-" + "parity-" + uuid.uuid4().hex
@@ -164,7 +165,8 @@ def test_hidden_case_and_missing_case_look_the_same_in_the_api_and_the_cli(cli_b
     api_hidden = cli_bridge.get(f"/api/v1/cases/{hidden_id}")
     api_missing = cli_bridge.get(f"/api/v1/cases/{missing_id}")
     assert api_hidden.status_code == api_missing.status_code == 404
-    assert api_hidden.content == api_missing.content
+    # The request ID is different on every request. Everything else must be the same.
+    assert without_request_id(api_hidden) == without_request_id(api_missing)
 
     cli_hidden = run(capsys, "case", "show", hidden_id, "--username", "alice")
     cli_missing = run(capsys, "case", "show", missing_id, "--username", "alice")

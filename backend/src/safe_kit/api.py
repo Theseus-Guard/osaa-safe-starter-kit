@@ -2,8 +2,9 @@ import csv
 import hashlib
 import io
 import os
+import re
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -15,6 +16,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
 from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import MutableHeaders
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from safe_kit.auth import (
     CSRF_COOKIE,
@@ -153,6 +157,99 @@ async def _startup_guard(_app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="SAFE-Starter-Kit API", version="0.1.0", lifespan=_startup_guard)
 
+# Error contract (plans/f0/api-draft.md sections 3.3 and 3.6). Every error response has the same body: the existing
+# "detail" field, which the web UI and the CLI read, and an "error" object with a stable code, a safe message, the
+# request ID, and retryable. Validation errors also list the failing paths and problem types. Rejected values are
+# never returned.
+REQUEST_ID_HEADER = "X-Request-ID"
+_REQUEST_ID_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+# Draft 3.3: 256 KiB for a normal JSON body (the lower of the draft's two JSON values). The import and the evidence
+# upload read their own, larger limits in their routes, so they are exempt here.
+JSON_BODY_LIMIT_BYTES = 256 * 1024
+_BODY_LIMIT_EXEMPT = (
+    ("POST", re.compile(r"/api/v1/cases/import(/dry-run)?")),
+    ("POST", re.compile(r"/api/v1/cases/[^/]+/evidence")),
+)
+_CODE_BY_STATUS = {
+    400: "validation_failed",
+    401: "unauthenticated",
+    403: "forbidden_role",
+    404: "not_found",
+    409: "state_conflict",
+    413: "payload_too_large",
+    415: "unsupported_media_type",
+    422: "domain_rule_violated",
+    429: "rate_limited",
+    500: "internal_error",
+    503: "temporarily_unavailable",
+}
+_MESSAGE_BY_STATUS = {
+    400: "The request is not valid. Check the fields it names.",
+    401: "Sign in to continue.",
+    403: "Your role may not use this action.",
+    404: "The requested item was not found.",
+    409: "The request conflicts with the current state of the item.",
+    413: "The request is larger than the server allows.",
+    415: "The media type of the request is not supported.",
+    422: "The request breaks a rule of this system.",
+    429: "Too many requests. Wait and retry.",
+    500: "An internal error occurred. Quote the request ID when you report it.",
+    503: "The service is temporarily unavailable. Retry later.",
+}
+ERROR_MESSAGES = {
+    "validation_failed": "A field in the request is missing, has the wrong type, or is out of range.",
+    "unknown_field": "The request contains a field that is not allowed.",
+    "revision_conflict": "The record was changed by another request. Reload it and retry.",
+    "idempotency_key_reused": "This idempotency key was already used with another request.",
+    "setup_required": "The first administrator has not been created yet.",
+    "payload_too_large": "The request is larger than the server allows.",
+}
+# A status string in "detail" can name a code under another name. "unavailable" is the readiness status.
+_CODE_ALIASES = {"unavailable": "temporarily_unavailable"}
+_RETRYABLE_CODES = frozenset({"temporarily_unavailable", "rate_limited", "idempotency_request_in_progress"})
+
+
+def _request_id(request: Request) -> str:
+    return getattr(request.state, "request_id", None) or str(uuid.uuid4())
+
+
+def _error_code(status: int, detail: Any) -> str:
+    if isinstance(detail, dict) and isinstance(detail.get("status"), str):
+        return _CODE_ALIASES.get(detail["status"], detail["status"])
+    return _CODE_BY_STATUS.get(status, "request_failed")
+
+
+def _error_response(
+    status: int,
+    detail: Any,
+    request_id: str,
+    *,
+    code: str | None = None,
+    fields: list[dict[str, str]] | None = None,
+    headers: Mapping[str, str] | None = None,
+) -> JSONResponse:
+    """The one place where an error becomes a response. Every error path in the API ends here."""
+    code = code or _error_code(status, detail)
+    error: dict[str, Any] = {
+        "code": code,
+        "message": ERROR_MESSAGES.get(code, _MESSAGE_BY_STATUS.get(status, "The request could not be completed.")),
+        "request_id": request_id,
+        "retryable": code in _RETRYABLE_CODES,
+    }
+    if fields is not None:
+        error["fields"] = fields
+    content = jsonable_encoder({"detail": detail, "error": error})
+    return JSONResponse(
+        status_code=status,
+        content=content,
+        headers={**(headers or {}), REQUEST_ID_HEADER: request_id},
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+def _http_error(request: Request, error: StarletteHTTPException) -> JSONResponse:
+    return _error_response(error.status_code, error.detail, _request_id(request), headers=error.headers)
+
 
 @app.exception_handler(Replayed)
 def _replayed_request(request: Request, error: Replayed) -> JSONResponse:
@@ -163,7 +260,84 @@ def _replayed_request(request: Request, error: Replayed) -> JSONResponse:
 @app.exception_handler(KeyReused)
 def _reused_key(request: Request, error: KeyReused) -> JSONResponse:
     """The key came with another request. Nothing of the stored request is returned."""
-    return JSONResponse(status_code=409, content={"detail": {"status": "idempotency_key_reused"}})
+    return _error_response(409, {"status": "idempotency_key_reused"}, _request_id(request))
+
+
+@app.exception_handler(Exception)
+def _unhandled_error(request: Request, error: Exception) -> JSONResponse:
+    # Uvicorn logs the traceback. The body names no part of the failure; the request ID links it to the log.
+    return _error_response(500, "Internal Server Error", _request_id(request))
+
+
+class _RequestIdMiddleware:
+    """Outermost. Keeps a well-formed X-Request-ID that the client sent, or makes one, and returns it on every response."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        request_id = _incoming_request_id(scope)
+        scope.setdefault("state", {})["request_id"] = request_id
+
+        async def send_with_request_id(message: Any) -> None:
+            if message["type"] == "http.response.start":
+                MutableHeaders(scope=message)[REQUEST_ID_HEADER] = request_id
+            await send(message)
+
+        await self.app(scope, receive, send_with_request_id)
+
+
+def _incoming_request_id(scope: Scope) -> str:
+    for name, value in scope["headers"]:
+        if name == b"x-request-id":
+            candidate = value.decode("latin-1")
+            if _REQUEST_ID_PATTERN.fullmatch(candidate):
+                return candidate
+            break
+    return str(uuid.uuid4())
+
+
+class _BodyLimitMiddleware:
+    """Refuses a request body over JSON_BODY_LIMIT_BYTES with 413. A declared Content-Length is checked before anything
+    is read; a body without one is counted as it arrives, and the read stops at the limit."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or _body_limit_exempt(scope):
+            await self.app(scope, receive, send)
+            return
+        request_id = scope["state"]["request_id"]
+        declared = next((value.decode("latin-1") for name, value in scope["headers"] if name == b"content-length"), None)
+        if declared is not None and declared.isdigit() and int(declared) > JSON_BODY_LIMIT_BYTES:
+            response = _error_response(413, {"status": "payload_too_large"}, request_id)
+            await response(scope, receive, send)
+            return
+        received = 0
+
+        async def limited_receive() -> Any:
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > JSON_BODY_LIMIT_BYTES:
+                    raise HTTPException(status_code=413, detail={"status": "payload_too_large"})
+            return message
+
+        await self.app(scope, limited_receive, send)
+
+
+def _body_limit_exempt(scope: Scope) -> bool:
+    return any(scope["method"] == method and pattern.fullmatch(scope["path"]) for method, pattern in _BODY_LIMIT_EXEMPT)
+
+
+# Added inner first: the request ID middleware is outside the body limit, so a 413 carries the request ID too.
+app.add_middleware(_BodyLimitMiddleware)
+app.add_middleware(_RequestIdMiddleware)
 
 
 CASES_ROUTE = "/api/v1/cases"
@@ -176,11 +350,22 @@ DEADLINE_ROUTE = "/api/v1/cases/{case_id}/deadlines/{task_id}"
 RESTORE_ROUTE = "/api/v1/cases/{case_id}/deadlines/{task_id}/restore"
 
 
+def _error_path(loc: tuple[Any, ...]) -> str:
+    parts = list(loc[1:]) if loc and loc[0] == "body" else list(loc)
+    return ".".join(str(part) for part in parts) or "body"
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     # FastAPI echoes the rejected value in "input". For a password field that would send the password back, so it is dropped.
-    errors = [{key: value for key, value in error.items() if key != "input"} for error in exc.errors()]
-    return JSONResponse(status_code=422, content=jsonable_encoder({"detail": errors}))
+    raw = exc.errors()
+    errors = [{key: value for key, value in error.items() if key != "input"} for error in raw]
+    fields = [
+        {"path": _error_path(error["loc"]), "problem": "unknown_field" if error["type"] == "extra_forbidden" else error["type"]}
+        for error in raw
+    ]
+    code = "unknown_field" if any(error["type"] == "extra_forbidden" for error in raw) else "validation_failed"
+    return _error_response(400, errors, _request_id(request), code=code, fields=fields)
 
 
 class LoginRequest(BaseModel):

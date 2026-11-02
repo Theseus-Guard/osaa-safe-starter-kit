@@ -16,6 +16,7 @@ from safe_kit import api, rbac, users
 from safe_kit.db import connect
 from safe_kit.migrate import main as migrate
 from test_case_links_db import ActingClient, idem, new_case, new_user
+from error_body import without_request_id
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("SAFE_TEST_DATABASE") != "1",
@@ -141,7 +142,7 @@ def test_a_record_is_written_once_and_two_reads_give_identical_content(people):
     second = people["investigator"].get(f"/api/v1/cases/{case_id}/model-records/{record_id}")
 
     assert first.status_code == 200
-    assert first.json() == second.json()
+    assert without_request_id(first) == without_request_id(second)
     assert first.json()["configuration"] == CONFIG
     assert first.json()["version"] == 1
     assert first.json()["usable_as_current"] is True
@@ -229,7 +230,7 @@ def test_a_second_revocation_is_refused_and_writes_nothing(people):
     second = people["investigator"].post(url, json={"reason": "second"}, headers=idem())
 
     assert second.status_code == 409
-    assert second.json() == {"detail": "model record is already revoked"}
+    assert second.json()["detail"] == "model record is already revoked"
     with connect() as conn:
         count = conn.execute("SELECT count(*) FROM model_records WHERE record_id = %s", (record_id,)).fetchone()[0]
     assert count == 2
@@ -246,7 +247,7 @@ def test_a_repeated_key_replays_the_stored_response_and_a_different_request_with
 
     assert first.status_code == 201
     assert replay.status_code == 201
-    assert replay.json() == first.json()
+    assert without_request_id(replay) == without_request_id(first)
     assert reused.status_code == 409
     assert record_count(case_id) == 1
 
@@ -304,7 +305,7 @@ def test_a_review_round_must_belong_to_the_same_case(people):
     assert foreign.status_code == 404
     missing = record(people["investigator"], case_id, evidence_item_id=str(uuid.uuid4()))
     assert missing.status_code == 404
-    assert missing.json() == {"detail": "evidence item or review round not found"}
+    assert missing.json()["detail"] == "evidence item or review round not found"
 
 
 def test_each_write_writes_one_audit_row_and_the_reason_is_not_logged(people):
@@ -424,7 +425,7 @@ def test_a_record_cannot_be_revoked_through_another_case(people):
     )
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "model record not found"}
+    assert response.json()["detail"] == "model record not found"
     assert [row[9] for row in record_rows(record_id)] == [False]
 
 
@@ -437,7 +438,7 @@ def test_revoking_an_unknown_record_is_not_found_and_writes_nothing(people):
     )
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "model record not found"}
+    assert response.json()["detail"] == "model record not found"
     assert record_count(case_id) == 0
 
 
