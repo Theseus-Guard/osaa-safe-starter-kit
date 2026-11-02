@@ -101,8 +101,23 @@ export function recordText(value: string | null, fullView: boolean): string {
 }
 
 // The risk score with one decimal place, for example "3.7". "Not assessed" while a value is not set.
+// Labels for the score bands, from 1 (Very Low) to 5 (Very High). A score belongs to the band whose upper limit it does
+// not exceed: 1.0 to 1.5 is Very Low, 1.6 to 2.5 is Low, 2.6 to 3.5 is Medium, 3.6 to 4.5 is High, 4.6 to 5.0 is Very High.
+export const RISK_LEVEL_LABELS = ["Very Low", "Low", "Medium", "High", "Very High"] as const;
+
+export function riskLevelLabel(score: number): string {
+  const tenths = Math.round(score * 10) / 10;
+  if (tenths <= 1.5) return RISK_LEVEL_LABELS[0];
+  if (tenths <= 2.5) return RISK_LEVEL_LABELS[1];
+  if (tenths <= 3.5) return RISK_LEVEL_LABELS[2];
+  if (tenths <= 4.5) return RISK_LEVEL_LABELS[3];
+  return RISK_LEVEL_LABELS[4];
+}
+
+// The score with one decimal place and its label, for example "3.7 (High)".
 export function formatRiskScore(score: number | null): string {
-  return score === null ? "Not assessed" : score.toFixed(1);
+  if (score === null) return "Not assessed";
+  return `${score.toFixed(1)} (${riskLevelLabel(score)})`;
 }
 
 // The three impact values with the labels the owner asked for, in the order C, B, A.

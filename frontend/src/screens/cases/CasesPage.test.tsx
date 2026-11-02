@@ -49,7 +49,7 @@ describe("CasesPage", () => {
     const table = await screen.findByRole("table");
     expect(within(table).getByRole("columnheader", { name: "Risk score" })).toBeInTheDocument();
     const rows = within(table).getAllByRole("row").slice(1);
-    expect(within(rows[0]).getByText("3.7")).toBeInTheDocument();
+    expect(within(rows[0]).getByText("3.7 (High)")).toBeInTheDocument();
     expect(within(rows[1]).getByText("Not assessed")).toBeInTheDocument();
   });
 

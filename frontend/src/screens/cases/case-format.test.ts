@@ -6,6 +6,7 @@ import {
   formatBytes,
   historyActionLabel,
   formatRiskScore,
+  riskLevelLabel,
   humanize,
   missingFieldLabel,
   parseImpactValue,
@@ -98,9 +99,22 @@ describe("describeDetails", () => {
 
 describe("formatRiskScore", () => {
   it("shows one decimal place", () => {
-    expect(formatRiskScore(3)).toBe("3.0");
-    expect(formatRiskScore(3.7)).toBe("3.7");
-    expect(formatRiskScore(1.7)).toBe("1.7");
+    expect(formatRiskScore(3)).toBe("3.0 (Medium)");
+    expect(formatRiskScore(3.7)).toBe("3.7 (High)");
+    expect(formatRiskScore(1.7)).toBe("1.7 (Low)");
+  });
+
+  it("maps each score to its band at the upper limits", () => {
+    expect(riskLevelLabel(1.0)).toBe("Very Low");
+    expect(riskLevelLabel(1.3)).toBe("Very Low");
+    expect(riskLevelLabel(1.7)).toBe("Low");
+    expect(riskLevelLabel(2.3)).toBe("Low");
+    expect(riskLevelLabel(2.7)).toBe("Medium");
+    expect(riskLevelLabel(3.3)).toBe("Medium");
+    expect(riskLevelLabel(3.7)).toBe("High");
+    expect(riskLevelLabel(4.3)).toBe("High");
+    expect(riskLevelLabel(4.7)).toBe("Very High");
+    expect(riskLevelLabel(5.0)).toBe("Very High");
   });
 
   it("shows Not assessed while the score is null", () => {

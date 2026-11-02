@@ -66,7 +66,7 @@ describe("CaseRiskScore", () => {
     render(<CaseRiskScore {...BASE_PROPS} canWrite={false} />);
 
     expect(screen.getByRole("heading", { name: "Risk score" })).toBeInTheDocument();
-    expect(screen.getByText("3.7")).toBeInTheDocument();
+    expect(screen.getByText("3.7 (High)")).toBeInTheDocument();
     expect(valueOf("C – Confidentiality")).toBe("4");
     expect(valueOf("B – Integrity")).toBe("3");
     expect(valueOf("A – Availability")).toBe("4");

@@ -15,7 +15,9 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { InfoIcon } from "lucide-react";
 
 interface Props {
   caseId: string;
@@ -56,9 +58,27 @@ export function CaseRiskScore({ caseId, risk, closed, canWrite, onSaved }: Props
       className="flex w-full flex-col gap-3 rounded-lg border bg-muted/40 p-4 text-sm sm:w-80"
     >
       <div className="flex items-center justify-between gap-2">
-        <h3 id="case-risk-heading" className="text-sm font-medium text-muted-foreground">
-          Risk score
-        </h3>
+        <div className="flex items-center gap-1.5">
+          <h3 id="case-risk-heading" className="text-sm font-medium text-muted-foreground">
+            Risk score
+          </h3>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label="How the risk score is calculated"
+                  className="inline-flex size-4 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+                >
+                  <InfoIcon className="size-3.5" />
+                </button>
+              }
+            />
+            <TooltipContent>
+              Risk Score = (C + B + A) / 3, rounded to one decimal place. It shows "Not assessed" until all three values are set.
+            </TooltipContent>
+          </Tooltip>
+        </div>
         {canEdit && (
           <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
             Edit impact values
