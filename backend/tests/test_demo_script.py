@@ -1,8 +1,9 @@
 """scripts/demo.sh and scripts/demo-egress-check.sh: syntax, argument handling, and no credential in any output (F2 P13).
 
-A fake docker and a fake curl are put first on PATH. The fake docker records its arguments (never its stdin), answers
-the calls that scripts/demo.sh makes, and saves the stdin of a `compose run` so that a test can see that the credential
-reaches the CLI. No container, image, or secret file is touched, and start stops before scripts/init-secrets.sh runs.
+A fake docker, a fake curl and a fake uv are put first on PATH. The fake docker records its arguments (never its stdin),
+answers the calls that scripts/demo.sh makes. The fake uv records its arguments and the variables that cli-show sets for
+the CLI, and never reads a credential. No container, image, or secret file is touched, and start stops before
+scripts/init-secrets.sh runs. cli-show runs the CLI on the host (uv run), so a test checks the arguments it passes.
 """
 
 import os
@@ -33,12 +34,19 @@ esac
 
 FAKE_CURL = "#!/bin/sh\nexit 7\n"
 
+# Test double for uv. Records its arguments and the variables cli-show sets for the CLI. Reads no credential.
+FAKE_UV = """#!/bin/sh
+printf '%s\\n' "$*" >> "$DEMO_UV_LOG"
+printf 'SAFE_API_URL=%s\\nSSL_CERT_FILE=%s\\nPYTHONPATH=%s\\n' "$SAFE_API_URL" "$SSL_CERT_FILE" "$PYTHONPATH" >> "$DEMO_UV_LOG"
+exit 0
+"""
+
 
 @pytest.fixture
 def stub_env(tmp_path, monkeypatch):
     stubs = tmp_path / "bin"
     stubs.mkdir()
-    for name, body in (("docker", FAKE_DOCKER), ("curl", FAKE_CURL)):
+    for name, body in (("docker", FAKE_DOCKER), ("curl", FAKE_CURL), ("uv", FAKE_UV)):
         path = stubs / name
         path.write_text(body, encoding="utf-8")
         path.chmod(0o755)
@@ -46,14 +54,21 @@ def stub_env(tmp_path, monkeypatch):
     credential_dir = demo_dir / "credentials"
     credential_dir.mkdir(parents=True)
     (credential_dir / "demo-investigator.credential").write_text(CREDENTIAL + "\n", encoding="utf-8")
+    (credential_dir / "demo-triager.credential").write_text("triager-" + CREDENTIAL + "\n", encoding="utf-8")
+    # The development CA that cli-show trusts for the host CLI. Only its path is passed around.
+    ca = tmp_path / "ca.crt"
+    ca.write_text("not a real certificate: the fake uv never reads it\n", encoding="utf-8")
     log = tmp_path / "docker.log"
+    uv_log = tmp_path / "uv.log"
     env = {
         "PATH": f"{stubs}{os.pathsep}{os.environ.get('PATH', '/usr/bin:/bin')}",
         "HOME": str(tmp_path),
         "SAFE_DEMO_DIR": str(demo_dir),
+        "SAFE_DEV_CA_FILE": str(ca),
         "DEMO_STUB_LOG": str(log),
+        "DEMO_UV_LOG": str(uv_log),
     }
-    return {"env": env, "demo_dir": demo_dir, "log": log}
+    return {"env": env, "demo_dir": demo_dir, "log": log, "uv_log": uv_log, "ca": ca}
 
 
 def _run(script: Path, args, env, check=False):
@@ -121,17 +136,58 @@ def test_status_reports_files_without_printing_a_credential(stub_env):
     assert CREDENTIAL not in stub_env["log"].read_text(encoding="utf-8")
 
 
-def test_cli_show_passes_the_credential_on_stdin_and_never_prints_it(stub_env):
+def _uv_lines(stub_env) -> list[str]:
+    return stub_env["uv_log"].read_text(encoding="utf-8").splitlines() if stub_env["uv_log"].exists() else []
+
+
+def test_cli_show_runs_the_cli_on_the_host_through_the_gateway_as_the_demo_investigator(stub_env):
     result = _run(DEMO, ["cli-show", CASE_ID], stub_env["env"])
     output = result.stdout + result.stderr
 
     assert result.returncode == 0, output
     assert CREDENTIAL not in output
-    argv = stub_env["log"].read_text(encoding="utf-8")
-    assert CREDENTIAL not in argv
-    assert "--json" in argv and CASE_ID in argv and "--username demo-investigator" in argv
-    assert "--no-deps cli --no-banner case show" in argv
-    assert Path(str(stub_env["log"]) + ".stdin").read_text(encoding="utf-8") == CREDENTIAL + "\n"
+    command, *variables = _uv_lines(stub_env)
+    assert command.startswith("run --quiet --project ")
+    credential_file = stub_env["demo_dir"] / "credentials" / "demo-investigator.credential"
+    assert command.endswith(
+        f"python -m safe_kit.cli --no-banner case show {CASE_ID} --json "
+        f"--demo-username demo-investigator --demo-credential-file {credential_file}"
+    )
+    assert variables == [
+        "SAFE_API_URL=https://127.0.0.1:8443",
+        f"SSL_CERT_FILE={stub_env['ca']}",
+        f"PYTHONPATH={REPO_ROOT / 'backend' / 'src'}",
+    ]
+    # Nothing reached the container path, and the credential value is in no argument or log.
+    assert not stub_env["log"].exists()
+    assert CREDENTIAL not in stub_env["uv_log"].read_text(encoding="utf-8")
+
+
+def test_cli_show_uses_the_demo_user_named_in_the_environment(stub_env):
+    env = dict(stub_env["env"], SAFE_DEMO_USERNAME="demo-triager")
+    result = _run(DEMO, ["cli-show", CASE_ID], env)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    command = _uv_lines(stub_env)[0]
+    assert "--demo-username demo-triager" in command
+    assert command.endswith("credentials/demo-triager.credential")
+    assert "triager-" + CREDENTIAL not in result.stdout + result.stderr
+
+
+def test_cli_show_refuses_a_name_outside_the_demo_roles_before_running_the_cli(stub_env):
+    env = dict(stub_env["env"], SAFE_DEMO_USERNAME="demo-reporting-owner")
+    result = _run(DEMO, ["cli-show", CASE_ID], env)
+    assert result.returncode == 2
+    assert "must be one of the demo roles" in result.stderr
+    assert _uv_lines(stub_env) == []
+
+
+def test_cli_show_refuses_when_the_development_ca_is_missing(stub_env):
+    env = dict(stub_env["env"], SAFE_DEV_CA_FILE=str(stub_env["demo_dir"] / "absent-ca.crt"))
+    result = _run(DEMO, ["cli-show", CASE_ID], env)
+    assert result.returncode == 1
+    assert "development CA is missing" in result.stderr
+    assert _uv_lines(stub_env) == []
 
 
 def test_cli_show_refuses_a_bad_case_id_and_a_missing_credential(stub_env):
@@ -143,3 +199,4 @@ def test_cli_show_refuses_a_bad_case_id_and_a_missing_credential(stub_env):
     result = _run(DEMO, ["cli-show", CASE_ID], stub_env["env"])
     assert result.returncode == 1
     assert "run scripts/demo.sh start first" in result.stderr
+    assert _uv_lines(stub_env) == []

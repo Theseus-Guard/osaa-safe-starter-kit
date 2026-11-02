@@ -2,7 +2,12 @@
 # Runs the three-step demo on this machine. Loopback only; synthetic data only.
 #   scripts/demo.sh start [--timeout N]   build and start the demo stack, seed it once, print the loopback URL
 #   scripts/demo.sh status                service states, readiness, and which demo credential files exist
-#   scripts/demo.sh cli-show CASE_ID      read one case with the container CLI, --json, as the demo investigator
+#   scripts/demo.sh cli-show CASE_ID      read one case with the CLI, --json, as a demo role (default demo-investigator)
+#
+# cli-show runs the CLI on this machine (uv run in backend/), through the published loopback gateway. It does not run
+# the cli container: the API accepts demo sign-in only from a loopback address or SAFE_DEMO_HOST_ADDRESS, and the cli
+# container has neither (it sits on the internal backend network). The trust rule is not widened for it. The gateway's
+# development CA (secrets/tls/ca.crt, or SAFE_DEV_CA_FILE) is trusted for that one CLI process through SSL_CERT_FILE.
 #
 # SAFE_DEMO_DIR is required and has no default. Name a directory you choose, as an absolute path outside this
 # repository. The script creates SAFE_DEMO_DIR and SAFE_DEMO_DIR/credentials (mode 0700) and sets
@@ -165,14 +170,27 @@ cmd_cli_show() {
     echo "demo: CASE_ID must be a case ID (UUID)" >&2
     exit 2
   fi
-  require_docker
-  credential_file="$credential_dir/$cli_user.credential"
+  demo_user="${SAFE_DEMO_USERNAME:-$cli_user}"
+  case " $demo_users " in
+    *" $demo_user "*) ;;
+    *) echo "demo: SAFE_DEMO_USERNAME must be one of the demo roles: $demo_users" >&2; exit 2 ;;
+  esac
+  # The credential file is passed by path. The CLI reads its first line; the value never reaches this script's
+  # arguments, environment, or output.
+  credential_file="$credential_dir/$demo_user.credential"
   if [ ! -f "$credential_file" ]; then
-    fail "no credential file for $cli_user; run scripts/demo.sh start first"
+    fail "no credential file for $demo_user; run scripts/demo.sh start first"
   fi
-  # The CLI reads the password from stdin when it is not a terminal. The credential reaches it through the redirect
-  # only: it is not in the arguments, the environment, or the output.
-  compose run --rm -T -i --no-deps cli --no-banner case show "$case_id" --json --username "$cli_user" < "$credential_file"
+  command -v uv >/dev/null 2>&1 || fail "uv is required to run the CLI on this machine; install uv, then run: uv sync in backend/"
+  # The gateway's certificate is issued by the development CA. Only this one CLI process trusts that CA.
+  tls_ca="${SAFE_DEV_CA_FILE:-$root/secrets/tls/ca.crt}"
+  if [ ! -f "$tls_ca" ]; then
+    fail "the development CA is missing at $tls_ca; run scripts/demo.sh start first"
+  fi
+  # PYTHONPATH is the same source directory the API image uses (backend/Dockerfile). The project is not installed.
+  SAFE_API_URL="$url" SSL_CERT_FILE="$tls_ca" PYTHONPATH="$root/backend/src" \
+    uv run --quiet --project "$root/backend" python -m safe_kit.cli --no-banner case show "$case_id" --json \
+    --demo-username "$demo_user" --demo-credential-file "$credential_file"
 }
 
 command_name="${1:-}"
