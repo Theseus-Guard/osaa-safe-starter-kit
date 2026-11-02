@@ -50,6 +50,8 @@ def calendar_for(timezone_name: str) -> BusinessCalendar:
 
 class Outcome(Enum):
     OK = "ok"
+    # The If-Match revision is not the case's current revision. Nothing changed.
+    REVISION_MISMATCH = "revision_mismatch"
     # The case does not exist, is deleted, or is not visible to the caller. Also an unknown deadline task.
     NOT_FOUND = "not_found"
     CLOSED = "closed"
@@ -146,6 +148,8 @@ class Case:
     close_reason: str | None = None
     # The reason of the latest reopening, from case_status_changes. Only find_visible_case fills it in.
     reopen_reason: str | None = None
+    # Starts at 1 and rises by one with each title change. Clients send it back in If-Match (see update_case_title).
+    revision: int = 1
     # Only list_visible_cases fills these in. next_deadline is the earliest due_at of the open deadline tasks, or None
     # when none is open. updated_at is the time of the latest change recorded in the audit log (see _UPDATED_AT_SQL).
     next_deadline: datetime | None = None
@@ -285,7 +289,7 @@ def _change(old: Any, new: Any) -> dict[str, Any]:
 
 _CASE_COLUMNS = (
     "id::text, reference, title, awareness_time, status, calendar_version, created_at, created_by::text, "
-    "calendar_timezone, closed_at, closed_by::text, close_reason"
+    "calendar_timezone, closed_at, closed_by::text, close_reason, revision"
 )
 
 
@@ -303,6 +307,7 @@ def _to_case(row: tuple) -> Case:
         closed_at=row[9],
         closed_by=row[10],
         close_reason=row[11],
+        revision=row[12],
     )
 
 
@@ -319,10 +324,11 @@ def _load_tasks(conn, case_id: str) -> list[DeadlineTask]:
 
 
 def _lock_visible_case(conn, case_id: str, scope: CaseScope) -> tuple | None:
-    """Lock the case row until the transaction ends. Returns (status, closed_at, closed_by) or None if not visible."""
+    """Lock the case row until the transaction ends. Returns (status, closed_at, closed_by, revision) or None if not visible."""
     visibility, params = scope.visibility_sql()
     return conn.execute(
-        f"SELECT status, closed_at, closed_by::text FROM cases WHERE id = %s AND NOT is_deleted AND {visibility} FOR UPDATE",
+        f"SELECT status, closed_at, closed_by::text, revision FROM cases "
+        f"WHERE id = %s AND NOT is_deleted AND {visibility} FOR UPDATE",
         (case_id, *params),
     ).fetchone()
 
@@ -720,7 +726,7 @@ def list_visible_cases(
                 limit,
             ),
         ).fetchall()
-    return [replace(_to_case(row[:12]), next_deadline=row[12], updated_at=row[13]) for row in rows]
+    return [replace(_to_case(row[:13]), next_deadline=row[13], updated_at=row[14]) for row in rows]
 
 
 def _keyset_sql(after: tuple[datetime, str] | None) -> tuple[str, tuple[object, ...]]:
@@ -952,6 +958,47 @@ def update_deadline(
     return Outcome.OK
 
 
+def update_case_title(
+    case_id: str,
+    title: str,
+    expected_revision: int,
+    scope: CaseScope,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[Case], Any] | None = None,
+) -> tuple[Outcome, int]:
+    """Change the title when expected_revision is the case's current revision. Returns the outcome and the revision.
+
+    A title that is already set writes nothing and keeps the revision. A change raises the revision by one and writes an
+    audit row that holds the new revision but not the title text, because the audit log is append-only. The row lock
+    makes the revision check and the change one step, so two writers with the same revision cannot both succeed.
+    """
+    with connect() as conn:
+        check(conn, idempotency)
+        locked = _lock_visible_case(conn, case_id, scope)
+        if locked is None:
+            return Outcome.NOT_FOUND, 0
+        status, _, _, revision = locked
+        if status == "closed":
+            return Outcome.CLOSED, revision
+        if revision != expected_revision:
+            return Outcome.REVISION_MISMATCH, revision
+        (old_title,) = conn.execute("SELECT title FROM cases WHERE id = %s", (case_id,)).fetchone()
+        if title != old_title:
+            revision += 1
+            conn.execute("UPDATE cases SET title = %s, revision = %s WHERE id = %s", (title, revision, case_id))
+            audit.record(
+                conn,
+                audit.CASE_TITLE_UPDATE,
+                "case",
+                case_id,
+                actor_id=scope.user_id,
+                details={"revision": revision},
+            )
+        _remember_case(conn, idempotency, render, case_id)
+    return Outcome.OK, revision
+
+
 def close_case(
     case_id: str,
     reason: str,
@@ -1030,7 +1077,7 @@ def reopen_case(
         locked = _lock_visible_case(conn, case_id, scope)
         if locked is None:
             return Outcome.NOT_FOUND
-        status, closed_at, closed_by = locked
+        status, closed_at, closed_by, _ = locked
         if status != "closed":
             return Outcome.NOT_CLOSED
         conn.execute(
