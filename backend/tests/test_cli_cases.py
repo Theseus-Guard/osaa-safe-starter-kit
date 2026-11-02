@@ -1668,3 +1668,168 @@ def test_case_record_reads_never_print_the_token_or_the_password(api, capsys, ar
     assert ACCESS not in out + err
     assert REFRESH not in out + err
     assert PASSWORD not in out + err
+
+
+# --- review conflict, recuse and appeal ----------------------------------------------------------------------------
+
+REPLACEMENT_ID = "66666666-7777-4888-8999-bbbbbbbbbbbb"
+CONFLICT_PATH = f"/api/v1/reviews/{ROUND_ID}/conflicts"
+RECUSAL_PATH = f"/api/v1/reviews/{ROUND_ID}/recusals"
+APPEAL_PATH = f"/api/v1/reviews/{ROUND_ID}/appeals"
+CONFLICT_ENTRY = {
+    "id": "dddddddd-eeee-4fff-8000-000000000001",
+    "round_id": ROUND_ID,
+    "reviewer_id": USER_ID,
+    "kind": "declared",
+    "description": "Built the system",
+    "supersedes_id": None,
+    "created_at": CASE_UPDATED_AT,
+    "current": True,
+}
+RECUSAL_ENTRY = {
+    "id": "dddddddd-eeee-4fff-8000-000000000002",
+    "round_id": ROUND_ID,
+    "reviewer_id": USER_ID,
+    "replacement_id": REPLACEMENT_ID,
+    "reason": "Too close",
+    "supersedes_id": None,
+    "created_at": CASE_UPDATED_AT,
+    "current": True,
+}
+APPEAL_ENTRY = {
+    "id": "dddddddd-eeee-4fff-8000-000000000003",
+    "round_id": ROUND_ID,
+    "filed_by": USER_ID,
+    "independent_reviewer_id": REPLACEMENT_ID,
+    "grounds": "The layer was not tested",
+    "created_at": CASE_UPDATED_AT,
+}
+
+
+def last_post(api) -> dict:
+    """The last request to a review route. The logout that ends each session comes after it."""
+    posts = [call for call in api.calls if call["method"] == "POST" and call["path"].startswith("/api/v1/reviews/")]
+    return posts[-1]
+
+
+def posted_key(api) -> str:
+    sent = {name.lower(): value for name, value in last_post(api)["headers"].items()}
+    return sent["idempotency-key"]
+
+
+def test_review_conflict_declared_posts_the_kind_and_description_with_a_key(api, capsys):
+    api.route("POST", CONFLICT_PATH, status=201, body=CONFLICT_ENTRY)
+    code, out, err = run(
+        capsys, "case", "review", "conflict", ROUND_ID, "--kind", "declared", "--description", "Built the system",
+        "--username", "alice",
+    )
+    assert code == 0, err
+    assert "Conflict declared." in out
+    assert f"ID:               {CONFLICT_ENTRY['id']}" in out
+    assert last_post(api)["json"] == {"kind": "declared", "description": "Built the system", "supersedes_id": None}
+    assert len(posted_key(api)) >= 1
+
+
+def test_review_conflict_declared_needs_a_description_before_any_request(api, capsys):
+    code, out, err = run(capsys, "case", "review", "conflict", ROUND_ID, "--kind", "declared", "--username", "alice")
+    assert code == 2
+    assert "a description is required for a declared conflict" in err
+    assert all(method != "POST" for method, _ in api.paths())
+
+
+def test_review_conflict_withdrawn_needs_no_description_and_can_correct_an_entry(api, capsys):
+    api.route("POST", CONFLICT_PATH, status=201, body={**CONFLICT_ENTRY, "kind": "withdrawn", "description": None})
+    code, out, err = run(
+        capsys, "case", "review", "conflict", ROUND_ID, "--kind", "withdrawn",
+        "--supersedes", CONFLICT_ENTRY["id"], "--idempotency-key", "retry-7", "--username", "alice",
+    )
+    assert code == 0, err
+    assert "Conflict withdrawn." in out
+    assert last_post(api)["json"] == {"kind": "withdrawn", "description": None, "supersedes_id": CONFLICT_ENTRY["id"]}
+    assert posted_key(api) == "retry-7"
+
+
+def test_review_conflict_409_says_how_to_check_the_round(api, capsys):
+    api.route("POST", CONFLICT_PATH, status=409, body={"detail": {"status": "conflict_already_declared"}})
+    code, out, err = run(
+        capsys, "case", "review", "conflict", ROUND_ID, "--kind", "declared", "--description", "Again",
+        "--username", "alice",
+    )
+    assert code != 0
+    assert "already declared" in err
+    assert "case review list" in err
+
+
+def test_review_conflict_json_prints_the_api_body_exactly(api, capsys):
+    api.route("POST", CONFLICT_PATH, status=201, body=CONFLICT_ENTRY)
+    code, out, err = run(
+        capsys, "case", "review", "conflict", ROUND_ID, "--kind", "declared", "--description", "Built the system",
+        "--json", "--username", "alice",
+    )
+    assert code == 0, err
+    assert json.loads(out) == CONFLICT_ENTRY
+
+
+def test_review_recuse_posts_the_replacement_and_prints_it(api, capsys):
+    api.route("POST", RECUSAL_PATH, status=201, body=RECUSAL_ENTRY)
+    code, out, err = run(
+        capsys, "case", "review", "recuse", ROUND_ID, "--replacement", REPLACEMENT_ID, "--reason", "Too close",
+        "--username", "alice",
+    )
+    assert code == 0, err
+    assert "Recusal recorded." in out
+    assert f"Replacement ID:   {REPLACEMENT_ID}" in out
+    assert last_post(api)["json"] == {"replacement_id": REPLACEMENT_ID, "reason": "Too close", "supersedes_id": None}
+    assert len(posted_key(api)) >= 1
+
+
+def test_review_recuse_refuses_a_replacement_that_is_not_a_uuid_before_any_request(api, capsys):
+    code, out, err = run(capsys, "case", "review", "recuse", ROUND_ID, "--replacement", "nobody", "--username", "alice")
+    assert code == 2
+    assert "--replacement must be a UUID" in err
+    assert all(method != "POST" for method, _ in api.paths())
+
+
+def test_review_recuse_replacement_refusal_names_the_rule(api, capsys):
+    api.route("POST", RECUSAL_PATH, status=422, body={"detail": "the replacement has a declared conflict"})
+    code, out, err = run(
+        capsys, "case", "review", "recuse", ROUND_ID, "--replacement", REPLACEMENT_ID, "--username", "alice",
+    )
+    assert code != 0
+    assert "declared conflict" in err
+
+
+def test_review_appeal_posts_the_grounds_and_the_independent_reviewer(api, capsys):
+    api.route("POST", APPEAL_PATH, status=201, body=APPEAL_ENTRY)
+    code, out, err = run(
+        capsys, "case", "review", "appeal", ROUND_ID, "--grounds", "The layer was not tested",
+        "--independent", REPLACEMENT_ID, "--username", "alice",
+    )
+    assert code == 0, err
+    assert "Appeal filed." in out
+    assert "the product does not decide it" in out
+    assert last_post(api)["json"] == {"grounds": "The layer was not tested", "independent_reviewer_id": REPLACEMENT_ID}
+    assert len(posted_key(api)) >= 1
+
+
+def test_review_appeal_refuses_blank_grounds_before_any_request(api, capsys):
+    code, out, err = run(
+        capsys, "case", "review", "appeal", ROUND_ID, "--grounds", "   ", "--independent", REPLACEMENT_ID,
+        "--username", "alice",
+    )
+    assert code == 2
+    assert "--grounds must not be blank" in err
+    assert all(method != "POST" for method, _ in api.paths())
+
+
+def test_review_appeal_422_names_the_independence_rule(api, capsys):
+    api.route(
+        "POST", APPEAL_PATH, status=422,
+        body={"detail": "the independent reviewer took part in this review round"},
+    )
+    code, out, err = run(
+        capsys, "case", "review", "appeal", ROUND_ID, "--grounds", "Wrong", "--independent", REPLACEMENT_ID,
+        "--username", "alice",
+    )
+    assert code != 0
+    assert "independent reviewer must be another active, assigned user" in err

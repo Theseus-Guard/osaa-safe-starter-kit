@@ -19,6 +19,7 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { ReviewIndependence } from "./ReviewIndependence";
 
 interface Props {
   caseId: string;
@@ -131,12 +132,14 @@ export function CaseReview({ caseId, closed, canReview, onRecorded }: Props) {
         )}
         {rounds !== null &&
           rounds.map((round) => (
-            <RoundView
-              key={round.id}
-              round={round}
-              canSet={canRecord && round.status === "open"}
-              onSet={(layer) => setActive({ round, layer })}
-            />
+            <div key={round.id} className="grid gap-4">
+              <RoundView
+                round={round}
+                canSet={canRecord && round.status === "open"}
+                onSet={(layer) => setActive({ round, layer })}
+              />
+              <ReviewIndependence roundId={round.id} canDeclare={canRecord && round.status === "open"} />
+            </div>
           ))}
         {canRecord && (
           <div>

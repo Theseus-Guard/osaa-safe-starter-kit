@@ -496,6 +496,102 @@ export function setReviewLayer(roundId: string, layer: string, body: ReviewLayer
   });
 }
 
+// A conflict entry of a review round. Entries are never edited: a correction is a new entry that names the entry it
+// supersedes, and the newest entry of a reviewer on the round is the current one. description is null for callers
+// who may not read free text (cases:read_all, or the reviewer concerned).
+export interface ReviewConflict {
+  id: string;
+  round_id: string;
+  reviewer_id: string;
+  kind: "declared" | "withdrawn";
+  description: string | null;
+  supersedes_id: string | null;
+  created_at: string;
+  current: boolean;
+}
+
+export interface ReviewConflictBody {
+  kind: "declared" | "withdrawn";
+  description?: string | null;
+  supersedes_id?: string | null;
+}
+
+// A recusal of a reviewer from a round, with the replacement the reviewer names. reason is null for callers who may
+// not read free text.
+export interface ReviewRecusal {
+  id: string;
+  round_id: string;
+  reviewer_id: string;
+  replacement_id: string;
+  reason: string | null;
+  supersedes_id: string | null;
+  created_at: string;
+  current: boolean;
+}
+
+export interface ReviewRecusalBody {
+  replacement_id: string;
+  reason?: string | null;
+  supersedes_id?: string | null;
+}
+
+// An appeal against a round. The product does not decide it. grounds is null for callers who may not read free text.
+export interface ReviewAppeal {
+  id: string;
+  round_id: string;
+  filed_by: string;
+  independent_reviewer_id: string;
+  grounds: string | null;
+  created_at: string;
+}
+
+export interface ReviewAppealBody {
+  grounds: string;
+  independent_reviewer_id: string;
+}
+
+// The conflict entries of a round, newest first. Answers 404 when the caller cannot see the round.
+export function listReviewConflicts(roundId: string): Promise<ReviewConflict[]> {
+  return request<ReviewConflict[]>(`/reviews/${encodeURIComponent(roundId)}/conflicts`);
+}
+
+// Declares, withdraws or corrects the caller's own conflict on a round. Sends a new Idempotency-Key.
+export function declareReviewConflict(roundId: string, body: ReviewConflictBody): Promise<ReviewConflict> {
+  return request<ReviewConflict>(`/reviews/${encodeURIComponent(roundId)}/conflicts`, {
+    method: "POST",
+    json: body,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+  });
+}
+
+// The recusals of a round, newest first. Answers 404 when the caller cannot see the round.
+export function listReviewRecusals(roundId: string): Promise<ReviewRecusal[]> {
+  return request<ReviewRecusal[]>(`/reviews/${encodeURIComponent(roundId)}/recusals`);
+}
+
+// Withdraws the caller from a round and names the replacement. Sends a new Idempotency-Key.
+export function recuseFromReviewRound(roundId: string, body: ReviewRecusalBody): Promise<ReviewRecusal> {
+  return request<ReviewRecusal>(`/reviews/${encodeURIComponent(roundId)}/recusals`, {
+    method: "POST",
+    json: body,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+  });
+}
+
+// The appeals against a round, newest first. Answers 404 when the caller cannot see the round.
+export function listReviewAppeals(roundId: string): Promise<ReviewAppeal[]> {
+  return request<ReviewAppeal[]>(`/reviews/${encodeURIComponent(roundId)}/appeals`);
+}
+
+// Files an appeal against a round for an independent reviewer. Sends a new Idempotency-Key.
+export function fileReviewAppeal(roundId: string, body: ReviewAppealBody): Promise<ReviewAppeal> {
+  return request<ReviewAppeal>(`/reviews/${encodeURIComponent(roundId)}/appeals`, {
+    method: "POST",
+    json: body,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+  });
+}
+
 export interface Assignment {
   id: string;
   case_id: string;

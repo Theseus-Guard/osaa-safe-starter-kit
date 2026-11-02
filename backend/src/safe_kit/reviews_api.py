@@ -60,6 +60,12 @@ ROUND_NOT_FOUND = HTTPException(status_code=404, detail="review not found")
 NOT_ASSIGNED = HTTPException(
     status_code=403, detail="only an assigned reviewer can record a review"
 )
+CONFLICT_DECLARED = HTTPException(
+    status_code=403, detail="a conflict is declared on this review round, so this reviewer cannot set a layer"
+)
+WITHDRAWN = HTTPException(
+    status_code=403, detail="this reviewer has withdrawn from this review round, so cannot set a layer"
+)
 
 reviews_router = APIRouter(tags=["reviews"])
 
@@ -245,6 +251,10 @@ def set_review_layer(
         raise ROUND_CLOSED
     if outcome is RoundOutcome.NOT_ASSIGNED:
         raise NOT_ASSIGNED
+    if outcome is RoundOutcome.CONFLICT_DECLARED:
+        raise CONFLICT_DECLARED
+    if outcome is RoundOutcome.WITHDRAWN:
+        raise WITHDRAWN
     if outcome is RoundOutcome.REVISION_CONFLICT:
         assert review is not None
         # Only the current revision. The caller learns nothing else from a refused write.

@@ -35,6 +35,10 @@ CASE_ASSIGNMENT_REMOVE = "case.assignment_removed"
 CASE_REVIEW = "case.review_recorded"  # F1 whole-case review; kept so existing history rows keep their meaning
 CASE_REVIEW_ROUND_OPENED = "case.review_round_opened"
 CASE_REVIEW_LAYER_SET = "case.review_layer_set"
+# Conflicts, recusals and appeals on a review round (safe_kit.review_independence). Free text is never written here.
+CASE_REVIEW_CONFLICT_RECORDED = "case.review_conflict_recorded"
+CASE_REVIEW_RECUSAL_RECORDED = "case.review_recusal_recorded"
+CASE_REVIEW_APPEAL_RECORDED = "case.review_appeal_recorded"
 CASE_DEADLINE_UPDATE = "case.deadline_updated"
 # Case record (safe_kit.case_records). Free text is never written here, only its length.
 CASE_AWARENESS_RECORDED = "case.awareness_recorded"
