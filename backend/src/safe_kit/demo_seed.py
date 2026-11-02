@@ -1,14 +1,19 @@
-"""Synthetic demo dataset and the per-install demo credential (python -m safe_kit.demo_seed seed).
+"""Synthetic demo dataset and the per-role demo credentials (python -m safe_kit.demo_seed seed | upgrade).
 
-The seed writes one fixed, small dataset in a single transaction: eight users (one per role, names prefixed "demo-"),
-three cases with fixed IDs, text evidence, a review round with layer outcomes, a catalog entry with a verification run,
-and a disclosure version that is a preview only (no approval). Every row has a fixed or derived identifier, so the
-output is stable. The marker row in demo_dataset is written last, in the same transaction. A second run finds the
-marker and writes nothing.
+The database is seeded in seed versions. Version 1 writes one fixed, small dataset in a single transaction: eight users
+(one per role, names prefixed "demo-"), three cases with fixed IDs, text evidence, a review round with layer outcomes, a
+catalog entry with a verification run, a disclosure version that is a preview only (no approval), and the demo
+administrator's credential. The marker row in demo_dataset is written last, with seed_version 1. Version 2 adds the
+credentials of the other demo roles (one file each), and one more case assignment that lets the demo investigator read
+the closed case. Version 2 sets the marker to seed_version 2. A fresh database gets both versions in one run; an existing
+version-1 database gets version 2 from `upgrade`. A run finds the marker and writes only what the marker says is missing,
+so repeated runs create nothing.
 
-The demo credential is random per install. It is hashed into the marker row, and the plain value is written once to the
-file named by SAFE_DEMO_CREDENTIAL_FILE with mode 0600. The file is created with O_EXCL and never overwritten. The
-credential is not printed, logged, or stored anywhere else.
+Each demo credential is random per install. Its hash is stored (demo_user_credentials, or the marker row for version 1),
+and the plain value is written once to a file with mode 0600, created with O_EXCL and never overwritten. The file for the
+demo administrator is the one named by SAFE_DEMO_CREDENTIAL_FILE when that is set (the single-file setting of version 1),
+otherwise <SAFE_DEMO_CREDENTIAL_DIR>/demo-admin.credential. The other roles use <SAFE_DEMO_CREDENTIAL_DIR>/<username>.credential.
+Nothing is printed, logged, or stored anywhere else.
 
 The seed refuses to run unless the startup guard (config_guard.load_settings) passes in demo mode with the synthetic
 dataset. It runs inside the API container, like the other administrative commands, and writes the database directly.
@@ -34,7 +39,7 @@ from safe_kit.cases import CALENDAR_VERSION, calendar_for, deadline_tasks_for
 from safe_kit.config_guard import MODE_DEMO, SYNTHETIC_DEMO_DATASET, ConfigError, load_settings
 from safe_kit.db import connect
 from safe_kit.deadlines import deadline_start
-from safe_kit.demo_auth import DEMO_ADMIN_ID
+from safe_kit.demo_auth import DEMO_ADMIN_ID, DEMO_ADMIN_USERNAME, DEMO_ROLES
 from safe_kit.disclosure import canonical_content, digest_of
 from safe_kit.evidence_crypto import seal
 from safe_kit.evidence_keys import KeyProviderError, key_provider_from_env
@@ -42,8 +47,14 @@ from safe_kit.evidence_storage import StorageError, storage_from_env
 from safe_kit.reviews import TEMPLATE_LAYERS
 from safe_kit.security import hash_password
 
+# The demo administrator's file in the single-file setting of seed version 1. It still works when set.
 CREDENTIAL_FILE_ENV = "SAFE_DEMO_CREDENTIAL_FILE"
+# The directory that receives one credential file per demo role. Required by both seed versions.
+CREDENTIAL_DIR_ENV = "SAFE_DEMO_CREDENTIAL_DIR"
+CREDENTIAL_SUFFIX = ".credential"
 CREDENTIAL_BYTES = 24
+# The seed version this code writes. Version 1 is the original seed; version 2 adds the other demo roles.
+SEED_VERSION = 2
 # Serializes concurrent seed runs. The marker check happens under this lock.
 SEED_LOCK_KEY = 0x5AFE0004
 
@@ -149,11 +160,6 @@ class SeedError(Exception):
     """The seed cannot write its credential file. Nothing is written to the database."""
 
 
-@dataclass(frozen=True)
-class SeedOutcome:
-    created: bool
-
-
 def _child_id(*parts: str) -> str:
     return str(uuid.uuid5(CHILD_NAMESPACE, ":".join(parts)))
 
@@ -172,11 +178,13 @@ def _insert(conn, table: str, row: Mapping[str, Any]) -> None:
     conn.execute(query, [row[column] for column in columns])
 
 
-def _marker_exists(conn) -> bool:
-    return conn.execute(
-        "SELECT 1 FROM demo_dataset WHERE dataset = %s AND NOT is_deleted",
+def _marker_version(conn) -> int | None:
+    """The seed version recorded in the marker row, or None when the database holds no demo dataset."""
+    row = conn.execute(
+        "SELECT seed_version FROM demo_dataset WHERE dataset = %s AND NOT is_deleted",
         (SYNTHETIC_DEMO_DATASET,),
-    ).fetchone() is not None
+    ).fetchone()
+    return row[0] if row else None
 
 
 def _write_credential_file(path: str, credential: str) -> None:
@@ -184,50 +192,82 @@ def _write_credential_file(path: str, credential: str) -> None:
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
-        raise SeedError(f"{CREDENTIAL_FILE_ENV} already exists; the seed never overwrites a credential") from None
+        raise SeedError("a demo credential file already exists; the seed never overwrites a credential") from None
     except OSError:
-        raise SeedError(f"{CREDENTIAL_FILE_ENV} cannot be created; check that its directory exists and is writable") from None
+        raise SeedError(f"a demo credential file cannot be created; check {CREDENTIAL_DIR_ENV} exists and is writable") from None
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write(credential + "\n")
 
 
 def _remove_credential_file(path: str) -> None:
-    """Removes the file this run created, when its transaction failed. The file holds no data the database keeps."""
+    """Removes a file this run created, when its transaction failed. The file holds no data the database keeps."""
     try:
         os.unlink(path)
     except OSError:
         pass
 
 
-def _credential_path(env: Mapping[str, str]) -> str:
-    value = env.get(CREDENTIAL_FILE_ENV, "").strip()
+def _credential_dir(env: Mapping[str, str]) -> str:
+    """The directory of the demo credential files. Created with mode 0700 when it does not exist yet."""
+    value = env.get(CREDENTIAL_DIR_ENV, "").strip()
     if not value:
-        raise SeedError(f"{CREDENTIAL_FILE_ENV} is required: the path of the file that receives the demo credential")
+        raise SeedError(f"{CREDENTIAL_DIR_ENV} is required: the directory that receives one demo credential file per role")
+    try:
+        os.makedirs(value, mode=0o700, exist_ok=True)
+    except OSError:
+        raise SeedError(f"{CREDENTIAL_DIR_ENV} cannot be created; check its parent directory") from None
+    if not os.path.isdir(value):
+        raise SeedError(f"{CREDENTIAL_DIR_ENV} must name a directory")
     return value
 
 
+def _admin_credential_path(env: Mapping[str, str], credential_dir: str) -> str:
+    """The demo administrator's file: the single-file setting when it is set, otherwise the directory."""
+    single = env.get(CREDENTIAL_FILE_ENV, "").strip()
+    if single:
+        return single
+    return os.path.join(credential_dir, DEMO_ADMIN_USERNAME + CREDENTIAL_SUFFIX)
+
+
+def _role_credential_path(credential_dir: str, username: str) -> str:
+    return os.path.join(credential_dir, username + CREDENTIAL_SUFFIX)
+
+
+def _new_credential(path: str, written: list[str]) -> str:
+    """Generates a credential, writes its plain value once to path, and returns the hash to store."""
+    credential = secrets.token_urlsafe(CREDENTIAL_BYTES)
+    _write_credential_file(path, credential)
+    written.append(path)
+    return hash_password(credential)
+
+
+def _insert_user(conn, row: tuple) -> None:
+    user_id, username, role, first_name, last_name, title = row
+    # The account gets a random password nobody has. Demo sign-in is the only way in, and the password is not kept.
+    unusable_hash = hash_password(secrets.token_urlsafe(32))
+    _insert(
+        conn,
+        "users",
+        {
+            "id": user_id,
+            "username": username,
+            "password_hash": unusable_hash,
+            "role": role,
+            "is_active": True,
+            "must_change_password": False,
+            "password_changed_at": PASSWORD_SET_TIME,
+            "is_protected": False,
+            "first_name": first_name,
+            "last_name": last_name,
+            "title": title,
+            "email": f"{username}@example.invalid",
+        },
+    )
+
+
 def _insert_users(conn) -> None:
-    for user_id, username, role, first_name, last_name, title in USERS:
-        # The account gets a random password nobody has. Demo sign-in is the only way in, and the password is not kept.
-        unusable_hash = hash_password(secrets.token_urlsafe(32))
-        _insert(
-            conn,
-            "users",
-            {
-                "id": user_id,
-                "username": username,
-                "password_hash": unusable_hash,
-                "role": role,
-                "is_active": True,
-                "must_change_password": False,
-                "password_changed_at": PASSWORD_SET_TIME,
-                "is_protected": False,
-                "first_name": first_name,
-                "last_name": last_name,
-                "title": title,
-                "email": f"{username}@example.invalid",
-            },
-        )
+    for row in USERS:
+        _insert_user(conn, row)
 
 
 def _insert_timezone(conn) -> str:
@@ -448,40 +488,113 @@ def _insert_dataset(conn, credential_hash: str, storage, provider) -> None:
     _insert_review(conn)
     _insert_catalog(conn)
     _insert_disclosure(conn)
-    _insert(conn, "demo_dataset", {"id": MARKER_ID, "dataset": SYNTHETIC_DEMO_DATASET, "credential_hash": credential_hash})
+    _insert(
+        conn,
+        "demo_dataset",
+        {"id": MARKER_ID, "dataset": SYNTHETIC_DEMO_DATASET, "credential_hash": credential_hash},
+    )
 
 
-def seed(env: Mapping[str, str]) -> SeedOutcome:
-    """Write the demo dataset once. Returns created=False, with nothing written, when it is already there."""
+# Version 2: the other demo roles. Assignments that version 2 adds to the seeded cases (the version-1 rows stay as they are).
+V2_CASE_ASSIGNMENTS = ((CASE_THREE, "investigator"),)
+
+
+def _ensure_demo_user(conn, username: str) -> str:
+    """The user ID of a demo role. A missing account is created from the fixed table (version 1 rows are never changed)."""
+    row = conn.execute("SELECT id FROM users WHERE username = %s AND NOT is_deleted", (username,)).fetchone()
+    if row is not None:
+        return str(row[0])
+    for user_row in USERS:
+        if user_row[1] == username:
+            _insert_user(conn, user_row)
+            return user_row[0]
+    raise SeedError(f"{username} is not a demo role")
+
+
+def _apply_version_2(conn, credential_dir: str, written: list[str]) -> None:
+    """Adds one credential and one file per demo role that has none. Existing credentials are never replaced."""
+    for demo_role in DEMO_ROLES:
+        user_id = _ensure_demo_user(conn, demo_role.username)
+        has_credential = conn.execute(
+            "SELECT 1 FROM demo_user_credentials WHERE user_id = %s AND NOT is_deleted", (user_id,)
+        ).fetchone()
+        if has_credential is not None:
+            continue
+        path = _role_credential_path(credential_dir, demo_role.username)
+        _insert(conn, "demo_user_credentials", {"user_id": user_id, "credential_hash": _new_credential(path, written)})
+    for case_id, role in V2_CASE_ASSIGNMENTS:
+        user_id = USER_BY_ROLE[role]
+        active = conn.execute(
+            "SELECT 1 FROM case_assignments WHERE case_id = %s AND user_id = %s AND NOT is_deleted", (case_id, user_id)
+        ).fetchone()
+        if active is None:
+            _insert(conn, "case_assignments", {"case_id": case_id, "user_id": user_id, "assigned_by": DEMO_ADMIN_ID})
+    conn.execute(
+        "UPDATE demo_dataset SET seed_version = %s WHERE dataset = %s AND NOT is_deleted",
+        (SEED_VERSION, SYNTHETIC_DEMO_DATASET),
+    )
+
+
+@dataclass(frozen=True)
+class SeedOutcome:
+    created: bool
+    applied: tuple[int, ...] = ()
+
+
+def _apply(env: Mapping[str, str], *, upgrade_only: bool) -> SeedOutcome:
+    """Applies the seed versions the marker row does not have yet. Nothing is written when there is nothing to apply."""
     settings = load_settings(env)
     if settings.mode != MODE_DEMO or settings.dataset != SYNTHETIC_DEMO_DATASET:
         raise SeedRefused(f"the demo seed runs only with SAFE_MODE={MODE_DEMO} and SAFE_DATASET={SYNTHETIC_DEMO_DATASET}")
-    path = _credential_path(env)
+    credential_dir = _credential_dir(env)
+    admin_path = _admin_credential_path(env, credential_dir)
     storage = storage_from_env()
     provider = key_provider_from_env()
-    written = False
+    written: list[str] = []
+    applied: list[int] = []
     try:
         with connect() as conn:
             conn.execute("SELECT pg_advisory_xact_lock(%s)", (SEED_LOCK_KEY,))
-            if _marker_exists(conn):
-                return SeedOutcome(created=False)
-            credential = secrets.token_urlsafe(CREDENTIAL_BYTES)
-            _write_credential_file(path, credential)
-            written = True
-            _insert_dataset(conn, hash_password(credential), storage, provider)
+            version = _marker_version(conn)
+            if version is None:
+                if upgrade_only:
+                    raise SeedError("this database holds no demo dataset; run `python -m safe_kit.demo_seed seed` instead")
+                admin_hash = _new_credential(admin_path, written)
+                _insert_dataset(conn, admin_hash, storage, provider)
+                _insert(conn, "demo_user_credentials", {"user_id": DEMO_ADMIN_ID, "credential_hash": admin_hash})
+                applied.append(1)
+                version = 1
+            if version < SEED_VERSION:
+                _apply_version_2(conn, credential_dir, written)
+                applied.append(2)
     except BaseException:
-        if written:
+        for path in written:
             _remove_credential_file(path)
         raise
-    return SeedOutcome(created=True)
+    return SeedOutcome(created=bool(applied), applied=tuple(applied))
+
+
+def seed(env: Mapping[str, str]) -> SeedOutcome:
+    """Applies every seed version the database does not have yet. A database at the current version gets nothing."""
+    return _apply(env, upgrade_only=False)
+
+
+def upgrade(env: Mapping[str, str]) -> SeedOutcome:
+    """Applies the pending seed versions to an existing demo database. It refuses a database without the dataset."""
+    return _apply(env, upgrade_only=True)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m safe_kit.demo_seed")
-    parser.add_argument("command", choices=["seed"], help="seed: write the synthetic demo dataset once")
-    parser.parse_args(argv)
+    parser.add_argument(
+        "command",
+        choices=["seed", "upgrade"],
+        help="seed: write the demo dataset once (all seed versions); upgrade: add the pending seed versions to an existing demo database",
+    )
+    args = parser.parse_args(argv)
+    run = seed if args.command == "seed" else upgrade
     try:
-        outcome = seed(os.environ)
+        outcome = run(os.environ)
     except (ConfigError, SeedRefused, SeedError, KeyProviderError, StorageError) as error:
         print(str(error), file=sys.stderr)
         return 1
@@ -489,9 +602,10 @@ def main(argv: list[str] | None = None) -> int:
         print("the demo seed could not write to the database; nothing was committed", file=sys.stderr)
         return 1
     if outcome.created:
-        print(f"demo dataset seeded; the demo credential is in the file named by {CREDENTIAL_FILE_ENV}")
+        versions = ", ".join(str(version) for version in outcome.applied)
+        print(f"demo dataset seed version(s) {versions} applied; the demo credential files are in the directory named by {CREDENTIAL_DIR_ENV}")
     else:
-        print("demo dataset already seeded; nothing was written")
+        print("demo dataset already seeded at the current seed version; nothing was written")
     return 0
 
 

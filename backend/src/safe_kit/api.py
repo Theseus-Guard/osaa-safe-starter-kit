@@ -70,10 +70,9 @@ from safe_kit.client_address import resolve_client_address
 from safe_kit.config_guard import is_demo, load_settings, trusted_proxies
 from safe_kit.db import connect
 from safe_kit.demo_auth import (
-    DEMO_ADMIN_ID,
-    DEMO_ADMIN_USERNAME,
-    credential_matches,
-    dataset_credential_hash,
+    DEMO_ROLES,
+    DEMO_USERNAMES,
+    demo_credential_hash,
     demo_sign_in_allowed,
 )
 from safe_kit.system_timezone import (
@@ -410,11 +409,20 @@ def login(body: LoginRequest, request: Request, response: Response) -> TokenResp
     return tokens
 
 
+class DemoUser(BaseModel):
+    username: str
+    name: str
+    role: str
+
+
 class DemoStatus(BaseModel):
     demo: bool
+    # The demo roles that can sign in. Names and roles only, never a credential. Empty outside demo mode.
+    users: list[DemoUser] = []
 
 
 class DemoSignInRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
     credential: str = Field(min_length=1, max_length=256)
 
 
@@ -423,16 +431,19 @@ DEMO_SIGN_IN_REFUSED = HTTPException(status_code=403, detail="demo sign-in is no
 
 @app.get("/api/v1/demo/status", response_model=DemoStatus)
 def demo_status() -> DemoStatus:
-    """True only in demo mode with the synthetic dataset. The UI shows the demo banner when it is true."""
-    return DemoStatus(demo=is_demo(os.environ))
+    """True only in demo mode with the synthetic dataset. The UI shows the demo banner and the role picker when it is true."""
+    if not is_demo(os.environ):
+        return DemoStatus(demo=False)
+    return DemoStatus(demo=True, users=[DemoUser(username=r.username, name=r.name, role=r.role) for r in DEMO_ROLES])
 
 
 @app.post("/api/v1/demo/sign-in", response_model=TokenResponse)
 def demo_sign_in(body: DemoSignInRequest, request: Request, response: Response) -> TokenResponse:
-    """Signs in the demo administrator with the per-install demo credential (safe_kit.demo_auth).
+    """Signs in one demo role with its own per-install demo credential (safe_kit.demo_auth).
 
-    Refused outside demo mode, for a caller that is not on loopback, and when the database has no demo dataset.
-    The refusal does not say which check failed. The credential is never logged.
+    Refused (403) outside demo mode and for a caller that is not on loopback. A wrong username, a username outside the
+    demo roles, an inactive account, and a wrong credential all get the same 401 as a failed password sign-in. The
+    credential is never logged.
     """
     client = _client_ip(request)
     if not demo_sign_in_allowed(os.environ, client):
@@ -444,14 +455,18 @@ def demo_sign_in(body: DemoSignInRequest, request: Request, response: Response) 
             detail="too many login attempts",
             headers={"Retry-After": str(int(LOGIN_WINDOW.total_seconds()))},
         )
-    if not credential_matches(body.credential):
-        if dataset_credential_hash() is None:
-            raise DEMO_SIGN_IN_REFUSED
-        record_login_failure(DEMO_ADMIN_ID, "wrong_password", DEMO_ADMIN_USERNAME, client)
+    user = find_user(body.username) if body.username in DEMO_USERNAMES else None
+    # The password verifier runs even when there is no user, so the timing does not show which check failed.
+    password_ok = verify_password(demo_credential_hash(user.id) if user else None, body.credential)
+    if user is None or not user.is_active or not password_ok:
+        if user is None:
+            reason = "unknown_user"
+        elif not user.is_active:
+            reason = "account_inactive"
+        else:
+            reason = "wrong_password"
+        record_login_failure(user.id if user else None, reason, body.username, client)
         raise INVALID_CREDENTIALS
-    user = find_user_by_id(DEMO_ADMIN_ID)
-    if user is None or not user.is_active:
-        raise DEMO_SIGN_IN_REFUSED
     clear_rate_limit(f"demo:client:{client}")
     tokens = _issue_tokens(user, open_session(user.id))
     set_session_cookies(response, tokens.access_token, tokens.refresh_token, new_csrf_token())
