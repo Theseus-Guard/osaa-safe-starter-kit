@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { DemoBanner } from "./components/demo-banner";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { initTheme, useResolvedTheme } from "./theme";
@@ -13,6 +14,7 @@ function Root() {
   const resolved = useResolvedTheme();
   return (
     <TooltipProvider>
+      <DemoBanner />
       <App />
       <Toaster theme={resolved} />
     </TooltipProvider>

@@ -65,8 +65,15 @@ from safe_kit.cases import (
     unassign_member,
     update_deadline,
 )
-from safe_kit.config_guard import load_settings
+from safe_kit.config_guard import is_demo, load_settings
 from safe_kit.db import connect
+from safe_kit.demo_auth import (
+    DEMO_ADMIN_ID,
+    DEMO_ADMIN_USERNAME,
+    credential_matches,
+    dataset_credential_hash,
+    demo_sign_in_allowed,
+)
 from safe_kit.system_timezone import (
     SETUP_ROLE,
     ChangeOutcome,
@@ -392,6 +399,54 @@ def login(body: LoginRequest, request: Request, response: Response) -> TokenResp
     clear_rate_limit(f"login:user:{body.username}")
     tokens = _issue_tokens(user, open_session(user.id))
     # A new session gets a new CSRF value. The browser keeps the cookies; a CLI client uses the body.
+    set_session_cookies(response, tokens.access_token, tokens.refresh_token, new_csrf_token())
+    return tokens
+
+
+class DemoStatus(BaseModel):
+    demo: bool
+
+
+class DemoSignInRequest(BaseModel):
+    credential: str = Field(min_length=1, max_length=256)
+
+
+DEMO_SIGN_IN_REFUSED = HTTPException(status_code=403, detail="demo sign-in is not available")
+
+
+@app.get("/api/v1/demo/status", response_model=DemoStatus)
+def demo_status() -> DemoStatus:
+    """True only in demo mode with the synthetic dataset. The UI shows the demo banner when it is true."""
+    return DemoStatus(demo=is_demo(os.environ))
+
+
+@app.post("/api/v1/demo/sign-in", response_model=TokenResponse)
+def demo_sign_in(body: DemoSignInRequest, request: Request, response: Response) -> TokenResponse:
+    """Signs in the demo administrator with the per-install demo credential (safe_kit.demo_auth).
+
+    Refused outside demo mode, for a caller that is not on loopback, and when the database has no demo dataset.
+    The refusal does not say which check failed. The credential is never logged.
+    """
+    client = _client_ip(request)
+    if not demo_sign_in_allowed(os.environ, client):
+        raise DEMO_SIGN_IN_REFUSED
+    client_hits = hit_rate_limit(f"demo:client:{client}", LOGIN_WINDOW)
+    if client_hits > LOGIN_LIMIT_PER_CLIENT:
+        raise HTTPException(
+            status_code=429,
+            detail="too many login attempts",
+            headers={"Retry-After": str(int(LOGIN_WINDOW.total_seconds()))},
+        )
+    if not credential_matches(body.credential):
+        if dataset_credential_hash() is None:
+            raise DEMO_SIGN_IN_REFUSED
+        record_login_failure(DEMO_ADMIN_ID, "wrong_password", DEMO_ADMIN_USERNAME, client)
+        raise INVALID_CREDENTIALS
+    user = find_user_by_id(DEMO_ADMIN_ID)
+    if user is None or not user.is_active:
+        raise DEMO_SIGN_IN_REFUSED
+    clear_rate_limit(f"demo:client:{client}")
+    tokens = _issue_tokens(user, open_session(user.id))
     set_session_cookies(response, tokens.access_token, tokens.refresh_token, new_csrf_token())
     return tokens
 
