@@ -233,6 +233,11 @@ def test_a_repeat_notice_sends_its_reason(api, capsys):
         ),
         (422, {"status": "time_out_of_range"}, "Enter the time it happened"),
         (
+            422,
+            {"status": "recipient_mismatch"},
+            "the approver confirmed for this version",
+        ),
+        (
             409,
             {"status": "idempotency_key_reused"},
             "Run again without --idempotency-key",
@@ -342,6 +347,8 @@ def test_receipt_unknown_sends_the_reason_code_and_never_a_receipt(api, capsys):
         NOTICE_ID,
         "--unknown",
         "timeout",
+        "--follow-up-reason",
+        "Call the member's security contact",
         "--username",
         "alice",
     )
@@ -350,7 +357,29 @@ def test_receipt_unknown_sends_the_reason_code_and_never_a_receipt(api, capsys):
     assert call["json"]["outcome"] == "unknown"
     assert call["json"]["reason_code"] == "timeout"
     assert call["json"]["received_at"] is None
+    assert call["json"]["follow_up_reason"] == "Call the member's security contact"
     assert "receipt unknown" in out
+
+
+def test_receipt_unknown_without_its_follow_up_is_refused_before_any_request(
+    api, capsys
+):
+    code, _, err = run(
+        capsys,
+        "case",
+        "notice",
+        "receipt",
+        CASE_ID,
+        VERSION_ID,
+        NOTICE_ID,
+        "--unknown",
+        "timeout",
+        "--username",
+        "alice",
+    )
+    assert code == 2
+    assert "--follow-up-reason is required with --unknown" in err
+    assert posts_to(api, f"{NOTICE_PATH}/receipt") == []
 
 
 def test_receipt_needs_exactly_one_outcome(api, capsys):

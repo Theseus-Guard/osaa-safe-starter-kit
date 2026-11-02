@@ -93,6 +93,10 @@ def create(world, who: str, payload: dict, key: str | None = None):
     )
 
 
+# The identifier of the approved recipient that approve() confirms by default (the notice tests record notices to it).
+APPROVED_RECIPIENT_REF = "cert-07"
+
+
 def approve(
     world,
     who: str,
@@ -101,12 +105,19 @@ def approve(
     purpose: str,
     digest: str,
     key: str | None = None,
+    *,
+    recipient_ref: str = APPROVED_RECIPIENT_REF,
 ):
     return request_as(
         world["people"][who],
         "post",
         case_url(world, f"/{version_id}/approvals"),
-        json={"recipient": recipient, "purpose": purpose, "digest": digest},
+        json={
+            "recipient": recipient,
+            "purpose": purpose,
+            "digest": digest,
+            "recipient_ref": recipient_ref,
+        },
         headers={"Idempotency-Key": key or uuid.uuid4().hex},
     )
 
@@ -330,6 +341,7 @@ def test_an_approval_is_refused_for_another_recipient_purpose_or_digest(dworld):
             "recipient": view["recipient"],
             "purpose": view["purpose"],
             "digest": view["digest"],
+            "recipient_ref": APPROVED_RECIPIENT_REF,
             **change,
         }
         response = request_as(
@@ -370,6 +382,46 @@ def test_an_approval_records_the_approver_the_preparer_and_the_separation_rule(d
         approval["digest"] == view["digest"]
         and approval["recipient"] == view["recipient"]
     )
+    assert approval["recipient_ref"] == APPROVED_RECIPIENT_REF
+
+
+@requires_database
+def test_an_approval_needs_a_recipient_reference_that_is_an_identifier_and_keeps_it(
+    dworld,
+):
+    view, _ = first_version(dworld)
+    url = case_url(dworld, f"/{view['id']}/approvals")
+    values = {
+        "recipient": view["recipient"],
+        "purpose": view["purpose"],
+        "digest": view["digest"],
+    }
+    # Without the reference, and with free text in its place, the request is refused by the body check.
+    for body_values in (values, {**values, "recipient_ref": "Member CERT"}):
+        response = request_as(
+            dworld["people"]["approver"],
+            "post",
+            url,
+            json=body_values,
+            headers={"Idempotency-Key": uuid.uuid4().hex},
+        )
+        # The body check answers 400 (validation), as for the other request bodies of this API.
+        assert response.status_code == 400, body_values
+    assert approval_count(view["id"]) == 0
+
+    response = approve(
+        dworld,
+        "approver",
+        view["id"],
+        view["recipient"],
+        view["purpose"],
+        view["digest"],
+        recipient_ref="cert-11",
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["approval"]["recipient_ref"] == "cert-11"
+    listed = read(dworld, "triager", f"/{view['id']}").json()
+    assert listed["approval"]["recipient_ref"] == "cert-11"
 
 
 @requires_database
@@ -399,8 +451,9 @@ def test_the_database_refuses_an_approval_that_does_not_match_its_version(dworld
             conn.execute(
                 """
                 INSERT INTO disclosure_approvals
-                    (version_id, package_id, case_id, recipient, purpose, digest, preparer_id, approved_by, separation_rule)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'preparer_differs_from_approver')
+                    (version_id, package_id, case_id, recipient, purpose, digest, preparer_id, approved_by, separation_rule,
+                     recipient_ref)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'preparer_differs_from_approver', 'cert-07')
                 """,
                 (
                     view["id"],
@@ -418,8 +471,9 @@ def test_the_database_refuses_an_approval_that_does_not_match_its_version(dworld
             conn.execute(
                 """
                 INSERT INTO disclosure_approvals
-                    (version_id, package_id, case_id, recipient, purpose, digest, preparer_id, approved_by, separation_rule)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'preparer_differs_from_approver')
+                    (version_id, package_id, case_id, recipient, purpose, digest, preparer_id, approved_by, separation_rule,
+                     recipient_ref)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'preparer_differs_from_approver', 'cert-07')
                 """,
                 (
                     view["id"],

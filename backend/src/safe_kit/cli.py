@@ -2404,6 +2404,7 @@ def _render_disclosure_approved(version: dict) -> None:
     )
     _print_field("Version ID", version["id"])
     _print_field("Digest", approval["digest"])
+    _print_field("Recipient reference", approval["recipient_ref"])
     _print_field("Approved by", approval["approved_by"])
     _print_field("Approved (UTC)", approval["approved_at"])
 
@@ -2470,10 +2471,16 @@ def _disclosure_approve(base_url: str, args: argparse.Namespace) -> None:
         raise UsageError(
             "--digest must be the 64-character digest shown by 'case disclosure show CASE_ID VERSION_ID'"
         )
+    if not NOTICE_RECIPIENT_PATTERN.match(args.recipient_ref):
+        raise UsageError(
+            "--recipient-ref is the identifier of the approved recipient, kept outside SAFE: letters, digits, '.', '_', ':' "
+            "or '-', up to 64 characters. Do not put a name or an address. Notices must give the same reference"
+        )
     payload = {
         "recipient": args.recipient,
         "purpose": args.purpose,
         "digest": args.digest,
+        "recipient_ref": args.recipient_ref,
     }
     _disclosure_write(
         base_url,
@@ -2552,6 +2559,13 @@ NOTICE_STATUS_TEXT = {
     ),
     "preparer_cannot_record": (
         "you prepared this version, so another person must record its notice. Ask an independent person to record it"
+    ),
+    "recipient_mismatch": (
+        "the recipient reference is not the one the approver confirmed for this version, so no notice was recorded. "
+        "Give the approved --recipient-ref exactly, or ask an approver to approve a version for this recipient"
+    ),
+    "unknown_needs_follow_up": (
+        "an unknown receipt needs a follow-up. Give --follow-up-reason with --unknown, so the follow-up is recorded with it"
     ),
     "idempotency_key_reused": "this Idempotency-Key was used with another request. Run again without --idempotency-key",
 }
@@ -2701,7 +2715,14 @@ def _notice_receipt(base_url: str, args: argparse.Namespace) -> None:
         if args.reason is not None
         else None
     )
+    follow_up_reason = (
+        _notice_text(args.follow_up_reason, "--follow-up-reason", NOTICE_REASON_LIMIT)
+        if args.follow_up_reason is not None
+        else None
+    )
     if args.received_at is not None:
+        if follow_up_reason is not None:
+            raise UsageError("--follow-up-reason is given only with --unknown")
         received_at = _parse_timestamp(
             args.received_at, "--received-at", not_in_future=True
         )
@@ -2710,13 +2731,19 @@ def _notice_receipt(base_url: str, args: argparse.Namespace) -> None:
             "received_at": received_at.isoformat(),
             "reason_code": None,
             "reason": reason,
+            "follow_up_reason": None,
         }
     else:
+        if follow_up_reason is None:
+            raise UsageError(
+                "--follow-up-reason is required with --unknown: the follow-up is recorded with the unknown receipt"
+            )
         payload = {
             "outcome": "unknown",
             "received_at": None,
             "reason_code": args.unknown,
             "reason": reason,
+            "follow_up_reason": follow_up_reason,
         }
     _disclosure_write(
         base_url,
@@ -3193,6 +3220,13 @@ def _add_case_update_commands(case_commands) -> None:
     disclosure_approve.add_argument(
         "--digest", required=True, help="The version's digest (64 hex characters)"
     )
+    disclosure_approve.add_argument(
+        "--recipient-ref",
+        required=True,
+        metavar="REF",
+        help="Identifier of the approved recipient kept outside SAFE, up to 64 characters: letters, digits, '.', '_', ':' "
+        "or '-'. A notice of this version must give the same reference",
+    )
     _add_idempotency_option(disclosure_approve)
     _add_auth_options(disclosure_approve)
     disclosure_approve.set_defaults(handler=_disclosure_approve)
@@ -3302,6 +3336,12 @@ def _add_case_update_commands(case_commands) -> None:
     )
     notice_receipt.add_argument(
         "--reason", metavar="TEXT", help="A note, up to 500 characters"
+    )
+    notice_receipt.add_argument(
+        "--follow-up-reason",
+        metavar="TEXT",
+        help="Required with --unknown: the follow-up to chase the recipient, up to 500 characters. It is recorded with the "
+        "unknown receipt, in the same change",
     )
     _add_idempotency_option(notice_receipt)
     _add_auth_options(notice_receipt)

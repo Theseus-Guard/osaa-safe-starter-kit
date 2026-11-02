@@ -92,6 +92,8 @@ class ApprovalRequest(_Strict):
     recipient: Recipient
     purpose: Purpose
     digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    # The identifier of the approved recipient, kept outside SAFE. A notice of this version must name the same one.
+    recipient_ref: str = Field(pattern=disclosure.RECIPIENT_REF_PATTERN)
 
 
 # --- helpers --------------------------------------------------------------------------------------------------------
@@ -137,6 +139,7 @@ def _version_view(version: Version, recipient: tlp.Recipient) -> dict[str, Any]:
         approval = {
             "id": version.approval.id,
             "recipient": version.approval.recipient,
+            "recipient_ref": version.approval.recipient_ref,
             "purpose": version.approval.purpose,
             "digest": version.approval.digest,
             "preparer_id": version.approval.preparer_id,
@@ -355,7 +358,12 @@ def approve_disclosure_version(
     result = disclosure.approve_version(
         str(case_id),
         str(version_id),
-        {"recipient": body.recipient, "purpose": body.purpose, "digest": body.digest},
+        {
+            "recipient": body.recipient,
+            "purpose": body.purpose,
+            "digest": body.digest,
+            "recipient_ref": body.recipient_ref,
+        },
         _scope(actor),
         recipient,
         idempotency=scope_key,

@@ -171,6 +171,8 @@ def test_a_wrong_digest_is_refused_by_both_clients_and_no_approval_is_stored(
         view["purpose"],
         "--digest",
         ZERO_DIGEST,
+        "--recipient-ref",
+        "cert-07",
     )
 
     assert api_answer.status_code >= 400
@@ -213,6 +215,8 @@ def test_an_approval_through_the_cli_reads_back_like_one_through_the_api(
         cli_view["purpose"],
         "--digest",
         cli_view["digest"],
+        "--recipient-ref",
+        "cert-07",
         "--json",
     )
 

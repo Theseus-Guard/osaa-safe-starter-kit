@@ -135,6 +135,7 @@ const APPROVED: DisclosureVersion = {
   approval: {
     id: "cccccccc-dddd-4eee-8fff-000000000009",
     recipient: VERSION.recipient,
+    recipient_ref: "cert-07",
     purpose: VERSION.purpose,
     digest: DIGEST,
     preparer_id: VERSION.created_by,
@@ -234,6 +235,7 @@ describe("CaseDisclosures", () => {
     await screen.findByText("Preview: Confidential rapid alert");
 
     await user.type(screen.getByLabelText("Recipient"), "  Member CERT  ");
+    await user.type(screen.getByLabelText("Approved recipient reference"), "  cert-07 ");
     await user.type(screen.getByLabelText("Purpose"), "Rapid alert on the affected gateway");
     await user.type(screen.getByLabelText("Digest"), DIGEST);
     await user.click(screen.getByRole("button", { name: "Approve this version" }));
@@ -243,6 +245,7 @@ describe("CaseDisclosures", () => {
         recipient: "Member CERT",
         purpose: "Rapid alert on the affected gateway",
         digest: DIGEST,
+        recipient_ref: "cert-07",
       }),
     );
     expect(toast.success).toHaveBeenCalledWith("Approval recorded. It covers this version and its digest only.");
@@ -255,11 +258,27 @@ describe("CaseDisclosures", () => {
     await screen.findByText("Preview: Confidential rapid alert");
 
     await user.type(screen.getByLabelText("Recipient"), "Member CERT");
+    await user.type(screen.getByLabelText("Approved recipient reference"), "cert-07");
     await user.type(screen.getByLabelText("Purpose"), "Rapid alert");
     await user.type(screen.getByLabelText("Digest"), "ABC");
     await user.click(screen.getByRole("button", { name: "Approve this version" }));
 
     expect(await screen.findByText(/64 lower-case hexadecimal characters/)).toBeInTheDocument();
+    expect(approve).not.toHaveBeenCalled();
+  });
+
+  it("refuses an approved recipient reference that looks like a name before any request is sent", async () => {
+    const user = userEvent.setup();
+    render(<CaseDisclosures caseId={CASE_ID} closed={false} canApprove canRecordNotices={false} />);
+    await screen.findByText("Preview: Confidential rapid alert");
+
+    await user.type(screen.getByLabelText("Recipient"), "Member CERT");
+    await user.type(screen.getByLabelText("Approved recipient reference"), "Member CERT");
+    await user.type(screen.getByLabelText("Purpose"), "Rapid alert");
+    await user.type(screen.getByLabelText("Digest"), DIGEST);
+    await user.click(screen.getByRole("button", { name: "Approve this version" }));
+
+    expect(await screen.findByText(/The recipient reference is an identifier/)).toBeInTheDocument();
     expect(approve).not.toHaveBeenCalled();
   });
 
@@ -270,6 +289,7 @@ describe("CaseDisclosures", () => {
     await screen.findByText("Preview: Confidential rapid alert");
 
     await user.type(screen.getByLabelText("Recipient"), "Other CERT");
+    await user.type(screen.getByLabelText("Approved recipient reference"), "cert-07");
     await user.type(screen.getByLabelText("Purpose"), "Rapid alert on the affected gateway");
     await user.type(screen.getByLabelText("Digest"), DIGEST);
     await user.click(screen.getByRole("button", { name: "Approve this version" }));
@@ -291,6 +311,7 @@ describe("CaseDisclosures", () => {
       approval: {
         id: "cccccccc-dddd-4eee-8fff-000000000009",
         recipient: VERSION.recipient,
+        recipient_ref: "cert-07",
         purpose: VERSION.purpose,
         digest: DIGEST,
         preparer_id: VERSION.created_by,
@@ -329,6 +350,7 @@ describe("CaseDisclosures", () => {
           approval: {
             id: "cccccccc-dddd-4eee-8fff-000000000009",
             recipient: VERSION.recipient,
+            recipient_ref: "cert-07",
             purpose: VERSION.purpose,
             digest: DIGEST,
             preparer_id: VERSION.created_by,
@@ -560,7 +582,7 @@ describe("CaseDisclosures", () => {
     expect(receipt).not.toHaveBeenCalled();
   });
 
-  it("records an unknown receipt only with a reason code, and sends the code with its note", async () => {
+  it("records an unknown receipt only with a reason code and its follow-up, and sends both", async () => {
     const user = userEvent.setup();
     notices.mockResolvedValue({ items: [NOTICE_OLD] });
     receipt.mockResolvedValue({ ...NOTICE_OLD, state: "receipt_unknown", state_reason_code: "no_answer" });
@@ -577,7 +599,14 @@ describe("CaseDisclosures", () => {
 
     await user.click(within(form).getByLabelText("Why no receipt is known"));
     await user.click(await screen.findByRole("option", { name: "The recipient did not answer" }));
-    await user.type(within(form).getByLabelText("Note (optional)"), "Phone call not answered");
+    await user.click(within(form).getByRole("button", { name: "Save receipt" }));
+    // The follow-up is required with an unknown receipt: it is recorded with it, in the same change.
+    expect(
+      await within(form).findByText("Enter the follow-up to chase the recipient. A notice with no receipt needs one."),
+    ).toBeInTheDocument();
+    expect(receipt).not.toHaveBeenCalled();
+
+    await user.type(within(form).getByLabelText("Follow-up to chase the recipient"), "Call the member's security contact");
     await user.click(within(form).getByRole("button", { name: "Save receipt" }));
 
     await waitFor(() => expect(receipt).toHaveBeenCalledTimes(1));
@@ -586,9 +615,10 @@ describe("CaseDisclosures", () => {
       outcome: "unknown",
       received_at: null,
       reason_code: "no_answer",
-      reason: "Phone call not answered",
+      reason: null,
+      follow_up_reason: "Call the member's security contact",
     });
-    expect(toast.success).toHaveBeenCalledWith("No receipt is known for this notice. It stays unknown.");
+    expect(toast.success).toHaveBeenCalledWith("No receipt is known. A follow-up is recorded for this notice.");
   });
 
   it("marks a follow-up as required with its reason, and refuses an empty reason before any request", async () => {

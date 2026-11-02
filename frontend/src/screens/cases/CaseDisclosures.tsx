@@ -123,6 +123,7 @@ export function CaseDisclosures({ caseId, closed, canApprove, canRecordNotices }
   // Bumped after an approval so the list and the preview reload from the server.
   const [revision, setRevision] = useState(0);
   const [recipient, setRecipient] = useState("");
+  const [recipientRef, setRecipientRef] = useState("");
   const [purpose, setPurpose] = useState("");
   const [digest, setDigest] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
@@ -242,6 +243,13 @@ export function CaseDisclosures({ caseId, closed, canApprove, canRecordNotices }
       setFormError("The digest is 64 lower-case hexadecimal characters. Copy it exactly from the preview.");
       return;
     }
+    const recipientRefValue = recipientRef.trim();
+    if (!RECIPIENT_REF_PATTERN.test(recipientRefValue)) {
+      setFormError(
+        "The recipient reference is an identifier: letters, digits, '.', '_', ':' or '-', up to 64 characters. Do not enter a name or an address.",
+      );
+      return;
+    }
     setFormError(null);
     setApproving(true);
     try {
@@ -249,9 +257,11 @@ export function CaseDisclosures({ caseId, closed, canApprove, canRecordNotices }
         recipient: recipient.trim(),
         purpose: purpose.trim(),
         digest: digestValue,
+        recipient_ref: recipientRefValue,
       });
       toast.success("Approval recorded. It covers this version and its digest only.");
       setRecipient("");
+      setRecipientRef("");
       setPurpose("");
       setDigest("");
       setRevision((count) => count + 1);
@@ -390,6 +400,11 @@ export function CaseDisclosures({ caseId, closed, canApprove, canRecordNotices }
             setActionError("Choose the reason why no receipt is known.");
             return;
           }
+          // An unknown receipt always comes with its follow-up, recorded in the same change.
+          if (text === "") {
+            setActionError("Enter the follow-up to chase the recipient. A notice with no receipt needs one.");
+            return;
+          }
           const reasonCode = unknownReason;
           void runNoticeAction(
             () =>
@@ -397,9 +412,10 @@ export function CaseDisclosures({ caseId, closed, canApprove, canRecordNotices }
                 outcome: "unknown",
                 received_at: null,
                 reason_code: reasonCode,
-                reason: note,
+                reason: null,
+                follow_up_reason: text,
               }),
-            "No receipt is known for this notice. It stays unknown.",
+            "No receipt is known. A follow-up is recorded for this notice.",
           );
           return;
         }
@@ -426,6 +442,7 @@ export function CaseDisclosures({ caseId, closed, canApprove, canRecordNotices }
               received_at: receivedAt,
               reason_code: null,
               reason: note,
+              follow_up_reason: null,
             }),
           "Receipt recorded. The notice is now marked as received.",
         );
@@ -764,7 +781,11 @@ export function CaseDisclosures({ caseId, closed, canApprove, canRecordNotices }
                     </>
                   )}
                   <Field>
-                    <FieldLabel htmlFor="notice-action-text">{NOTICE_ACTION_TEXT_LABEL[activeAction.action]}</FieldLabel>
+                    <FieldLabel htmlFor="notice-action-text">
+                      {activeAction.action === "receipt" && receiptOutcome === "unknown"
+                        ? "Follow-up to chase the recipient"
+                        : NOTICE_ACTION_TEXT_LABEL[activeAction.action]}
+                    </FieldLabel>
                     <Textarea
                       id="notice-action-text"
                       value={actionText}
@@ -774,6 +795,11 @@ export function CaseDisclosures({ caseId, closed, canApprove, canRecordNotices }
                     />
                     {activeAction.action === "cancel" && (
                       <FieldDescription>The notice stays in the record, marked cancelled, with this reason.</FieldDescription>
+                    )}
+                    {activeAction.action === "receipt" && receiptOutcome === "unknown" && (
+                      <FieldDescription>
+                        Required. The follow-up is recorded with the unknown receipt, in the same change.
+                      </FieldDescription>
                     )}
                     {activeAction.action !== "receipt" && activeAction.action !== "cancel" && (
                       <FieldDescription>Recording a follow-up does not change any deadline.</FieldDescription>
@@ -934,6 +960,19 @@ export function CaseDisclosures({ caseId, closed, canApprove, canRecordNotices }
                 onChange={(event) => setRecipient(event.target.value)}
                 disabled={!canApproveSelected}
               />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="disclosure-recipient-ref">Approved recipient reference</FieldLabel>
+              <Input
+                id="disclosure-recipient-ref"
+                className="font-mono"
+                value={recipientRef}
+                onChange={(event) => setRecipientRef(event.target.value)}
+                disabled={!canApproveSelected}
+              />
+              <FieldDescription>
+                The identifier of the recipient kept outside SAFE. A notice of this version must give the same reference.
+              </FieldDescription>
             </Field>
             <Field>
               <FieldLabel htmlFor="disclosure-purpose">Purpose</FieldLabel>

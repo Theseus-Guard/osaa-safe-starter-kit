@@ -83,6 +83,7 @@ APPROVED_BODY = {
     "approval": {
         "id": "cccccccc-dddd-4eee-8fff-000000000009",
         "recipient": "Member CERT",
+        "recipient_ref": "cert-07",
         "purpose": "Rapid alert",
         "digest": DIGEST,
         "preparer_id": "bbbbbbbb-cccc-4ddd-8eee-000000000001",
@@ -337,6 +338,8 @@ def test_approve_sends_the_recipient_purpose_and_digest_with_a_key(api, capsys):
         "Rapid alert",
         "--digest",
         DIGEST,
+        "--recipient-ref",
+        "cert-07",
         "--username",
         "alice",
     )
@@ -351,9 +354,37 @@ def test_approve_sends_the_recipient_purpose_and_digest_with_a_key(api, capsys):
         "recipient": "Member CERT",
         "purpose": "Rapid alert",
         "digest": DIGEST,
+        "recipient_ref": "cert-07",
     }
     assert header(call, "Idempotency-Key")
     assert "Approval recorded" in out and "dddddddd-eeee-4fff-8000-000000000001" in out
+    assert "Recipient reference" in out and "cert-07" in out
+
+
+def test_approve_refuses_a_recipient_reference_with_a_name_before_any_request(
+    api, capsys
+):
+    code, _, err = run(
+        capsys,
+        "case",
+        "disclosure",
+        "approve",
+        CASE_ID,
+        VERSION_ID,
+        "--recipient",
+        "Member CERT",
+        "--purpose",
+        "Rapid alert",
+        "--digest",
+        DIGEST,
+        "--recipient-ref",
+        "Member CERT",
+        "--username",
+        "alice",
+    )
+    assert code == 2
+    assert "--recipient-ref is the identifier of the approved recipient" in err
+    assert not any(entry["method"] == "POST" for entry in api.calls)
 
 
 def test_approve_refuses_a_digest_that_is_not_64_hex_characters_before_any_request(
@@ -372,6 +403,8 @@ def test_approve_refuses_a_digest_that_is_not_64_hex_characters_before_any_reque
         "Rapid alert",
         "--digest",
         "ABC",
+        "--recipient-ref",
+        "cert-07",
         "--username",
         "alice",
     )
@@ -428,6 +461,8 @@ def test_approve_explains_each_refusal(api, capsys, status, detail, text):
         "Rapid alert",
         "--digest",
         DIGEST,
+        "--recipient-ref",
+        "cert-07",
         "--username",
         "alice",
     )
@@ -455,6 +490,8 @@ def test_approve_json_prints_the_api_body(api, capsys):
         "Rapid alert",
         "--digest",
         DIGEST,
+        "--recipient-ref",
+        "cert-07",
         "--json",
         "--username",
         "alice",

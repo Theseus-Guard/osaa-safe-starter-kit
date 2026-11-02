@@ -6,7 +6,9 @@ it follows, a manifest, and a digest over its canonical content. Versions are in
 package is a new version.
 
 Approval: a human approves one version. The approval names the recipient, the purpose, and the digest the approver
-confirmed, and it must match the version. A preparer may not approve their own version, and the rule is recorded on the
+confirmed, and it must match the version. The approver also confirms the recipient reference (recipient_ref, an
+identifier kept outside SAFE, migration 0049). A notice of the version must name that same reference. A preparer may
+not approve their own version, and the rule is recorded on the
 approval row (separation_rule). Approving a CLEAR package also records the release of its CLEAR items (tlp.py), in the
 same transaction. A later version of the same package revokes an earlier approval by change: the approval counts only for
 the latest version.
@@ -193,6 +195,11 @@ class Item:
     tlp_label: str
 
 
+# The identifier of a recipient kept outside SAFE (approval recipient_ref, notice recipient_ref). Names and addresses
+# do not match it.
+RECIPIENT_REF_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$"
+
+
 @dataclass(frozen=True)
 class Approval:
     id: str
@@ -203,6 +210,8 @@ class Approval:
     preparer_id: str
     approved_by: str
     approved_at: datetime
+    # None only for an approval made before migration 0049. Such an approval cannot receive a notice.
+    recipient_ref: str | None = None
 
 
 @dataclass(frozen=True)
@@ -476,7 +485,8 @@ def load_version_on(conn, case_id: str, version_id: str) -> Version | None:
     latest = _latest_version_number(conn, row[1])
     approval_row = conn.execute(
         """
-        SELECT id::text, version_id::text, recipient, purpose, digest, preparer_id::text, approved_by::text, approved_at
+        SELECT id::text, version_id::text, recipient, purpose, digest, preparer_id::text, approved_by::text, approved_at,
+               recipient_ref
         FROM disclosure_approvals
         WHERE version_id = %s AND NOT is_deleted
         """,
@@ -784,7 +794,9 @@ def approve_version(
     render: Callable[[Version], Any] | None = None,
 ) -> Result:
     """Record the human approval of one version. approval_values: recipient, purpose and digest, as the approver
-    confirms them. They must equal the version's values, or the approval is refused (BINDING_MISMATCH).
+    confirms them. They must equal the version's values, or the approval is refused (BINDING_MISMATCH). It also holds
+    recipient_ref, the identifier of the approved recipient, which the approval stores and no version field holds: a
+    notice of this version must name it (external_notices.record_notice).
 
     Refused: a version that is not the latest, a version that already has an approval, the preparer approving their own
     version, and an approver who cannot see a non-CLEAR item. A CLEAR item without release approval gets one here.
@@ -835,8 +847,8 @@ def approve_version(
                 """
                 INSERT INTO disclosure_approvals
                     (version_id, package_id, case_id, recipient, purpose, digest, preparer_id, approved_by,
-                     separation_rule)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'preparer_differs_from_approver')
+                     separation_rule, recipient_ref)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'preparer_differs_from_approver', %s)
                 RETURNING id::text, approved_at
                 """,
                 (
@@ -848,6 +860,7 @@ def approve_version(
                     version.digest,
                     version.created_by,
                     scope.user_id,
+                    approval_values["recipient_ref"],
                 ),
             ).fetchone()
             audit.record(
@@ -874,6 +887,7 @@ def approve_version(
                 preparer_id=version.created_by,
                 approved_by=scope.user_id,
                 approved_at=approved_at,
+                recipient_ref=approval_values["recipient_ref"],
             )
             approved = replace(version, approval=approval)
             if idempotency is not None:

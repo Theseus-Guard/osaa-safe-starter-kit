@@ -96,6 +96,9 @@ const MESSAGES: Record<string, string> = {
   version_superseded:
     "A newer version of this package exists, so no notice can be recorded for this one. Use the latest approved version.",
   approval_mismatch: "The approval does not match this version. Tell an administrator.",
+  recipient_mismatch:
+    "The recipient reference is not the one the approver confirmed for this version, so no notice was recorded. Use the approved reference.",
+  unknown_needs_follow_up: "A notice with no receipt needs a follow-up. Enter the follow-up and record it again.",
   release_approval_missing: "A CLEAR item has no release approval, so no notice can be recorded for this version.",
   release_trace_missing:
     "No release attempt is open for this version, so the release was refused. Start the release again from this version.",

@@ -262,11 +262,16 @@ def resync_deadlines(conn, case_id: str) -> tuple[datetime, dict[str, dict[str, 
     return t0, moved
 
 
-def closure_blockers(review_count: int, tasks: Iterable[tuple[str, str]]) -> list[str]:
+def closure_blockers(
+    review_count: int, tasks: Iterable[tuple[str, str]], unknown_notices: int = 0
+) -> list[str]:
     """Why a case cannot be closed yet. An empty list means it may be closed.
 
     A case needs at least one review, and every deadline task must be done or not applicable.
     An open weekly_update task is covered by the same rule, so it never closes silently.
+    unknown_notices counts the notices whose latest state is receipt_unknown. A new unknown answer always comes with a
+    follow-up (safe_kit.external_notices), so only a notice recorded before that rule can be counted here: it must get
+    a follow-up before the case closes.
     """
     blockers = []
     if review_count < 1:
@@ -274,6 +279,10 @@ def closure_blockers(review_count: int, tasks: Iterable[tuple[str, str]]) -> lis
     for kind, status in tasks:
         if status not in CLOSABLE_TASK_STATUSES:
             blockers.append(f"deadline task {kind} is {status}")
+    if unknown_notices:
+        blockers.append(
+            f"{unknown_notices} external notice(s) have no receipt and no follow-up recorded"
+        )
     return blockers
 
 
@@ -1123,7 +1132,20 @@ def close_case(
             "SELECT kind, status FROM deadline_tasks WHERE case_id = %s AND NOT is_deleted ORDER BY due_at, kind",
             (case_id,),
         ).fetchall()
-        blockers = closure_blockers(review_count, tasks)
+        # A notice whose latest revision is receipt_unknown has no follow-up (only older notices can be in this state).
+        unknown_notices = conn.execute(
+            """
+            SELECT count(*) FROM (
+                SELECT DISTINCT ON (notice_id) state
+                FROM external_notices
+                WHERE case_id = %s AND NOT is_deleted
+                ORDER BY notice_id, revision DESC
+            ) latest
+            WHERE latest.state = 'receipt_unknown'
+            """,
+            (case_id,),
+        ).fetchone()[0]
+        blockers = closure_blockers(review_count, tasks, unknown_notices)
         if blockers:
             return Outcome.BLOCKED, blockers
         closed_at = conn.execute(

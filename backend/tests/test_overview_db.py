@@ -309,8 +309,8 @@ def test_pending_approvals_count_the_latest_unapproved_version_and_only_for_the_
     with connect() as conn:
         conn.execute(
             "INSERT INTO disclosure_approvals (version_id, package_id, case_id, recipient, purpose, digest, preparer_id, "
-            "approved_by, separation_rule) VALUES (%s, %s, %s, 'Test recipient', 'Test purpose', %s, %s, %s, "
-            "'preparer_differs_from_approver')",
+            "approved_by, separation_rule, recipient_ref) VALUES (%s, %s, %s, 'Test recipient', 'Test purpose', %s, %s, %s, "
+            "'preparer_differs_from_approver', 'cert-07')",
             (
                 approved_version,
                 approved_package,

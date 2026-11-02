@@ -8,7 +8,10 @@ States:
 - sent: the send is recorded and no receipt answer has been recorded yet.
 - receipt_received: a receipt from the recipient was recorded (received_at). Provider acceptance is not a receipt.
 - receipt_unknown: no receipt is known. A reason code says why: provider_accepted_no_receipt, timeout, or no_answer.
-  Nothing moves a notice from unknown to received except a later receipt that is recorded.
+  Nothing moves a notice from unknown to received except a later receipt that is recorded. The unknown answer is
+  accepted only with a follow-up reason. The follow-up is written in the same transaction, as the next revision
+  (follow_up_required), so a notice that is unknown is never left without a follow-up. A notice that was unknown
+  before this rule, and has no follow-up, stays unknown: it blocks case closure until a follow-up is recorded.
 - follow_up_required / follow_up_done: someone must chase the recipient, and then the chase is recorded as done.
 - cancelled: the notice is withdrawn from the record, with a reason. Only a notice that has no receipt can be cancelled.
 There is no state that means delivered without a receipt.
@@ -19,6 +22,9 @@ Rules:
   that attempt first, in the same transaction, and closes it as done with the notice, or as refused with the reason. A
   refused attempt never counts as a release. Later versions do not change an existing notice; the notice keeps the version
   it was sent with. Receipts, follow-ups and cancels are still possible after a later version exists.
+- Recipient binding: the recipient_ref of a notice must equal the recipient_ref the approver confirmed for the version
+  (disclosure_approvals.recipient_ref, migration 0049). Any other reference is refused with recipient_mismatch, and so is
+  a version approved before migration 0049, which has no reference.
 - sent_at must not be before the approval and not in the future (a small clock allowance applies).
 - A second notice for the same version and recipient reference is a new record. It needs a repeat_reason. Without one the
   record is refused, so a repeated request never creates a duplicate by itself.
@@ -56,7 +62,7 @@ STATES = (
     "follow_up_done",
     "cancelled",
 )
-RECIPIENT_REF_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$"
+RECIPIENT_REF_PATTERN = disclosure.RECIPIENT_REF_PATTERN
 REASON_LIMIT = 500
 CHANNEL_OTHER_LIMIT = 200
 CLOCK_ALLOWANCE = timedelta(minutes=1)
@@ -88,6 +94,10 @@ class Outcome(Enum):
     RELEASE_TRACE_MISSING = "release_trace_missing"
     TIME_OUT_OF_RANGE = "time_out_of_range"
     REPEAT_REASON_REQUIRED = "repeat_reason_required"
+    # The notice names another recipient than the one the approver confirmed for the version.
+    RECIPIENT_MISMATCH = "recipient_mismatch"
+    # An unknown receipt was given without the follow-up reason that must be recorded with it.
+    UNKNOWN_NEEDS_FOLLOW_UP = "unknown_needs_follow_up"
     # The notice is not in a state that allows the change. value holds the current state.
     STATE_CONFLICT = "state_conflict"
 
@@ -152,12 +162,16 @@ class NewNotice:
 
 @dataclass(frozen=True)
 class Change:
-    """One change to a notice: the new state and the reason that the change records."""
+    """One change to a notice: the new state and the reason that the change records.
+
+    follow_up_reason is used only with receipt_unknown: it is recorded as the follow-up in the same transaction.
+    """
 
     state: str
     reason_code: str | None = None
     reason: str | None = None
     received_at: datetime | None = None
+    follow_up_reason: str | None = None
 
 
 _COLUMNS = (
@@ -388,6 +402,12 @@ def record_notice(
                     release.outcome.value,
                 )
             assert version.approval is not None
+            # The recipient binding: the reference must be the one the approver confirmed. A version approved before
+            # migration 0049 has none, so no notice can be recorded for it.
+            if version.approval.recipient_ref != new.recipient_ref:
+                return _refuse_release(
+                    conn, attempt, Outcome.RECIPIENT_MISMATCH, "recipient_mismatch"
+                )
             if not _time_allowed(new.sent_at, version.approval.approved_at):
                 return _refuse_release(
                     conn, attempt, Outcome.TIME_OUT_OF_RANGE, "time_out_of_range"
@@ -516,25 +536,34 @@ def _change(
                 change.received_at, current.sent_at
             ):
                 return Result(Outcome.TIME_OUT_OF_RANGE)
-            updated = _insert_revision(
-                conn, current, current.revision + 1, change, scope
-            )
-            audit.record(
-                conn,
-                audit.DISCLOSURE_NOTICE_STATE,
-                "disclosure_notice",
-                notice_id,
-                actor_id=scope.user_id,
-                details={
-                    "case_id": case_id,
-                    "version_id": version_id,
-                    "version": current.version,
-                    "revision": {"old": current.revision, "new": updated.revision},
-                    "state": {"old": current.state, "new": change.state},
-                    "reason_code": change.reason_code,
-                    "reason": {"length": len(change.reason or "")},
-                },
-            )
+            # An unknown receipt is followed by its follow-up as the next revision, in this same transaction.
+            steps = [change]
+            if change.state == "receipt_unknown":
+                steps.append(
+                    Change(state="follow_up_required", reason=change.follow_up_reason)
+                )
+            previous = current
+            for step in steps:
+                updated = _insert_revision(
+                    conn, previous, previous.revision + 1, step, scope
+                )
+                audit.record(
+                    conn,
+                    audit.DISCLOSURE_NOTICE_STATE,
+                    "disclosure_notice",
+                    notice_id,
+                    actor_id=scope.user_id,
+                    details={
+                        "case_id": case_id,
+                        "version_id": version_id,
+                        "version": current.version,
+                        "revision": {"old": previous.revision, "new": updated.revision},
+                        "state": {"old": previous.state, "new": step.state},
+                        "reason_code": step.reason_code,
+                        "reason": {"length": len(step.reason or "")},
+                    },
+                )
+                previous = updated
             if idempotency is not None:
                 assert render is not None
                 remember(conn, idempotency, 200, render(updated))
@@ -556,7 +585,10 @@ def record_receipt(
     render: Callable[[Notice], Any] | None = None,
 ) -> Result:
     """Record the receipt answer: received (with received_at), or unknown (with a reason code). Provider acceptance is
-    recorded as unknown, never as received."""
+    recorded as unknown, never as received. An unknown answer is accepted only with its follow-up reason: the follow-up
+    is recorded in the same transaction, or nothing is recorded."""
+    if change.state == "receipt_unknown" and not change.follow_up_reason:
+        return Result(Outcome.UNKNOWN_NEEDS_FOLLOW_UP)
     return _change(
         case_id,
         version_id,

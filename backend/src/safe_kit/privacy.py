@@ -762,6 +762,7 @@ CATALOG: tuple[TableEntry, ...] = (
         contains_personal_data=True,
         personal_fields=(
             "recipient (may name a person or an organisation)",
+            "recipient_ref (an identifier of the recipient, kept outside SAFE; not a name or address)",
             "purpose (free text, may name people)",
             "preparer_id and approved_by (link to people)",
         ),

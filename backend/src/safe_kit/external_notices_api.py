@@ -20,7 +20,9 @@ Access rules:
   returns the first answer and writes nothing.
 
 Only a receipt from the recipient counts as received. Provider acceptance is recorded as receipt_unknown with the reason
-provider_accepted_no_receipt. Nothing here sends a notice.
+provider_accepted_no_receipt, and the unknown answer needs a follow_up_reason: the follow-up is recorded with it, in the
+same transaction (422 unknown_needs_follow_up otherwise). A notice names the recipient_ref the approver confirmed for
+the version; any other reference is refused with 422 recipient_mismatch. Nothing here sends a notice.
 """
 
 import uuid
@@ -118,9 +120,14 @@ class ReceiptRequest(_Strict):
         Literal["provider_accepted_no_receipt", "timeout", "no_answer"] | None
     ) = None
     reason: Reason | None = None
+    # Required with unknown (the notice then has a follow-up in the same change, and the answer is refused without it).
+    # Refused with received.
+    follow_up_reason: Reason | None = None
 
     @model_validator(mode="after")
     def outcome_fields_agree(self) -> "ReceiptRequest":
+        if self.outcome == "received" and self.follow_up_reason is not None:
+            raise ValueError("follow_up_reason is given only with an unknown receipt")
         if self.outcome == "received":
             if self.received_at is None or self.reason_code is not None:
                 raise ValueError(
@@ -207,6 +214,8 @@ _REFUSALS: dict[Outcome, tuple[int, dict[str, Any] | str]] = {
     Outcome.RELEASE_TRACE_MISSING: (409, {"status": "release_trace_missing"}),
     Outcome.TIME_OUT_OF_RANGE: (422, {"status": "time_out_of_range"}),
     Outcome.REPEAT_REASON_REQUIRED: (422, {"status": "repeat_reason_required"}),
+    Outcome.RECIPIENT_MISMATCH: (422, {"status": "recipient_mismatch"}),
+    Outcome.UNKNOWN_NEEDS_FOLLOW_UP: (422, {"status": "unknown_needs_follow_up"}),
     Outcome.PREPARER_IS_RECORDER: (403, {"status": "preparer_cannot_record"}),
 }
 
@@ -345,7 +354,10 @@ def record_external_notice_receipt(
         )
     else:
         change = external_notices.Change(
-            state="receipt_unknown", reason_code=body.reason_code, reason=body.reason
+            state="receipt_unknown",
+            reason_code=body.reason_code,
+            reason=body.reason,
+            follow_up_reason=body.follow_up_reason,
         )
     result = external_notices.record_receipt(
         str(case_id),
