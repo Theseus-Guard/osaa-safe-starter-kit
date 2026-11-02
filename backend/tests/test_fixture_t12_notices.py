@@ -464,8 +464,9 @@ def test_a_role_without_disclosures_read_cannot_read_the_notices(dworld):
 @requires_database
 def test_a_case_the_caller_cannot_see_answers_as_a_missing_case(dworld, monkeypatch):
     version, notice = recorded_notice(dworld)
-    stranger = db_user("disclosure_approver")  # holds the approve permission, but is not assigned to this case
-    grant(monkeypatch, "disclosure_approver", "cases:read_assigned")
+    # The approver reads every case (cases:read_all), so the stranger is a reviewer that is not assigned to this case.
+    stranger = db_user("reviewer")
+    grant(monkeypatch, "reviewer", "disclosures:read", "disclosures:approve")
     hidden_list = request_as(stranger, "get", notices_url(dworld, version["id"]))
     hidden_one = request_as(stranger, "get", notices_url(dworld, version["id"], f"/{notice['id']}"))
     hidden_write = request_as(

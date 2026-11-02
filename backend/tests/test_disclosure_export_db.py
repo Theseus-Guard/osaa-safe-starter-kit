@@ -34,6 +34,7 @@ from test_fixture_p6_disclosure import (  # dworld: fixture
     create,
     dworld,
     first_version,
+    grant,
     unassign,
 )
 from test_fixture_t06a_redaction import make_derived, world  # world: fixture
@@ -219,7 +220,9 @@ def test_a_case_the_caller_cannot_see_answers_as_a_missing_case(dworld, monkeypa
         approve(dworld, "approver", view["id"], view["recipient"], view["purpose"], view["digest"]).status_code
         == 201
     )
-    stranger = db_user("disclosure_approver")  # holds the read permission, but is not assigned to this case
+    # The approver reads every case (cases:read_all), so the stranger is a reviewer that is not assigned to this case.
+    stranger = db_user("reviewer")
+    grant(monkeypatch, "reviewer", "disclosures:read")
     hidden = request_as(stranger, "get", export_url(dworld, view["id"]))
     missing_case = request_as(stranger, "get", f"/api/v1/cases/{uuid.uuid4()}/disclosures/{view['id']}/export")
     assert hidden.status_code == missing_case.status_code == 404

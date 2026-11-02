@@ -27,6 +27,8 @@ interface Props {
   closed: boolean;
   // The caller has reviews:write. Without it the rounds are shown read-only.
   canReview: boolean;
+  // The caller may file an appeal. Without it the appeal form is not offered (the disclosure approver).
+  canAppeal?: boolean;
   // Called after a round is opened or a layer is saved. The caller reloads the history, because both are audited.
   onRecorded: () => void;
 }
@@ -61,7 +63,7 @@ interface ActiveLayer {
   layer: ReviewLayer;
 }
 
-export function CaseReview({ caseId, closed, canReview, onRecorded }: Props) {
+export function CaseReview({ caseId, closed, canReview, canAppeal, onRecorded }: Props) {
   const [rounds, setRounds] = useState<ReviewRound[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState<string | null>(null);
@@ -138,7 +140,11 @@ export function CaseReview({ caseId, closed, canReview, onRecorded }: Props) {
                 canSet={canRecord && round.status === "open"}
                 onSet={(layer) => setActive({ round, layer })}
               />
-              <ReviewIndependence roundId={round.id} canDeclare={canRecord && round.status === "open"} />
+              <ReviewIndependence
+                roundId={round.id}
+                canDeclare={canRecord && round.status === "open"}
+                canAppeal={canAppeal}
+              />
             </div>
           ))}
         {canRecord && (

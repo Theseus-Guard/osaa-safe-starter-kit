@@ -23,9 +23,10 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from safe_kit.auth import permissions_of, require_any_permission, require_permission
+from safe_kit.auth import permissions_of, require_any_permission, require_any_permission_except_role, require_permission
 from safe_kit.case_records_api import CASE_READ_PERMISSIONS_FOR_RECORDS
 from safe_kit.cases import CaseScope
+from safe_kit.rbac import DISCLOSURE_APPROVER_ROLE
 from safe_kit.idempotency import KeyScope, fingerprint, valid_key
 from safe_kit.review_independence import (
     GROUNDS_LIMIT,
@@ -345,7 +346,10 @@ def list_review_recusals(
 def file_review_appeal(
     review_id: uuid.UUID,
     body: AppealRequest,
-    actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS_FOR_RECORDS)),
+    # The disclosure approver holds cases:read_all to read the case it approves; it may not file appeals.
+    actor: User = Depends(
+        require_any_permission_except_role(DISCLOSURE_APPROVER_ROLE, *CASE_READ_PERMISSIONS_FOR_RECORDS)
+    ),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> AppealResponse | JSONResponse:
     key = _checked_key(idempotency_key)

@@ -53,7 +53,7 @@ function HomeView({ profile, notice, onLogout, onPasswordChanged }: Props) {
         (caseId === null ? (
           <CasesPage permissions={profile.permissions} />
         ) : (
-          <CaseDetailPage caseId={caseId} permissions={profile.permissions} />
+          <CaseDetailPage caseId={caseId} permissions={profile.permissions} role={profile.role} />
         ))}
       {page === "catalog" &&
         (entryId === null ? (

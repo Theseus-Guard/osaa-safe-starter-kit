@@ -219,10 +219,11 @@ CATALOG: tuple[TableEntry, ...] = (
         retention="Kept until a retention period is defined. Legal hold rules are not yet implemented.",
         retention_defined=False,
         security=(
-            "Visible to the creator (cases:read_own), to triagers (cases:read_all), and to investigators and reviewers "
-            "with an active assignment (cases:read_assigned). A case opened through the reporter intake is hidden from "
-            "triagers until it has an active assignment; holders of reporter_contact:read always see it. "
-            "Administrators have no case permissions."
+            "Visible to the creator (cases:read_own), to triagers and disclosure approvers (cases:read_all), and to "
+            "investigators and reviewers with an active assignment (cases:read_assigned). A case opened through the "
+            "reporter intake is hidden from read_all holders until it has an active assignment; holders of "
+            "reporter_contact:read always see it. Disclosure approvers read the full case to approve its disclosure "
+            "versions, but may not change its deadlines or file appeals. Administrators have no case permissions."
         ),
         deletion_mode="Soft delete (is_deleted, deleted_at).",
         created_column="created_at",

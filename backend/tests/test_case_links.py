@@ -194,7 +194,7 @@ def test_reads_need_a_case_read_permission(client, caller, monkeypatch, role):
     assert client.get(f"/api/v1/cases/{CASE_ID}/links").status_code == 200
 
 
-@pytest.mark.parametrize("role", ["admin", "auditor", "disclosure_approver"])
+@pytest.mark.parametrize("role", ["admin", "auditor"])
 def test_roles_without_case_permissions_cannot_read_links(client, caller, monkeypatch, role):
     as_role(caller, REPORTER_ID, role)
     monkeypatch.setattr(case_links_api, "list_links", lambda *args, **kwargs: pytest.fail("the service must not be reached"))

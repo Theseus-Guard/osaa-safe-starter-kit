@@ -185,3 +185,19 @@ def require_any_permission(*permissions: str) -> Callable[[User], User]:
         return user
 
     return dependency
+
+
+def require_any_permission_except_role(excluded_role: str, *permissions: str) -> Callable[[User], User]:
+    """Like require_any_permission, but refuses a caller whose role is excluded_role, whatever permissions it holds.
+
+    Used where a permission that a role needs for reading also reaches a write that this role must not make. The
+    disclosure approver holds cases:read_all (to read the case it approves), and the deadline and appeal routes accept
+    that permission, so they refuse the approver role by name. The refusal is the same 403 as the other permission checks.
+    """
+
+    def dependency(user: User = Depends(current_user)) -> User:
+        if user.role == excluded_role or not set(permissions) & permissions_for_role(user.role):
+            raise HTTPException(status_code=403, detail="forbidden")
+        return user
+
+    return dependency

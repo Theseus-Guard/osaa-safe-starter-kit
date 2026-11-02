@@ -135,7 +135,7 @@ def test_recording_a_recusal_needs_reviews_write(client, caller, monkeypatch, ro
     assert client.post(RECUSAL_URL, headers=idem(), json=body).status_code == 403
 
 
-@pytest.mark.parametrize("role", ["admin", "auditor", "disclosure_approver"])
+@pytest.mark.parametrize("role", ["admin", "auditor"])
 def test_filing_an_appeal_needs_a_case_read_permission(client, caller, monkeypatch, role):
     monkeypatch.setattr(review_independence_api, "file_appeal", forbid("file_appeal"))
     monkeypatch.setattr(review_independence_api, "list_appeals", forbid("list_appeals"))
@@ -143,6 +143,18 @@ def test_filing_an_appeal_needs_a_case_read_permission(client, caller, monkeypat
     body = {"grounds": "Wrong outcome"}
     assert client.post(APPEAL_URL, headers=idem(), json=body).status_code == 403
     assert client.get(APPEAL_URL).status_code == 403
+
+
+def test_the_disclosure_approver_reads_appeals_but_may_not_file_one(client, caller, monkeypatch):
+    # cases:read_all lets the approver read the case and so its appeals; filing an appeal is refused to this role.
+    monkeypatch.setattr(review_independence_api, "file_appeal", forbid("file_appeal"))
+    monkeypatch.setattr(review_independence_api, "list_appeals", lambda *args, **kwargs: [])
+    as_role(caller, ADMIN_ID, "disclosure_approver")
+    body = {"grounds": "Wrong outcome"}
+    response = client.post(APPEAL_URL, headers=idem(), json=body)
+    assert response.status_code == 403
+    assert response.json() == {"detail": "forbidden"}
+    assert client.get(APPEAL_URL).status_code == 200
 
 
 def test_a_reporter_may_file_an_appeal_but_not_declare_a_conflict(client, caller, monkeypatch):

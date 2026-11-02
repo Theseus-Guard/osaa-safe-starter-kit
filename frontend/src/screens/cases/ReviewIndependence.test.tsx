@@ -120,7 +120,7 @@ describe("ReviewIndependence", () => {
     expect(screen.getByText("The product does not decide it.", { exact: false })).toBeInTheDocument();
   });
 
-  it("offers the conflict and recusal forms only when the caller may declare, and always offers the appeal form", async () => {
+  it("offers the conflict and recusal forms only when the caller may declare, and the appeal form by default", async () => {
     const { unmount } = render(<ReviewIndependence roundId={ROUND_ID} canDeclare={false} />);
     expect(await screen.findByRole("form", { name: "File an appeal" })).toBeInTheDocument();
     expect(screen.queryByRole("form", { name: "Declare a conflict" })).not.toBeInTheDocument();
@@ -130,6 +130,12 @@ describe("ReviewIndependence", () => {
     render(<ReviewIndependence roundId={ROUND_ID} canDeclare />);
     expect(await screen.findByRole("form", { name: "Declare a conflict" })).toBeInTheDocument();
     expect(screen.getByRole("form", { name: "Withdraw from this round" })).toBeInTheDocument();
+  });
+
+  it("hides the appeal form from a caller the backend refuses to appeal, such as the disclosure approver", async () => {
+    render(<ReviewIndependence roundId={ROUND_ID} canDeclare={false} canAppeal={false} />);
+    expect(await screen.findByText("No appeal has been filed on this round.")).toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: "File an appeal" })).not.toBeInTheDocument();
   });
 
   it("declares a conflict with the trimmed description, then reloads the entries", async () => {

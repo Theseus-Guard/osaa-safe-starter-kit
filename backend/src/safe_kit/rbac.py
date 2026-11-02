@@ -21,6 +21,10 @@ ROLE_LOCK_KEY = 0x5AFE0004
 REPORTING_OWNER_ROLE = "reporting_owner"
 FIXED_REPORTER_CONTACT_GRANT = frozenset({"reporter_contact:read"})
 
+# The approver reads the case it approves through cases:read_all (migration 0044). That permission also reaches the
+# deadline routes and the appeal route, which this role must not use, so those routes refuse the role by name.
+DISCLOSURE_APPROVER_ROLE = "disclosure_approver"
+
 DEFAULT_ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "reporter": frozenset({"cases:submit", "cases:read_own"}),
     "triager": frozenset(
@@ -28,7 +32,8 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     ),
     "investigator": frozenset({"cases:read_assigned", "cases:assignable", "evidence:read", "evidence:write"}),
     "reviewer": frozenset({"cases:read_assigned", "cases:assignable", "evidence:read", "reviews:write"}),
-    "disclosure_approver": frozenset({"disclosures:approve"}),
+    # Reads the case it approves: cases:read_all, granted by migration 0044 (see DISCLOSURE_APPROVER_ROLE).
+    "disclosure_approver": frozenset({"disclosures:approve", "cases:read_all"}),
     "auditor": frozenset({"audit:read"}),
     # Reads the reporter contact (the fixed grant, see REPORTING_OWNER_ROLE). cases:read_all is needed as well: the
     # contact route checks case visibility, and only a read_all caller can see a reporter-channel case that has no
