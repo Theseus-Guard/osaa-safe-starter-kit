@@ -2,9 +2,11 @@
 
 import argparse
 import getpass
+import hashlib
 import json
 import mimetypes
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -1729,7 +1731,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_case_update_commands(case_commands)
     _add_case_report_commands(case_commands)
 
-    evidence = subcommands.add_parser("evidence", help="Add and list the evidence of a case")
+    evidence = subcommands.add_parser("evidence", help="Add, list, show and redact the evidence of a case")
     evidence_commands = evidence.add_subparsers(dest="evidence_command", required=True)
 
     added = evidence_commands.add_parser("add", help="Upload a file as evidence for a case")
@@ -1749,6 +1751,7 @@ def build_parser() -> argparse.ArgumentParser:
     evidence_list.add_argument("--offset", type=int, default=0, help="Number of items to skip")
     _add_auth_options(evidence_list)
     evidence_list.set_defaults(handler=_evidence_list)
+    _add_evidence_commands(evidence_commands)
 
     task = subcommands.add_parser("task", help="Show the deadline tasks of a case")
     task_commands = task.add_subparsers(dest="task_command", required=True)
@@ -1777,6 +1780,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_idempotency_option(task_restore)
     _add_auth_options(task_restore)
     task_restore.set_defaults(handler=_task_restore)
+    _add_catalog_commands(subcommands)
     return parser
 
 
@@ -2104,6 +2108,726 @@ def _add_case_report_commands(case_commands) -> None:
     weekly_show.add_argument("update_id", metavar="UPDATE_ID", help="Weekly update ID (UUID), as listed by 'case weekly list'")
     _add_auth_options(weekly_show)
     weekly_show.set_defaults(handler=_weekly_show)
+
+
+# --- catalog, redaction and TLP (plans/03, CLI and UI parity: catalog, redaction and TLP) -------------------------------
+
+# The limits and values are the same as the API (safe_kit.catalog, safe_kit.redaction, safe_kit.tlp). The CLI does not
+# import the backend package, so they are written out here.
+CATALOG_TITLE_LIMIT = 200
+CATALOG_BODY_LIMIT = 4000
+CATALOG_REASON_LIMIT = 1000
+CATALOG_FIELD_LIMIT = 1000
+CATALOG_REFERENCE_LIMIT = 2000
+CATALOG_RESULTS = ("pass", "fail", "inconclusive")
+CATALOG_CLOSED_STATUSES = ("withdrawn", "superseded")
+TLP_LABELS = ("RED", "AMBER", "AMBER+STRICT", "GREEN", "CLEAR")
+REDACTION_MAX_RANGES = 50
+REDACTION_REASON_LIMIT = 500
+# Matches FROM-TO:REASON, for example 3-5:contains an account number, or 7:one line.
+REMOVE_PATTERN = re.compile(r"(\d+)(?:-(\d+))?:(.*)")
+CATALOG_ENTRY_PATH = "/api/v1/catalog/entries/{entry_id}"
+CATALOG_WRITE_MESSAGES = {
+    403: "your role does not hold the permission for this catalog action",
+    404: "catalog entry not found",
+    409: "the catalog could not record this change",
+}
+CATALOG_READ_MESSAGES = {403: "your role does not hold catalog:read", 404: "catalog entry not found"}
+# The API answers a missing item and an item the TLP rule hides with the same 404. The CLI shows the same text.
+EVIDENCE_READ_MESSAGES = {
+    403: "your role does not hold the permission to read evidence",
+    404: "evidence not found",
+}
+REDACT_MESSAGES = {
+    403: "your role does not hold the permission to redact evidence",
+    404: "evidence not found",
+    409: "evidence is not available, or the redaction expired before it finished; retry",
+    500: "the redacted copy could not be stored; nothing was recorded as available",
+}
+
+
+def _refusal_text(error: RequestFailed) -> RequestFailed:
+    """Show the API's own text for a refusal that carries one (for example "evidence not found"), so the CLI and the web
+    UI give the same words. A 403 keeps the message chosen for its status."""
+    if isinstance(error.detail, str) and error.status != 403:
+        return RequestFailed(error.detail, status=error.status, detail=error.detail)
+    return error
+
+
+def _catalog_refusal(error: RequestFailed, *, entry_id: str | None) -> RequestFailed:
+    """The message for a refused catalog write. Nothing was saved in any of these cases."""
+    detail = error.detail
+    if isinstance(detail, dict):
+        status = detail.get("status")
+        if status == "entry_closed":
+            return RequestFailed(
+                "this entry is withdrawn or superseded, so it accepts no further changes",
+                status=error.status,
+                detail=detail,
+            )
+        if status == "version_conflict":
+            current = detail.get("current_version")
+            hint = (
+                f"run 'catalog show {entry_id}' and run this command again with --expected-version {current}"
+                if entry_id is not None and isinstance(current, int)
+                else "read the entry again and run this command again"
+            )
+            return RequestFailed(
+                f"the entry changed, so nothing was saved. The current version is {current}; {hint}",
+                status=error.status,
+                detail=detail,
+            )
+        if status == "idempotency_key_reused":
+            return RequestFailed(
+                "this Idempotency-Key was already used for a different request. Run the command again without it",
+                status=error.status,
+                detail=detail,
+            )
+    return _refusal_text(error)
+
+
+def _catalog_text(value: str | None, option: str, limit: int, *, required: bool = True) -> str | None:
+    """Text of a catalog field: stripped, not empty, and within the API limit."""
+    text = (value or "").strip()
+    if not text:
+        if required:
+            raise UsageError(f"{option} is required and cannot be only spaces")
+        return None
+    if len(text) > limit:
+        raise UsageError(f"{option} must be at most {limit} characters")
+    return text
+
+
+def _expected_version_arg(value: int) -> int:
+    if value < 1:
+        raise UsageError("--expected-version must be 1 or more. Read it with: catalog show ENTRY_ID")
+    return value
+
+
+def _derived_key(key: str, purpose: str) -> str:
+    """A key for one request of a command that makes several. A retry with the same key gets each first answer again."""
+    return hashlib.sha256(f"{key}:{purpose}".encode("utf-8")).hexdigest()
+
+
+def _verified_text(version: dict) -> str:
+    if version["verified"]:
+        return "yes"
+    verification = version.get("verification")
+    return f"no (last check: {verification['result']})" if verification else "no"
+
+
+def _print_catalog_entry(entry: dict) -> None:
+    current = entry["current"]
+    print(f"Catalog entry {entry['id']}")
+    _print_field("Status", entry["status"])
+    _print_field("Version", str(entry["version"]))
+    _print_field("Title", current["title"])
+    _print_field("Verified", _verified_text(current))
+    print("  Body:")
+    for line in current["body"].splitlines():
+        print(f"    {line}")
+    # The restricted reference is returned only to catalog:read_restricted. The default output never prints it.
+    if current.get("restricted") is not None:
+        print("  Restricted reference: held (printed only by --json)")
+    versions = entry.get("versions")
+    if not versions:
+        return
+    rows = [("VERSION", "OPERATION", "STATUS", "VERIFIED", "REASON")]
+    rows += [
+        (
+            str(version["version"]),
+            version["operation"],
+            version["status"],
+            _verified_text(version),
+            version["reason"] or "-",
+        )
+        for version in versions
+    ]
+    print("Version history:")
+    _print_table(rows)
+    checked = [version for version in versions if version.get("verification")]
+    if checked:
+        print("Verification history:")
+        for version in checked:
+            check = version["verification"]
+            print(
+                f"  version {version['version']}: {check['result']}, run {check['run_id']}, "
+                f"{check['method']} (checked {check['verified_at']})"
+            )
+
+
+def _print_recommendation(recommendation: dict) -> None:
+    print(f"Recommendation {recommendation['id']}")
+    _print_field("Responsible", recommendation["responsible"])
+    _print_field("Due (UTC)", recommendation["due_at"])
+    _print_field("Failure or system", recommendation["failure_or_system"])
+    _print_field("Required defence", recommendation["required_defence_outcome"])
+    _print_field("Minimum control", recommendation["minimum_control"])
+    _print_field("Control alternative", recommendation["control_alternative"] or "-")
+    _print_field("Evidence to keep", recommendation["evidence_to_keep"])
+    _print_field("Recorded", recommendation["created_at"])
+
+
+def _catalog_list(base_url: str, args: argparse.Namespace) -> None:
+    if not 1 <= args.limit <= MAX_PAGE_SIZE:
+        raise UsageError(f"--limit must be between 1 and {MAX_PAGE_SIZE}")
+    query: dict = {"limit": args.limit}
+    if args.cursor:
+        query["cursor"] = args.cursor
+
+    def action(base: str, token: str) -> None:
+        raw = _call(base, "GET", "/api/v1/catalog/entries", token=token, query=query, messages=CATALOG_READ_MESSAGES)
+        if args.json:
+            _print_json(raw)
+            return
+        page = _json_object(raw)
+        if not page["items"]:
+            print("No catalog entries yet.")
+        else:
+            rows = [("ID", "STATUS", "VERSION", "TITLE")]
+            rows += [(item["id"], item["status"], str(item["version"]), item["current"]["title"]) for item in page["items"]]
+            _print_table(rows)
+        if page["next_cursor"]:
+            print(f"More entries: run the command again with --cursor {page['next_cursor']}")
+
+    _with_session(base_url, args, action)
+
+
+def _catalog_show(base_url: str, args: argparse.Namespace) -> None:
+    entry_id = _uuid_arg(args.entry_id, "ENTRY_ID")
+
+    def action(base: str, token: str) -> None:
+        raw = _call(base, "GET", CATALOG_ENTRY_PATH.format(entry_id=entry_id), token=token, messages=CATALOG_READ_MESSAGES)
+        if args.json:
+            _print_json(raw)
+        else:
+            _print_catalog_entry(_json_object(raw))
+
+    _with_session(base_url, args, action)
+
+
+def _catalog_write(base_url: str, args: argparse.Namespace, *, path: str, payload: dict, heading: str, entry_id: str | None) -> None:
+    """One catalog write with an Idempotency-Key. A refused write saves nothing and says why."""
+    key = args.idempotency_key or str(uuid.uuid4())
+
+    def action(base: str, token: str) -> None:
+        try:
+            raw = _call(
+                base, "POST", path, token=token, payload=payload, messages=CATALOG_WRITE_MESSAGES,
+                extra_headers={"Idempotency-Key": key},
+            )
+        except RequestFailed as error:
+            raise _catalog_refusal(error, entry_id=entry_id) from None
+        if args.json:
+            _print_json(raw)
+            return
+        print(heading)
+        _print_catalog_entry(_json_object(raw))
+
+    _with_session(base_url, args, action)
+
+
+def _catalog_add(base_url: str, args: argparse.Namespace) -> None:
+    payload = {
+        "title": _catalog_text(args.title, "--title", CATALOG_TITLE_LIMIT),
+        "body": _catalog_text(args.body, "--body", CATALOG_BODY_LIMIT),
+        "verification_run_id": _uuid_arg(args.verification_run, "--verification-run") if args.verification_run else None,
+        "restricted_reference": _catalog_text(
+            args.restricted_reference, "--restricted-reference", CATALOG_REFERENCE_LIMIT, required=False
+        ),
+    }
+    _catalog_write(
+        base_url, args, path="/api/v1/catalog/entries", payload=payload,
+        heading="Catalog entry created.", entry_id=None,
+    )
+
+
+def _entry_version_payload(args: argparse.Namespace) -> dict:
+    """The fields of a new version: the expected version, the content, and the optional run and restricted reference."""
+    return {
+        "expected_version": _expected_version_arg(args.expected_version),
+        "title": _catalog_text(args.title, "--title", CATALOG_TITLE_LIMIT),
+        "body": _catalog_text(args.body, "--body", CATALOG_BODY_LIMIT),
+        "verification_run_id": _uuid_arg(args.verification_run, "--verification-run") if args.verification_run else None,
+        "restricted_reference": _catalog_text(
+            args.restricted_reference, "--restricted-reference", CATALOG_REFERENCE_LIMIT, required=False
+        ),
+    }
+
+
+def _catalog_version(base_url: str, args: argparse.Namespace) -> None:
+    entry_id = _uuid_arg(args.entry_id, "ENTRY_ID")
+    _catalog_write(
+        base_url, args, path=f"/api/v1/catalog/entries/{entry_id}/versions", payload=_entry_version_payload(args),
+        heading="Version saved.", entry_id=entry_id,
+    )
+
+
+def _catalog_correct(base_url: str, args: argparse.Namespace) -> None:
+    entry_id = _uuid_arg(args.entry_id, "ENTRY_ID")
+    payload = _entry_version_payload(args)
+    payload["reason"] = _catalog_text(args.reason, "--reason", CATALOG_REASON_LIMIT)
+    _catalog_write(
+        base_url, args, path=f"/api/v1/catalog/entries/{entry_id}/corrections", payload=payload,
+        heading="Correction saved.", entry_id=entry_id,
+    )
+
+
+def _catalog_reason_change(base_url: str, args: argparse.Namespace, suffix: str, heading: str) -> None:
+    entry_id = _uuid_arg(args.entry_id, "ENTRY_ID")
+    payload = {
+        "expected_version": _expected_version_arg(args.expected_version),
+        "reason": _catalog_text(args.reason, "--reason", CATALOG_REASON_LIMIT),
+    }
+    _catalog_write(
+        base_url, args, path=f"/api/v1/catalog/entries/{entry_id}/{suffix}", payload=payload,
+        heading=heading, entry_id=entry_id,
+    )
+
+
+def _catalog_dispute(base_url: str, args: argparse.Namespace) -> None:
+    _catalog_reason_change(base_url, args, "disputes", "Dispute recorded. The entry content is unchanged.")
+
+
+def _catalog_withdraw(base_url: str, args: argparse.Namespace) -> None:
+    _catalog_reason_change(base_url, args, "withdrawals", "Entry withdrawn. Its history is kept.")
+
+
+def _catalog_supersede(base_url: str, args: argparse.Namespace) -> None:
+    entry_id = _uuid_arg(args.entry_id, "ENTRY_ID")
+    payload = {
+        "expected_version": _expected_version_arg(args.expected_version),
+        "replacement_entry_id": _uuid_arg(args.replacement, "--replacement"),
+        "reason": _catalog_text(args.reason, "--reason", CATALOG_REASON_LIMIT, required=False),
+    }
+    _catalog_write(
+        base_url, args, path=f"/api/v1/catalog/entries/{entry_id}/supersessions", payload=payload,
+        heading="Entry superseded. Its history is kept.", entry_id=entry_id,
+    )
+
+
+def _catalog_verify(base_url: str, args: argparse.Namespace) -> None:
+    """Record a verification run of a recommendation and attach it to the entry as a new version with the same content.
+
+    Two API calls: the run (its own record), then the version that names it. A failing or inconclusive run is attached
+    too, so the history shows it, but the entry shows as verified only after a pass. Retrying with the same
+    --idempotency-key gets the first answers again. A closed entry is refused before anything is recorded.
+    """
+    entry_id = _uuid_arg(args.entry_id, "ENTRY_ID")
+    recommendation_id = _uuid_arg(args.recommendation, "--recommendation")
+    expected_version = _expected_version_arg(args.expected_version)
+    run_payload = {
+        "subject": _catalog_text(args.subject, "--subject", CATALOG_FIELD_LIMIT),
+        "scope": _catalog_text(args.scope, "--scope", CATALOG_FIELD_LIMIT),
+        "assumptions": _catalog_text(args.assumptions, "--assumptions", CATALOG_FIELD_LIMIT),
+        "evidence_path": _catalog_text(args.evidence_path, "--evidence-path", CATALOG_FIELD_LIMIT),
+        "failure_behavior": _catalog_text(args.failure_behavior, "--failure-behavior", CATALOG_FIELD_LIMIT),
+        "error_class": _catalog_text(args.error_class, "--error-class", CATALOG_FIELD_LIMIT),
+        "uncertainty": _catalog_text(args.uncertainty, "--uncertainty", CATALOG_FIELD_LIMIT),
+        "method": _catalog_text(args.method, "--method", CATALOG_FIELD_LIMIT),
+        "result": args.result,
+    }
+    key = args.idempotency_key or str(uuid.uuid4())
+    run_key = _derived_key(key, "verification-run")
+    version_key = _derived_key(key, "version")
+
+    def action(base: str, token: str) -> None:
+        entry = _json_object(
+            _call(base, "GET", CATALOG_ENTRY_PATH.format(entry_id=entry_id), token=token, messages=CATALOG_READ_MESSAGES)
+        )
+        if entry["status"] in CATALOG_CLOSED_STATUSES:
+            raise RequestFailed(
+                f"this entry is {entry['status']}, so it cannot take a verification. Nothing was recorded"
+            )
+        run = _json_object(
+            _call(
+                base,
+                "POST",
+                f"/api/v1/catalog/recommendations/{recommendation_id}/verification-runs",
+                token=token,
+                payload=run_payload,
+                messages=CATALOG_WRITE_MESSAGES,
+                extra_headers={"Idempotency-Key": run_key},
+            )
+        )
+        current = entry["current"]
+        try:
+            raw = _call(
+                base,
+                "POST",
+                f"/api/v1/catalog/entries/{entry_id}/versions",
+                token=token,
+                payload={
+                    "expected_version": expected_version,
+                    "title": current["title"],
+                    "body": current["body"],
+                    "verification_run_id": run["id"],
+                },
+                messages=CATALOG_WRITE_MESSAGES,
+                extra_headers={"Idempotency-Key": version_key},
+            )
+        except RequestFailed as error:
+            refusal = _catalog_refusal(error, entry_id=entry_id)
+            raise RequestFailed(
+                f"verification run {run['id']} was recorded, but the entry was not updated: {refusal}"
+            ) from None
+        if args.json:
+            _print_json(raw)
+            return
+        changed = _json_object(raw)
+        print(f"Verification run {run['id']} recorded: {run['result']}.")
+        print(f"The entry is now at version {changed['version']}, and this check is attached to it.")
+        if changed["current"]["verified"]:
+            print("The entry is verified.")
+        else:
+            print("The entry is not verified: only a passing run verifies it.")
+
+    _with_session(base_url, args, action)
+
+
+def _catalog_recommendation_list(base_url: str, args: argparse.Namespace) -> None:
+    if not 1 <= args.limit <= MAX_PAGE_SIZE:
+        raise UsageError(f"--limit must be between 1 and {MAX_PAGE_SIZE}")
+    query: dict = {"limit": args.limit}
+    if args.cursor:
+        query["cursor"] = args.cursor
+
+    def action(base: str, token: str) -> None:
+        raw = _call(
+            base, "GET", "/api/v1/catalog/recommendations", token=token, query=query, messages=CATALOG_READ_MESSAGES
+        )
+        if args.json:
+            _print_json(raw)
+            return
+        page = _json_object(raw)
+        if not page["items"]:
+            print("No recommendations yet.")
+        else:
+            rows = [("ID", "RESPONSIBLE", "DUE (UTC)", "FAILURE OR SYSTEM")]
+            rows += [
+                (item["id"], item["responsible"], item["due_at"], item["failure_or_system"]) for item in page["items"]
+            ]
+            _print_table(rows)
+        if page["next_cursor"]:
+            print(f"More recommendations: run the command again with --cursor {page['next_cursor']}")
+
+    _with_session(base_url, args, action)
+
+
+def _catalog_recommendation_add(base_url: str, args: argparse.Namespace) -> None:
+    due = _parse_timestamp(args.due_at, "--due-at", not_in_future=False)
+    payload = {
+        "failure_or_system": _catalog_text(args.failure_or_system, "--failure-or-system", CATALOG_FIELD_LIMIT),
+        "required_defence_outcome": _catalog_text(
+            args.required_defence_outcome, "--required-defence-outcome", CATALOG_FIELD_LIMIT
+        ),
+        "minimum_control": _catalog_text(args.minimum_control, "--minimum-control", CATALOG_FIELD_LIMIT),
+        "control_alternative": _catalog_text(
+            args.control_alternative, "--control-alternative", CATALOG_FIELD_LIMIT, required=False
+        ),
+        "responsible": _catalog_text(args.responsible, "--responsible", CATALOG_FIELD_LIMIT),
+        "due_at": due.isoformat(),
+        "evidence_to_keep": _catalog_text(args.evidence_to_keep, "--evidence-to-keep", CATALOG_FIELD_LIMIT),
+    }
+    key = args.idempotency_key or str(uuid.uuid4())
+
+    def action(base: str, token: str) -> None:
+        try:
+            raw = _call(
+                base, "POST", "/api/v1/catalog/recommendations", token=token, payload=payload,
+                messages=CATALOG_WRITE_MESSAGES, extra_headers={"Idempotency-Key": key},
+            )
+        except RequestFailed as error:
+            raise _catalog_refusal(error, entry_id=None) from None
+        if args.json:
+            _print_json(raw)
+        else:
+            print("Recommendation saved. A recommendation is a suggestion until a passing verification run is recorded.")
+            _print_recommendation(_json_object(raw))
+
+    _with_session(base_url, args, action)
+
+
+def _print_evidence_detail(item: dict) -> None:
+    _print_evidence(item)
+    label = item.get("tlp_label")
+    _print_field("TLP label", label or "none (original, no TLP rule)")
+
+
+def _print_redaction(derivation: dict) -> None:
+    """The derived copy, its manifest (the removed ranges and reasons, never the removed text) and its claim assessments."""
+    derived = derivation["derived"]
+    print(f"Redacted copy {derived['id']}")
+    _print_field("Original evidence ID", derivation["original_evidence_id"])
+    _print_field("Redaction ID", derivation["redaction_id"])
+    _print_field("TLP label", derived["tlp_label"] or "none")
+    manifest = derivation["manifest"]
+    _print_field("Lines", f"{manifest['removed_lines']} removed of {manifest['lines_total']}")
+    print("  Removed ranges:")
+    for entry in manifest["removed"]:
+        span = f"{entry['from_line']}" if entry["from_line"] == entry["to_line"] else f"{entry['from_line']}-{entry['to_line']}"
+        print(f"    lines {span} ({entry['lines']}): {entry['reason']}")
+    claims = derivation["claim_assessments"]
+    if not claims:
+        _print_field("Claim assessments", "none (no review layer cites the original)")
+        return
+    print("  Claim assessments:")
+    for claim in claims:
+        print(f"    {claim['layer']} in round {claim['round_id']}: {claim['outcome']}. {claim['reason']}")
+
+
+def _parse_removed(text: str) -> dict:
+    match = REMOVE_PATTERN.fullmatch(text.strip())
+    if match is None:
+        raise UsageError("--remove must look like FROM-TO:REASON, for example 3-5:contains an account number")
+    from_line = int(match.group(1))
+    to_line = int(match.group(2) or match.group(1))
+    if from_line < 1 or to_line < from_line:
+        raise UsageError("--remove needs line numbers from 1, with FROM not after TO")
+    reason = match.group(3).strip()
+    if not reason or len(reason) > REDACTION_REASON_LIMIT:
+        raise UsageError(f"the reason of a removed range must be 1 to {REDACTION_REASON_LIMIT} characters and not only spaces")
+    return {"from_line": from_line, "to_line": to_line, "reason": reason}
+
+
+def _evidence_show(base_url: str, args: argparse.Namespace) -> None:
+    evidence_id = _uuid_arg(args.evidence_id, "EVIDENCE_ID")
+
+    def action(base: str, token: str) -> None:
+        raw = _call(base, "GET", f"/api/v1/evidence/{evidence_id}", token=token, messages=EVIDENCE_READ_MESSAGES)
+        if args.json:
+            _print_json(raw)
+        else:
+            _print_evidence_detail(_json_object(raw))
+
+    _with_session(base_url, args, action)
+
+
+def _evidence_derivatives(base_url: str, args: argparse.Namespace) -> None:
+    evidence_id = _uuid_arg(args.evidence_id, "EVIDENCE_ID")
+
+    def action(base: str, token: str) -> None:
+        raw = _call(
+            base, "GET", f"/api/v1/evidence/{evidence_id}/derivatives", token=token, messages=EVIDENCE_READ_MESSAGES
+        )
+        if args.json:
+            _print_json(raw)
+            return
+        items = _json_list(raw)
+        if not items:
+            print("No redacted copies of this evidence are visible to your account.")
+            return
+        rows = [("ID", "STATUS", "TLP LABEL", "FILE")]
+        rows += [(item["id"], item["status"], item["tlp_label"] or "-", item["original_filename"]) for item in items]
+        _print_table(rows)
+
+    _with_session(base_url, args, action)
+
+
+def _evidence_redact(base_url: str, args: argparse.Namespace) -> None:
+    evidence_id = _uuid_arg(args.evidence_id, "EVIDENCE_ID")
+    if not args.removed:
+        raise UsageError("at least one --remove FROM-TO:REASON is needed")
+    if len(args.removed) > REDACTION_MAX_RANGES:
+        raise UsageError(f"at most {REDACTION_MAX_RANGES} removed ranges are allowed")
+    payload = {"removed": [_parse_removed(text) for text in args.removed], "tlp_label": args.tlp}
+    key = args.idempotency_key or str(uuid.uuid4())
+
+    def action(base: str, token: str) -> None:
+        try:
+            raw = _call(
+                base,
+                "POST",
+                f"/api/v1/evidence/{evidence_id}/derivatives",
+                token=token,
+                payload=payload,
+                messages=REDACT_MESSAGES,
+                extra_headers={"Idempotency-Key": key},
+            )
+        except RequestFailed as error:
+            raise _refusal_text(error) from None
+        if args.json:
+            _print_json(raw)
+            return
+        print("Redacted copy stored. The original is unchanged.")
+        _print_redaction(_json_object(raw))
+
+    _with_session(base_url, args, action)
+
+
+def _evidence_show_redaction(base_url: str, args: argparse.Namespace) -> None:
+    evidence_id = _uuid_arg(args.evidence_id, "EVIDENCE_ID")
+
+    def action(base: str, token: str) -> None:
+        raw = _call(base, "GET", f"/api/v1/evidence/{evidence_id}/redaction", token=token, messages=EVIDENCE_READ_MESSAGES)
+        if args.json:
+            _print_json(raw)
+        else:
+            _print_redaction(_json_object(raw))
+
+    _with_session(base_url, args, action)
+
+
+def _add_catalog_commands(subcommands) -> None:
+    catalog = subcommands.add_parser("catalog", help="List, show, change and verify the catalog of defences")
+    catalog_commands = catalog.add_subparsers(dest="catalog_command", required=True)
+
+    listing = catalog_commands.add_parser("list", help="List the catalog entries, with their status and version")
+    listing.add_argument("--limit", type=int, default=DEFAULT_PAGE_SIZE, help="Entries per page (1 to 200)")
+    listing.add_argument("--cursor", help="Cursor printed by an earlier list, to read the next page")
+    _add_auth_options(listing)
+    listing.set_defaults(handler=_catalog_list)
+
+    show = catalog_commands.add_parser("show", help="Show a catalog entry, its versions and its verification history")
+    show.add_argument("entry_id", metavar="ENTRY_ID", help="Catalog entry ID (UUID), as listed by 'catalog list'")
+    _add_auth_options(show)
+    show.set_defaults(handler=_catalog_show)
+
+    def content_options(command) -> None:
+        command.add_argument("--title", required=True, help="Title, 1 to 200 characters")
+        command.add_argument("--body", required=True, help="Body, 1 to 4000 characters")
+        command.add_argument("--verification-run", metavar="RUN_ID", help="Verification run to attach (UUID)")
+        command.add_argument(
+            "--restricted-reference",
+            metavar="REFERENCE",
+            help="Restricted reference, for example a link to a restricted report. Not printed by default",
+        )
+
+    added = catalog_commands.add_parser("add", help="Add a catalog entry")
+    content_options(added)
+    _add_idempotency_option(added)
+    _add_auth_options(added)
+    added.set_defaults(handler=_catalog_add)
+
+    version = catalog_commands.add_parser("version", help="Save a new version of an entry. The old version is kept")
+    version.add_argument("entry_id", metavar="ENTRY_ID", help="Catalog entry ID (UUID)")
+    version.add_argument("--expected-version", type=int, required=True, help="The version you read with 'catalog show'")
+    content_options(version)
+    _add_idempotency_option(version)
+    _add_auth_options(version)
+    version.set_defaults(handler=_catalog_version)
+
+    correct = catalog_commands.add_parser("correct", help="Correct the content of an entry, with a reason")
+    correct.add_argument("entry_id", metavar="ENTRY_ID", help="Catalog entry ID (UUID)")
+    correct.add_argument("--expected-version", type=int, required=True, help="The version you read with 'catalog show'")
+    correct.add_argument("--reason", required=True, help="Why the content is corrected, 1 to 1000 characters")
+    content_options(correct)
+    _add_idempotency_option(correct)
+    _add_auth_options(correct)
+    correct.set_defaults(handler=_catalog_correct)
+
+    for name, handler, text in (
+        ("dispute", _catalog_dispute, "Record a dispute of an entry. The content does not change"),
+        ("withdraw", _catalog_withdraw, "Withdraw an entry. Its history is kept and it accepts no further changes"),
+    ):
+        command = catalog_commands.add_parser(name, help=text)
+        command.add_argument("entry_id", metavar="ENTRY_ID", help="Catalog entry ID (UUID)")
+        command.add_argument("--expected-version", type=int, required=True, help="The version you read with 'catalog show'")
+        command.add_argument("--reason", required=True, help="Reason, 1 to 1000 characters")
+        _add_idempotency_option(command)
+        _add_auth_options(command)
+        command.set_defaults(handler=handler)
+
+    supersede = catalog_commands.add_parser(
+        "supersede", help="Replace an entry with another open entry. The old entry is kept and closed"
+    )
+    supersede.add_argument("entry_id", metavar="ENTRY_ID", help="Entry to supersede (UUID)")
+    supersede.add_argument("--expected-version", type=int, required=True, help="The version you read with 'catalog show'")
+    supersede.add_argument("--replacement", metavar="ENTRY_ID", required=True, help="The open entry that replaces it (UUID)")
+    supersede.add_argument("--reason", help="Optional reason, up to 1000 characters")
+    _add_idempotency_option(supersede)
+    _add_auth_options(supersede)
+    supersede.set_defaults(handler=_catalog_supersede)
+
+    verify = catalog_commands.add_parser(
+        "verify",
+        help="Record a verification run of a recommendation and attach it to an entry. Only a pass verifies the entry",
+    )
+    verify.add_argument("entry_id", metavar="ENTRY_ID", help="Catalog entry ID (UUID)")
+    verify.add_argument("--recommendation", metavar="RECOMMENDATION_ID", required=True, help="Recommendation ID (UUID)")
+    verify.add_argument("--expected-version", type=int, required=True, help="The version you read with 'catalog show'")
+    verify.add_argument("--result", required=True, choices=CATALOG_RESULTS, help="Result of the run")
+    for option, text in (
+        ("subject", "What was checked"),
+        ("scope", "Scope of the check"),
+        ("assumptions", "Assumptions made"),
+        ("evidence-path", "Where the evidence of the run is kept"),
+        ("failure-behavior", "How the control behaves when it fails"),
+        ("error-class", "Error class observed"),
+        ("uncertainty", "Remaining uncertainty"),
+        ("method", "Method used"),
+    ):
+        verify.add_argument(f"--{option}", required=True, help=f"{text}, 1 to 1000 characters")
+    _add_idempotency_option(verify)
+    _add_auth_options(verify)
+    verify.set_defaults(handler=_catalog_verify)
+
+    recommendation = catalog_commands.add_parser("recommendation", help="List and add recommendations")
+    recommendation_commands = recommendation.add_subparsers(dest="recommendation_command", required=True)
+    recommendation_list = recommendation_commands.add_parser("list", help="List the recommendations, oldest first")
+    recommendation_list.add_argument("--limit", type=int, default=DEFAULT_PAGE_SIZE, help="Items per page (1 to 200)")
+    recommendation_list.add_argument("--cursor", help="Cursor printed by an earlier list, to read the next page")
+    _add_auth_options(recommendation_list)
+    recommendation_list.set_defaults(handler=_catalog_recommendation_list)
+
+    recommendation_add = recommendation_commands.add_parser(
+        "add", help="Record a recommendation: a suggested defence. It has no result until a run is recorded"
+    )
+    for option, text in (
+        ("failure-or-system", "The failure or system the recommendation is about"),
+        ("required-defence-outcome", "The defence result that is required"),
+        ("minimum-control", "The minimum control"),
+        ("responsible", "Who is responsible"),
+        ("evidence-to-keep", "The evidence to keep"),
+    ):
+        recommendation_add.add_argument(f"--{option}", required=True, help=f"{text}, 1 to 1000 characters")
+    recommendation_add.add_argument("--control-alternative", help="An alternative control, up to 1000 characters")
+    recommendation_add.add_argument("--due-at", required=True, help="Due time, ISO 8601 with a timezone")
+    _add_idempotency_option(recommendation_add)
+    _add_auth_options(recommendation_add)
+    recommendation_add.set_defaults(handler=_catalog_recommendation_add)
+
+
+def _add_evidence_commands(evidence_commands) -> None:
+    shown = evidence_commands.add_parser("show", help="Show one evidence item, with its TLP label")
+    shown.add_argument("evidence_id", metavar="EVIDENCE_ID", help="Evidence ID (UUID)")
+    _add_auth_options(shown)
+    shown.set_defaults(handler=_evidence_show)
+
+    derivatives = evidence_commands.add_parser(
+        "derivatives", help="List the redacted copies of an evidence item that your account may see"
+    )
+    derivatives.add_argument("evidence_id", metavar="EVIDENCE_ID", help="Original evidence ID (UUID)")
+    _add_auth_options(derivatives)
+    derivatives.set_defaults(handler=_evidence_derivatives)
+
+    redact = evidence_commands.add_parser(
+        "redact",
+        help="Make a redacted copy of a text evidence item. The original is unchanged; the copy gets its own ID and manifest",
+    )
+    redact.add_argument("evidence_id", metavar="EVIDENCE_ID", help="Original evidence ID (UUID), text/plain only")
+    redact.add_argument(
+        "--remove",
+        dest="removed",
+        action="append",
+        default=[],
+        metavar="FROM-TO:REASON",
+        help="Lines to remove, 1-based and inclusive, with the reason. Repeat for each range, up to 50",
+    )
+    redact.add_argument(
+        "--tlp", required=True, choices=TLP_LABELS,
+        help="TLP label of the copy. It must be at least as restrictive as the original's label",
+    )
+    _add_idempotency_option(redact)
+    _add_auth_options(redact)
+    redact.set_defaults(handler=_evidence_redact)
+
+    show_redaction = evidence_commands.add_parser(
+        "show-redaction", help="Show the manifest and the claim assessments of a redacted copy"
+    )
+    show_redaction.add_argument("evidence_id", metavar="EVIDENCE_ID", help="Redacted copy's evidence ID (UUID)")
+    _add_auth_options(show_redaction)
+    show_redaction.set_defaults(handler=_evidence_show_redaction)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -656,6 +656,55 @@ def decode_cursor(cursor: str) -> tuple[datetime, str] | None:
     return created_at, entry_text
 
 
+def list_recommendations(
+    limit: int, cursor: str | None
+) -> tuple[list[Recommendation], str | None] | None:
+    """One page of recommendations in (created_at, id) order. None for an invalid cursor. Same keyset cursor as entries."""
+    position = None
+    if cursor is not None:
+        position = decode_cursor(cursor)
+        if position is None:
+            return None
+    columns = (
+        "id::text, failure_or_system, required_defence_outcome, minimum_control, control_alternative, responsible, "
+        "due_at, evidence_to_keep, created_by::text, created_at"
+    )
+    with connect() as conn:
+        if position is None:
+            rows = conn.execute(
+                f"SELECT {columns} FROM catalog_recommendations WHERE NOT is_deleted "
+                "ORDER BY created_at, id LIMIT %s",
+                (limit + 1,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"SELECT {columns} FROM catalog_recommendations "
+                "WHERE NOT is_deleted AND (created_at, id) > (%s, %s) ORDER BY created_at, id LIMIT %s",
+                (position[0], position[1], limit + 1),
+            ).fetchall()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    recommendations = [
+        Recommendation(
+            id=row[0],
+            failure_or_system=row[1],
+            required_defence_outcome=row[2],
+            minimum_control=row[3],
+            control_alternative=row[4],
+            responsible=row[5],
+            due_at=row[6],
+            evidence_to_keep=row[7],
+            created_by=row[8],
+            created_at=row[9],
+        )
+        for row in rows
+    ]
+    next_cursor = (
+        encode_cursor(rows[-1][9], rows[-1][0]) if has_more and rows else None
+    )
+    return recommendations, next_cursor
+
+
 def list_entries(
     limit: int, cursor: str | None, *, with_restricted: bool
 ) -> tuple[list[Entry], str | None] | None:

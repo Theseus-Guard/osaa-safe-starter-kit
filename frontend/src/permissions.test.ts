@@ -47,6 +47,7 @@ describe("permissions", () => {
       canAssign: true,
       canReadEvidence: false,
       canWriteEvidence: false,
+      canRedactEvidence: false,
       canReview: false,
       canReadRecords: true,
       canWriteRecords: true,
@@ -84,5 +85,9 @@ describe("permissions", () => {
   it("keeps evidence read and evidence write apart", () => {
     expect(caseAbilities(["evidence:read"])).toMatchObject({ canReadEvidence: true, canWriteEvidence: false });
     expect(caseAbilities(["evidence:write"])).toMatchObject({ canReadEvidence: false, canWriteEvidence: true });
+    // Redacting needs both: the original is read first, then the copy is written.
+    expect(caseAbilities(["evidence:read", "evidence:write"])).toMatchObject({ canRedactEvidence: true });
+    expect(caseAbilities(["evidence:write"])).toMatchObject({ canRedactEvidence: false });
+    expect(caseAbilities(["evidence:read"])).toMatchObject({ canRedactEvidence: false });
   });
 });

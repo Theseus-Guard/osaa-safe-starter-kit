@@ -18,7 +18,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/co
 import { SystemClock } from "@/components/system-clock";
 import { cn } from "@/lib/utils";
 import { canReadCases } from "../permissions";
-import { hashFor, Page, PAGE_INFO, PAGES } from "../routes";
+import { hashFor, Page, PAGE_INFO, PAGES, pageInNavigation } from "../routes";
 import { isThemePreference, setPreference, ThemePreference, useThemePreference } from "../theme";
 import { CaseSearch } from "./cases/CaseSearch";
 
@@ -34,7 +34,7 @@ interface Props {
 export function AppShell({ profile, page, onLogout, children, heading }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const isAdmin = profile.role === "admin";
-  const visiblePages = PAGES.filter((item) => isAdmin || !PAGE_INFO[item].adminOnly);
+  const visiblePages = PAGES.filter((item) => pageInNavigation(item, isAdmin, profile.permissions));
   const info = heading ?? PAGE_INFO[page];
   const canSearchCases = canReadCases(profile.permissions);
 

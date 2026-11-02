@@ -282,6 +282,24 @@ def download_evidence(evidence_id: uuid.UUID, user: User = Depends(require_permi
     )
 
 
+@evidence_router.get("/api/v1/evidence/{evidence_id}", response_model=EvidenceResponse)
+def get_evidence(evidence_id: uuid.UUID, user: User = Depends(require_permission(EVIDENCE_READ))) -> EvidenceResponse:
+    """The metadata of one item, with its TLP label (null for an original). A missing item, one the case ACL hides, and one
+    the TLP rule hides all answer the same 404."""
+    stored = _readable_stored(str(evidence_id), user)
+    item = evidence.get_item(stored.id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="evidence not found")
+    return _response(item)
+
+
+@evidence_router.get("/api/v1/evidence/{evidence_id}/derivatives", response_model=list[EvidenceResponse])
+def list_derivatives(evidence_id: uuid.UUID, user: User = Depends(require_permission(EVIDENCE_READ))) -> list[EvidenceResponse]:
+    """The redacted derived items of an original the caller may read. Derived items the TLP rule hides are left out."""
+    _readable_stored(str(evidence_id), user)
+    return [_response(item) for item in redaction.list_derivatives(str(evidence_id), tlp.recipient_for(user))]
+
+
 @evidence_router.get("/api/v1/evidence/{evidence_id}/custody", response_model=list[CustodyEventResponse])
 def custody_log(
     evidence_id: uuid.UUID, user: User = Depends(require_permission(EVIDENCE_READ))

@@ -85,6 +85,18 @@ const MESSAGES: Record<string, string> = {
   "link not found": "These two cases are not linked.",
   "evidence storage is not configured": "Evidence storage is not configured on this installation.",
   "evidence not found": "No evidence with that ID is available to your account.",
+  "redaction is supported for text/plain evidence only": "Only text/plain evidence can be redacted.",
+  "removed line ranges must be inside the document, in order, and not overlap":
+    "The line ranges must be inside the document, in the order given, and must not overlap.",
+  "the TLP label must be at least as restrictive as the original's label":
+    "The copy's TLP label must be at least as restrictive as the original's label.",
+  "the redaction expired before it finished; retry": "The redaction timed out before it finished. Try again.",
+  "catalog entry not found": "No catalog entry with that ID is available to your account.",
+  entry_closed: "This entry is withdrawn or superseded. It accepts no further changes.",
+  version_conflict: "The entry changed, so nothing was saved. Reload it, check the current version and save again.",
+  "verification run is not known": "The verification run could not be found.",
+  "replacement must be another open catalog entry": "Choose another open catalog entry as the replacement.",
+  invalid_cursor: "The list position is not valid. Reload the list.",
   "evidence is not available": "This evidence is not available for download yet.",
   "evidence failed its integrity check": "The evidence failed its integrity check. Nothing was returned. The failure is in the custody log.",
   "evidence could not be stored": "The evidence could not be stored. Try the upload again.",
