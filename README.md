@@ -32,6 +32,12 @@ Links: [Open Secure AI Alliance](https://secureaialliance.org/) · [wg-safe (off
 | `scripts/` | Local secrets, the development certificate, the demo script `demo.sh` and its egress check |
 | `compose.yaml` | Docker Compose stack |
 
+## Screenshot
+
+The administrator's Overview, with synthetic demo data. The [user guide](docs/user-guide/index.md) describes every screen.
+
+![Administrator Overview with synthetic demo data](docs/user-guide/images/admin-overview.png)
+
 ## Run it locally
 
 Requirements: Docker with Compose v2.
@@ -48,7 +54,7 @@ The first admin is created once from the command line. The password is read from
 
 ```sh
 printf '%s' '<choose a password>' | docker compose run --rm -T --no-deps api \
-  python -m safe_kit.admin create-user --username <name> --role admin
+  python -m safe_kit.admin create-user --username <name> --role admin --email <address>
 ```
 
 Log in, change the password when asked, then choose the system timezone. All times in the installation are shown in that timezone; stored times are always UTC.
@@ -125,7 +131,7 @@ The service does not import these documents yet. The case import file (`import_f
 ## API conventions
 
 - **Errors.** Every error response has the `detail` field and an `error` object with a stable `code`, a safe `message`, the `request_id`, and `retryable`. A validation error also lists `fields`, with the path and the problem, never the rejected value. Every response carries `X-Request-ID`.
-- **Paging.** `GET /api/v1/cases` pages by cursor: `limit` (1 to 200, default 50), an opaque `cursor`, and `next_cursor`, which is null on the last page. The other list endpoints still use offset paging.
+- **Paging.** `GET /api/v1/cases` pages by cursor: `limit` (1 to 200, default 50), an opaque `cursor`, and `next_cursor`, which is null on the last page. Catalog entries and recommendations also page by cursor. The other list endpoints (users, case history, evidence) still use offset paging; they are planned for F3.
 - **Concurrency.** The case title change, the review layer changes, the deadline task changes, the legal duty changes and the user account changes need `If-Match` with the revision that was read (sent as the `ETag`). A missing value is refused with `428`, a malformed one with `400` (`invalid_if_match`), and a stale one with `412`, which also returns the current revision (`current_revision`). Each record has its own revision. The case ETag is the case revision, and changes to a deadline task, a legal duty or a user do not raise it. So a deadline task ETag and a case ETag are different numbers. The user list and the case's deadline and legal duty lists carry each item's revision in the body, because a list has one ETag. Some changes to a deadline task raise its revision without `If-Match`: the recalculation of SAFE due dates, the weekly update task, and the restore route, which does not check `If-Match`. Other changes do not check a revision yet.
 - **Idempotency.** Case writes that change state take an `Idempotency-Key` header.
 

@@ -10,6 +10,12 @@ The sign-in page asks for a username and password. In demo mode it asks for a de
 
 ## Overview
 
+![Overview as the administrator sees it, with synthetic demo data](images/admin-overview.png)
+
+The investigator's Overview shows the same cards for the cases that account opened or is assigned to:
+
+![Overview as an investigator sees it](images/investigator-overview.png)
+
 Shown to every signed-in user. The cards and charts depend on the role. Users with none of these sections see "Your role has no overview sections."
 
 The **Date range** control offers 7, 30 and 90 days. The default is 30 days. It changes the "opened in the last N days" figures and the charts over time. The cards and charts show counts only, with no case titles and no user names. The only name shown is your own username in the welcome line.
@@ -34,6 +40,8 @@ What the cards count:
 
 ## Cases
 
+![Case list as an investigator sees it](images/investigator-cases.png)
+
 Shown to roles with a case read permission. The administrator and auditor roles see a message instead of the list.
 
 - **New case** (only with the permission to submit cases, which the reporter role has). The dialog asks for a **Title**, the **Awareness date and time** in the system timezone, and an optional **Contact for follow-up**. The case is created with the deadlines calculated from that time.
@@ -45,6 +53,8 @@ Shown to roles with a case read permission. The administrator and auditor roles 
 The header search box finds a case by reference or ID from any page.
 
 ## Case detail
+
+![Case detail, Overview tab, with the risk score and impact values](images/investigator-case-detail-SAFE-DEMO-000002.png)
 
 Opened from a case reference. The header shows the reference, the title, the status and the risk score. **Edit impact values** changes the impact values (C, B and A); each save stores a new version and keeps the earlier ones. A closed case is read only: every change is disabled.
 
@@ -109,6 +119,8 @@ Shows the **History** of the case: the actions, their times and, where the role 
 
 ## Catalog
 
+![Catalog as an investigator sees it](images/investigator-catalog.png)
+
 Shown to roles with `catalog:read` (triager, investigator, reviewer and auditor by default). The catalog list has two sections: **Entries** and **Recommendations**. Each has a **Load more** button when more rows exist.
 
 - An entry shows as verified only after a passing verification run.
@@ -123,6 +135,8 @@ Audited: `catalog.entry_created`, `catalog.entry_versioned`, `catalog.entry_corr
 
 ## Users
 
+![Users as the administrator sees it](images/admin-users.png)
+
 Admin only.
 
 - **User list**: Username, Must change password, Status (Active or Disabled) and a Protected badge for protected accounts.
@@ -134,9 +148,13 @@ Audited: `user.create`, `user.update`, `user.profile_updated`, `user.password_re
 
 ## Data privacy
 
+![Data privacy inventory as the administrator sees it](images/admin-privacy.png)
+
 Admin only. It shows the personal data inventory of the installation: each table with its description and retention period. The retention periods are provisional and await legal review. The page shows metadata only, never row contents. **Export JSON** and **Export CSV** download the inventory. **Previous** and **Next** page through the tables.
 
 ## Roles and permissions
+
+![Roles and permissions as the administrator sees it](images/admin-roles.png)
 
 Admin only. It shows a grid of roles and permissions. Each role has a **Save** button, and a saved change applies at once to everyone with that role.
 
@@ -148,6 +166,8 @@ Audited: `role.permissions_change`, with the granted and revoked permissions.
 
 ## Settings
 
+![Settings as the administrator sees it](images/admin-settings.png)
+
 Admin only.
 
 - **Current timezone** shows the timezone of the installation. Stored times are always UTC.
@@ -156,6 +176,8 @@ Admin only.
 Audited: `system.timezone_set` and `system.timezone_changed`.
 
 ## Account
+
+![Account page](images/admin-account.png)
 
 Shown to every signed-in user.
 

@@ -2,7 +2,7 @@
 // Relative links are rewritten to the GitHub blob URL, because the site does not contain the other repository files.
 // The user guide pages (docs/user-guide in the repository) are copied into docs/user-guide. Links between them stay
 // relative, so Docusaurus resolves them. Links to any other repository file are rewritten to the GitHub blob URL.
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,9 +21,15 @@ const pages = [
   { source: "CODE_OF_CONDUCT.md", target: "code-of-conduct.md", title: "Code of conduct", position: 6 },
 ];
 
+// Screenshots of the user guide are copied into docs/user-guide/images. The README refers to them by their repository
+// path, which the site serves from its user-guide folder.
+const imagePattern = /\.(png|jpe?g|gif|svg)$/i;
+
 function rewriteLinks(markdown) {
   return markdown.replace(/\]\(([^)\s]+)\)/g, (match, href) => {
     if (/^(https?:|mailto:|#|\/)/.test(href)) return match;
+    const guideImage = href.match(/^docs\/user-guide\/(images\/[^/]+)$/);
+    if (guideImage && imagePattern.test(href)) return `](user-guide/${guideImage[1]})`;
     return `](${blobBase}${href})`;
   });
 }
@@ -35,6 +41,7 @@ function rewriteGuideLinks(markdown) {
     if (/^(https?:|mailto:|#|\/)/.test(href)) return match;
     const [path, anchor] = href.split("#");
     if (/^(\.\/)?[^/]+\.md$/.test(path)) return match;
+    if (/^images\/[^/]+$/.test(path) && imagePattern.test(path)) return match;
     const repoPath = posix.normalize(posix.join(guideSourceDir, path));
     return `](${blobBase}${repoPath}${anchor === undefined ? "" : `#${anchor}`})`;
   });
@@ -76,4 +83,13 @@ for (const name of guideFiles) {
   writeFileSync(join(guideTargetDir, name), frontMatter + body);
 }
 
-console.log(`Synced ${pages.length} documents and ${guideFiles.length} user guide pages into docs/.`);
+const guideImageDir = join(repoRoot, guideSourceDir, "images");
+const guideImages = readdirSync(guideImageDir).filter((name) => imagePattern.test(name));
+mkdirSync(join(guideTargetDir, "images"), { recursive: true });
+for (const name of guideImages) {
+  copyFileSync(join(guideImageDir, name), join(guideTargetDir, "images", name));
+}
+
+console.log(
+  `Synced ${pages.length} documents, ${guideFiles.length} user guide pages and ${guideImages.length} images into docs/.`,
+);

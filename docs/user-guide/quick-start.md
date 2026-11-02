@@ -4,6 +4,7 @@ This page takes you from a clean machine to a signed-in administrator. Every com
 
 ## Before you start
 
+
 - Docker with Compose v2. Check it with `docker compose version`.
 - Git, to get the repository from https://github.com/Theseus-Guard/osaa-safe-starter-kit.
 - Port 8443 on `127.0.0.1` must be free. Only one stack can use it at a time.
@@ -47,6 +48,8 @@ This page takes you from a clean machine to a signed-in administrator. Every com
    The README shows this command without `--email`. Without that option the command reads the email from the second line of standard input. The README form stops with `email is required`, so pass `--email` as shown here.
 
 7. Open https://127.0.0.1:8443 and sign in with the username and password from step 6.
+
+   ![Sign-in page in demo mode](images/login.png)
 
    > **Known issue: demo sign-in on this stack.** `compose.yaml` runs the `api` and `worker` services with `SAFE_MODE=demo` and `SAFE_DATASET=synthetic-demo`. In that mode the sign-in page offers demo sign-in only. It lists the demo roles and asks for their demo credentials (see [Demo](./demo.md)). The account from step 6 is not a demo role, so that form does not accept it. This is taken from the code. It has not been run live for this guide.
 
