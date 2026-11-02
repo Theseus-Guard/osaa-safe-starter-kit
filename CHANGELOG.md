@@ -6,7 +6,11 @@ Every release entry states the **SAFE compatibility baseline**: the SAFE version
 
 ## Unreleased
 
-**SAFE compatibility baseline:** SAFE v1.0 (2026-10-21), wg-safe commit `08c0d6a11163d10ac878a15dc9f53b5b322fd7cb`. Not yet released.
+Changes after 0.2.0 go here.
+
+## 0.2.0 - 2026-11-03
+
+**SAFE compatibility baseline:** SAFE v1.0 (2026-10-21), wg-safe commit `08c0d6a11163d10ac878a15dc9f53b5b322fd7cb`. This version is not tagged in git yet.
 
 ### Added
 - Single-organization self-hosted stack (Docker Compose): PostgreSQL, one-shot migrations, API, worker, nginx gateway, container CLI.
