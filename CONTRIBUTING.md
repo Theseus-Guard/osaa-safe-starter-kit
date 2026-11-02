@@ -6,7 +6,7 @@ Thank you for helping improve SAFE-Starter-Kit. Please read this page before you
 
 - For a security problem, follow [SECURITY.md](SECURITY.md). Do not open a public issue.
 - For a bug or a feature, open an issue first so the change can be discussed. Use the issue templates.
-- Check the project scope in [ROADMAP.md](ROADMAP.md) and the phase notes in the README. Features outside the current phase may be deferred.
+- Check the project scope in [ROADMAP.md](ROADMAP.md) and the Unreleased section of [CHANGELOG.md](CHANGELOG.md), which lists what is built and what is not yet. Features outside the current phase may be deferred.
 
 ## Development setup
 
