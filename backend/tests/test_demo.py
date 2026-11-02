@@ -45,6 +45,7 @@ DB_DEFAULTS = {
 TOKEN_TTL = {"SAFE_ACCESS_TTL_MINUTES": "60", "SAFE_REFRESH_TTL_MINUTES": "60", "SAFE_SESSION_MAX_HOURS": "12"}
 LOOPBACK = ("127.0.0.1", 50000)
 REMOTE = ("203.0.113.9", 50000)
+GATEWAY = "172.28.0.10"  # the gateway's fixed address on the edge network (compose.yaml)
 
 
 def _db_settings() -> dict[str, str]:
@@ -158,6 +159,54 @@ def test_demo_sign_in_is_refused_for_a_non_loopback_caller(monkeypatch):
     with process_env(demo_env()):
         response = client.post("/api/v1/demo/sign-in", json={"credential": "anything-at-all"})
     assert response.status_code == 403
+
+
+@pytest.mark.parametrize("trusted", [None, GATEWAY])
+def test_demo_sign_in_is_refused_for_a_forged_loopback_claim_from_an_untrusted_peer(monkeypatch, trusted):
+    """A client that sends X-Forwarded-For: 127.0.0.1 itself is not on loopback, with or without a trusted gateway."""
+    monkeypatch.setattr(api, "credential_matches", lambda credential: pytest.fail("a forged caller must not reach it"))
+    monkeypatch.setattr(api, "record_login_failure", lambda *args: pytest.fail("a forged caller is not audited here"))
+    client = TestClient(api.app, client=REMOTE)
+    env = demo_env(SAFE_TRUSTED_PROXIES=trusted)
+    with process_env(env):
+        response = client.post(
+            "/api/v1/demo/sign-in",
+            headers={"X-Forwarded-For": "127.0.0.1", "X-Real-IP": "127.0.0.1"},
+            json={"credential": "anything-at-all"},
+        )
+    assert response.status_code == 403
+
+
+def test_demo_sign_in_passes_the_gate_for_loopback_forwarded_by_the_trusted_gateway(monkeypatch):
+    """Without a database: a wrong credential from the resolved loopback address reaches the credential check."""
+    audited = []
+    monkeypatch.setattr(api, "hit_rate_limit", lambda key, window: 1)
+    monkeypatch.setattr(api, "dataset_credential_hash", lambda: "stored-hash")
+    monkeypatch.setattr(api, "credential_matches", lambda credential: False)
+    monkeypatch.setattr(api, "record_login_failure", lambda *args: audited.append(args))
+    client = TestClient(api.app, client=(GATEWAY, 50000))
+    with process_env(demo_env(SAFE_TRUSTED_PROXIES=GATEWAY)):
+        response = client.post(
+            "/api/v1/demo/sign-in",
+            headers={"X-Forwarded-For": "127.0.0.1"},
+            json={"credential": "wrong-credential"},
+        )
+    assert response.status_code == 401
+    assert audited == [(api.DEMO_ADMIN_ID, "wrong_password", api.DEMO_ADMIN_USERNAME, "127.0.0.1")]
+
+
+@pytest.mark.parametrize("peer", [LOOPBACK, (GATEWAY, 50000)])
+def test_production_mode_refuses_demo_sign_in_even_through_the_trusted_gateway(monkeypatch, peer):
+    monkeypatch.setattr(api, "credential_matches", lambda credential: pytest.fail("production must not check it"))
+    client = TestClient(api.app, client=peer)
+    with process_env(production_env() | {"SAFE_TRUSTED_PROXIES": GATEWAY}):
+        response = client.post(
+            "/api/v1/demo/sign-in",
+            headers={"X-Forwarded-For": "127.0.0.1"},
+            json={"credential": "anything-at-all"},
+        )
+    assert response.status_code == 403
+    assert "safe_access" not in response.cookies
 
 
 def test_creation_path_writes_one_0600_file_and_prints_nothing(tmp_path, monkeypatch, capsys, caplog):
@@ -342,6 +391,25 @@ def test_demo_sign_in_accepts_the_demo_credential_on_loopback(demo_dataset):
     assert body["password_change_required"] is False
     assert body["access_token"]
     assert "safe_access" in right.cookies
+
+
+@requires_database
+def test_demo_sign_in_accepts_loopback_forwarded_by_the_trusted_gateway_only(demo_dataset):
+    credential = _credential(demo_dataset)
+    if credential is None:
+        pytest.skip("the demo dataset was already in this database; the credential file is not available")
+    gateway = TestClient(api.app, client=(GATEWAY, 50000))
+    with patch.dict(os.environ, demo_dataset["env"] | {"SAFE_TRUSTED_PROXIES": GATEWAY}, clear=False):
+        accepted = gateway.post(
+            "/api/v1/demo/sign-in", headers={"X-Forwarded-For": "127.0.0.1"}, json={"credential": credential}
+        )
+        # The same header from an address that is not a trusted proxy is ignored.
+        forged = TestClient(api.app, client=REMOTE).post(
+            "/api/v1/demo/sign-in", headers={"X-Forwarded-For": "127.0.0.1"}, json={"credential": credential}
+        )
+    assert accepted.status_code == 200
+    assert "safe_access" in accepted.cookies
+    assert forged.status_code == 403
 
 
 @requires_database

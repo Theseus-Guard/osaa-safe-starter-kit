@@ -201,6 +201,13 @@ def client(store):
     return TestClient(api.app)
 
 
+@pytest.fixture
+def gateway_client(store, monkeypatch):
+    """A caller that reaches the API through the gateway: the gateway's address is the trusted proxy."""
+    monkeypatch.setenv("SAFE_TRUSTED_PROXIES", "172.28.0.10")
+    return TestClient(api.app, client=("172.28.0.10", 50000))
+
+
 def login(client, username, password=PASSWORD):
     return client.post("/api/v1/auth/token", json={"username": username, "password": password})
 
@@ -616,29 +623,29 @@ def test_short_passwords_are_rejected(client):
     assert response.status_code == 422
 
 
-def test_failed_login_is_audited_with_account_username_and_client_address(client, store):
-    response = client.post(
+def test_failed_login_is_audited_with_account_username_and_client_address(gateway_client, store):
+    response = gateway_client.post(
         "/api/v1/auth/token",
-        headers={"X-Real-IP": "203.0.113.9"},
+        headers={"X-Forwarded-For": "203.0.113.9"},
         json={"username": "alice", "password": "wrong password here"},
     )
     assert response.status_code == 401
     assert store.login_failures == [(ALICE, "wrong_password", "alice", "203.0.113.9")]
 
 
-def test_failed_login_for_unknown_name_is_audited_with_the_submitted_name(client, store):
-    client.post(
+def test_failed_login_for_unknown_name_is_audited_with_the_submitted_name(gateway_client, store):
+    gateway_client.post(
         "/api/v1/auth/token",
-        headers={"X-Real-IP": "203.0.113.9"},
+        headers={"X-Forwarded-For": "203.0.113.9"},
         json={"username": "nobody-by-this-name", "password": "whatever"},
     )
     assert store.login_failures == [(None, "unknown_user", "nobody-by-this-name", "203.0.113.9")]
 
 
-def test_login_to_disabled_account_is_audited_as_inactive(client, store):
-    client.post(
+def test_login_to_disabled_account_is_audited_as_inactive(gateway_client, store):
+    gateway_client.post(
         "/api/v1/auth/token",
-        headers={"X-Real-IP": "203.0.113.9"},
+        headers={"X-Forwarded-For": "203.0.113.9"},
         json={"username": "bob", "password": PASSWORD},
     )
     assert store.login_failures == [(BOB, "account_inactive", "bob", "203.0.113.9")]

@@ -109,6 +109,16 @@ services:
       SAFE_ACCESS_TTL_MINUTES: "60"
       SAFE_REFRESH_TTL_MINUTES: "60"
       SAFE_SESSION_MAX_HOURS: "12"
+      # The gateway's fixed address on the edge network (see networks below). The API reads X-Forwarded-For only from
+      # this address. Client address chain for a browser on the host (safe_kit/client_address.py):
+      #   1. The browser connects to 127.0.0.1:8443. Docker publishes the gateway on loopback only, and relays the
+      #      connection to the gateway over edge, so nginx does not see 127.0.0.1 as the peer. It sees the host's own
+      #      address on edge, 172.28.0.1 (the bridge gateway of the fixed subnet).
+      #   2. nginx overwrites X-Forwarded-For with $remote_addr, that is 172.28.0.1, and connects from 172.28.0.10.
+      #   3. The API takes the socket peer 172.28.0.10 as trusted, walks X-Forwarded-For from the right, and resolves
+      #      the client to 172.28.0.1. That is not loopback, so demo sign-in through the gateway is refused by this
+      #      stack as configured. Only the host can produce that address, and the API port is published on loopback.
+      SAFE_TRUSTED_PROXIES: "172.28.0.10"
     secrets:
       - db_app_password
       - jwt_signing_key
@@ -179,7 +189,9 @@ services:
     security_opt:
       - no-new-privileges:true
     networks:
-      - edge
+      edge:
+        # Fixed, so that the API can name the gateway in SAFE_TRUSTED_PROXIES. Nothing else on edge gets this address.
+        ipv4_address: 172.28.0.10
     restart: unless-stopped
 
   cli:
@@ -226,7 +238,11 @@ secrets:
     file: ./secrets/tls/server.key
 
 networks:
-  edge: {}
+  # Fixed subnet so that the gateway has a known address (172.28.0.10). The host's address on this network is 172.28.0.1.
+  edge:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
   backend:
     internal: true
 

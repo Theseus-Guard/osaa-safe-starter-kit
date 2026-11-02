@@ -1,7 +1,8 @@
 """Demo sign-in: the demo administrator signs in with the per-install demo credential.
 
 Demo sign-in works only when all of these hold: the process passes the startup guard in demo mode with the synthetic
-dataset (config_guard.is_demo), the request comes from a loopback address, and the database holds the dataset marker
+dataset (config_guard.is_demo), the resolved client address is a loopback address (client_address.py: the socket peer,
+or the forwarded client when the peer is a trusted proxy), and the database holds the dataset marker
 row written by the seed (migration 0043). The credential is checked against the hash in that row with the password
 verifier. The API then issues the same session as a password login. No default credential exists anywhere.
 """
@@ -34,5 +35,8 @@ def credential_matches(credential: str) -> bool:
 
 
 def demo_sign_in_allowed(env: Mapping[str, str], client_address: str | None) -> bool:
-    """Route-level check that needs no database: demo mode and a loopback caller."""
+    """Route-level check that needs no database: demo mode and a loopback resolved client address.
+
+    client_address must come from client_address.resolve_client_address, never from a header read here.
+    """
     return is_demo(env) and is_loopback(client_address)

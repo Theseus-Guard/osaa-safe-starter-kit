@@ -7,6 +7,7 @@ process. Error messages name the setting that is wrong and never echo its value.
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from ipaddress import IPv4Network, IPv6Network, ip_network
 
 MODE_DEMO = "demo"
 MODE_PRODUCTION = "production"
@@ -23,6 +24,9 @@ class ConfigError(Exception):
     """The environment does not allow this process to start."""
 
 
+TrustedNetwork = IPv4Network | IPv6Network
+
+
 @dataclass(frozen=True)
 class Settings:
     mode: str
@@ -36,6 +40,7 @@ class Settings:
     access_ttl_minutes: int
     refresh_ttl_minutes: int
     session_max_hours: int
+    trusted_proxies: tuple[TrustedNetwork, ...] = ()
 
 
 def _value(env: Mapping[str, str], name: str) -> str:
@@ -73,6 +78,29 @@ def _db_port(env: Mapping[str, str]) -> int:
     return int(raw)
 
 
+def trusted_proxies(env: Mapping[str, str]) -> tuple[TrustedNetwork, ...]:
+    """The proxy addresses in SAFE_TRUSTED_PROXIES: a comma-separated list of IP addresses or CIDR ranges.
+
+    Optional: unset or empty trusts no proxy. An entry that is not an address or a network, a network with host bits
+    set, and a range that covers every address are refused. The message names the setting and never the value.
+    """
+    raw = _value(env, "SAFE_TRUSTED_PROXIES")
+    if not raw:
+        return ()
+    networks: list[TrustedNetwork] = []
+    for entry in raw.split(","):
+        try:
+            network = ip_network(entry.strip(), strict=True)
+        except ValueError:
+            raise ConfigError(
+                "SAFE_TRUSTED_PROXIES must be a comma-separated list of IP addresses or CIDR ranges"
+            ) from None
+        if network.prefixlen == 0:
+            raise ConfigError("SAFE_TRUSTED_PROXIES must list the proxy addresses, not a range that covers every address")
+        networks.append(network)
+    return tuple(networks)
+
+
 def load_settings(env: Mapping[str, str]) -> Settings:
     """Validate the environment and return the settings. Raises ConfigError when the process must not start."""
     # SAFE_MODE is compared exactly: no trimming and no case folding, so a typo never selects a mode by accident.
@@ -106,6 +134,7 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         access_ttl_minutes=required_int(env, "SAFE_ACCESS_TTL_MINUTES", maximum=MAX_TTL_MINUTES),
         refresh_ttl_minutes=required_int(env, "SAFE_REFRESH_TTL_MINUTES", maximum=MAX_TTL_MINUTES),
         session_max_hours=required_int(env, "SAFE_SESSION_MAX_HOURS", maximum=MAX_SESSION_HOURS),
+        trusted_proxies=trusted_proxies(env),
     )
 
 
@@ -123,5 +152,5 @@ def is_demo(env: Mapping[str, str]) -> bool:
 
 
 def is_loopback(address: str | None) -> bool:
-    """True when a client address is a loopback address. The API takes it from the socket peer, not from a header."""
+    """True when a client address is a loopback address. The address comes from client_address.resolve_client_address."""
     return address in LOOPBACK_HOSTS
