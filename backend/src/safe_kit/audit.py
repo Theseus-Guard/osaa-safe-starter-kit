@@ -93,6 +93,10 @@ CATALOG_ENTRY_SUPERSESSION = "catalog.entry_superseded"
 # purpose are free text and are never written here; the details hold identifiers, the digest, and counts only.
 DISCLOSURE_VERSION_CREATE = "disclosure.version_created"
 DISCLOSURE_APPROVAL = "disclosure.approved"
+# External notices (safe_kit.external_notices). Written against the notice (target_type "disclosure_notice"). Details hold
+# identifiers, the channel, states, reason codes and the length of each free-text reason, never the text itself.
+DISCLOSURE_NOTICE_RECORD = "disclosure.notice_recorded"
+DISCLOSURE_NOTICE_STATE = "disclosure.notice_state_changed"
 SYSTEM_TIMEZONE_SET = "system.timezone_set"
 SYSTEM_TIMEZONE_CHANGED = "system.timezone_changed"
 

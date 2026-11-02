@@ -32,6 +32,9 @@ export interface CaseAbilities {
   canReadDisclosures: boolean;
   // disclosures:approve. Approve one disclosure version. The backend also requires case visibility.
   canApproveDisclosures: boolean;
+  // disclosures:approve or disclosures:prepare. Record that an approved version was sent. Without disclosures:approve the
+  // record is made on the manual path, with a reason. The backend also requires case visibility.
+  canRecordNotices: boolean;
 }
 
 export function hasPermission(permissions: readonly string[], name: string): boolean {
@@ -64,6 +67,8 @@ export function caseAbilities(permissions: readonly string[]): CaseAbilities {
     canReadReporterContact: hasPermission(permissions, "reporter_contact:read"),
     canReadDisclosures: hasPermission(permissions, "disclosures:read"),
     canApproveDisclosures: hasPermission(permissions, "disclosures:approve"),
+    canRecordNotices:
+      hasPermission(permissions, "disclosures:approve") || hasPermission(permissions, "disclosures:prepare"),
   };
 }
 

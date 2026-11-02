@@ -83,6 +83,19 @@ const MESSAGES: Record<string, string> = {
     "The recipient, purpose or digest does not match this version. Copy them exactly as they are shown.",
   evidence_not_visible: "One or more items are outside your TLP audience, so you cannot approve this version.",
   digest_mismatch: "The stored content does not match its digest, so nothing was approved. Tell an administrator.",
+  "notice not found": "That notice does not exist on this disclosure version.",
+  "disclosure version not found": "That disclosure version does not exist on this case.",
+  manual_fallback_required:
+    "Your account can record a notice only on the manual path. Choose the manual path and give the reason.",
+  repeat_reason_required: "This recipient already has a notice for this version. Give a reason for the second notice.",
+  time_out_of_range:
+    "The time is before the approval or the send, or it is in the future. Enter the time it happened.",
+  version_not_approved: "This version is not approved, so no notice can be recorded for it.",
+  version_superseded:
+    "A newer version of this package exists, so no notice can be recorded for this one. Use the latest approved version.",
+  approval_mismatch: "The approval does not match this version. Tell an administrator.",
+  release_approval_missing: "A CLEAR item has no release approval, so no notice can be recorded for this version.",
+  state_conflict: "The notice is no longer in a state that allows this change. Reload it and check its state.",
   "deadline task not found": "That deadline task does not exist on this case.",
   "legal duty not found": "That legal duty does not exist on this case.",
   "only a triager may mark a deadline not applicable": "Only a triager can mark a deadline not applicable.",

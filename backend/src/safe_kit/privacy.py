@@ -683,6 +683,24 @@ CATALOG: tuple[TableEntry, ...] = (
         deletion_mode="Soft delete once (is_deleted, deleted_at). Content is never changed.",
         created_column="created_at",
     ),
+    TableEntry(
+        table="external_notices",
+        description="Revisions of a notice that a person sent one approved disclosure version: channel, recipient reference, time sent, receipt or unknown, follow-up, and cancellation.",
+        category="disclosure",
+        contains_personal_data=True,
+        personal_fields=(
+            "recipient_ref (an identifier of the recipient, kept outside SAFE; not a name or address)",
+            "recorded_by and changed_by (link to people)",
+            "state_reason, fallback_reason, repeat_reason (free text, may name people)",
+            "channel_other (free text, up to 200 characters)",
+        ),
+        purpose="Showing which approved version was sent, through which channel and when, and whether a receipt is known, so that unknown delivery is followed up and nothing is resent without a reason.",
+        retention="Kept with its case and version. Revisions are never edited. Retention is not defined yet.",
+        retention_defined=False,
+        security="Insert-only: a trigger rejects every change. A notice may start only against an approved, current version (database trigger). Listed through the version (disclosures:read, case ACL). Written by holders of disclosures:approve, or by holders of disclosures:prepare on the manual path with a reason; each change is audited with lengths only.",
+        deletion_mode="Soft delete (is_deleted, deleted_at). The application never removes rows.",
+        created_column="created_at",
+    ),
 )
 
 

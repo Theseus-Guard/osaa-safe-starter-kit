@@ -218,7 +218,8 @@ export function CaseDetailPage({ caseId, permissions }: Props) {
         </>
       ),
     });
-    // The Disclosure tab lists the package versions and their previews. Approval is offered only with disclosures:approve.
+    // The Disclosure tab lists the package versions, their previews and their notices. Approval is offered only with
+    // disclosures:approve; a notice is recorded with disclosures:approve, or with disclosures:prepare on the manual path.
     if (abilities.canReadDisclosures) {
       tabs.push({
         id: "disclosures",
@@ -229,6 +230,7 @@ export function CaseDetailPage({ caseId, permissions }: Props) {
             caseId={detail.id}
             closed={closed}
             canApprove={abilities.canApproveDisclosures}
+            canRecordNotices={abilities.canRecordNotices}
           />
         ),
       });

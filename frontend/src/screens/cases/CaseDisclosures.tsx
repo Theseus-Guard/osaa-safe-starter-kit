@@ -3,20 +3,28 @@ import { toast } from "sonner";
 import {
   DisclosurePreview,
   DisclosureVersion,
+  ExternalNotice,
+  NoticeChannel,
   approveDisclosure,
   getDisclosurePreview,
   listDisclosures,
+  listNotices,
+  recordNotice,
 } from "../../api";
 import { describeError } from "../../messages";
+import { useSystemTimezone } from "../../system-timezone";
+import { zonedParts, zonedToUtcIso } from "../../time";
 import { humanize } from "./case-format";
 import { DisabledHint } from "@/components/disabled-hint";
 import { Timestamp } from "@/components/timestamp";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Field, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
 
 interface Props {
   caseId: string;
@@ -24,9 +32,33 @@ interface Props {
   closed: boolean;
   // The caller has disclosures:approve. The backend also requires the case to be visible to the caller.
   canApprove: boolean;
+  // The caller has disclosures:approve or disclosures:prepare. Without disclosures:approve the notice is recorded on the
+  // manual path, which needs a reason.
+  canRecordNotices: boolean;
 }
 
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/;
+// An identifier of the recipient kept outside SAFE. The same pattern the API uses.
+const RECIPIENT_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
+const REASON_LIMIT = 500;
+const CHANNEL_OTHER_LIMIT = 200;
+
+const CHANNEL_TEXT: Record<Exclude<NoticeChannel, "other">, string> = {
+  email: "Email",
+  postal: "Postal",
+  webhook: "Webhook",
+  secure_manual: "Secure manual",
+};
+
+// A notice without a receipt is never shown as delivered. "Sent" means the send is recorded and no receipt is recorded yet.
+const NOTICE_STATE_TEXT: Record<ExternalNotice["state"], string> = {
+  sent: "Sent, no receipt recorded yet",
+  receipt_received: "Receipt received",
+  receipt_unknown: "Receipt unknown",
+  follow_up_required: "Follow-up required",
+  follow_up_done: "Follow-up done",
+  cancelled: "Cancelled",
+};
 
 const APPROVAL_TEXT: Record<DisclosureVersion["approval_state"], string> = {
   approved: "Approved",
@@ -37,7 +69,9 @@ const APPROVAL_TEXT: Record<DisclosureVersion["approval_state"], string> = {
 // The Disclosure tab. It lists the package versions of the case and previews the chosen one. It shows the structure and
 // the derivatives the caller may see; no evidence content is ever loaded. An approver can approve the latest version by
 // typing its recipient, purpose and digest exactly as the preview shows them.
-export function CaseDisclosures({ caseId, closed, canApprove }: Props) {
+export function CaseDisclosures({ caseId, closed, canApprove, canRecordNotices }: Props) {
+  const { timezone } = useSystemTimezone();
+  const zone = timezone ?? "UTC";
   const [versions, setVersions] = useState<DisclosureVersion[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -50,6 +84,20 @@ export function CaseDisclosures({ caseId, closed, canApprove }: Props) {
   const [digest, setDigest] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
+  // The external notices of the chosen version, and the form that records a new one. Bumped after a notice is recorded.
+  const [notices, setNotices] = useState<ExternalNotice[] | null>(null);
+  const [noticesError, setNoticesError] = useState<string | null>(null);
+  const [noticeRevision, setNoticeRevision] = useState(0);
+  const [initialSent] = useState(() => zonedParts(new Date(), zone));
+  const [noticeChannel, setNoticeChannel] = useState<NoticeChannel>("email");
+  const [noticeChannelOther, setNoticeChannelOther] = useState("");
+  const [noticeRecipient, setNoticeRecipient] = useState("");
+  const [sentDate, setSentDate] = useState(initialSent.date);
+  const [sentTime, setSentTime] = useState(initialSent.time);
+  const [fallbackReason, setFallbackReason] = useState("");
+  const [repeatReason, setRepeatReason] = useState("");
+  const [noticeFormError, setNoticeFormError] = useState<string | null>(null);
+  const [recording, setRecording] = useState(false);
 
   useEffect(() => {
     let stale = false;
@@ -88,6 +136,23 @@ export function CaseDisclosures({ caseId, closed, canApprove }: Props) {
     };
   }, [caseId, selectedId, revision]);
 
+  useEffect(() => {
+    let stale = false;
+    setNotices(null);
+    setNoticesError(null);
+    if (selectedId === null) return;
+    listNotices(caseId, selectedId)
+      .then((result) => {
+        if (!stale) setNotices(result.items);
+      })
+      .catch((caught: unknown) => {
+        if (!stale) setNoticesError(describeError(caught));
+      });
+    return () => {
+      stale = true;
+    };
+  }, [caseId, selectedId, revision, noticeRevision]);
+
   const selected = versions?.find((item) => item.id === selectedId) ?? null;
   // Only the latest version can be approved, and an approved version needs no second approval.
   const canApproveSelected =
@@ -122,6 +187,79 @@ export function CaseDisclosures({ caseId, closed, canApprove }: Props) {
       toast.error(describeError(caught));
     } finally {
       setApproving(false);
+    }
+  }
+
+  // A notice is recorded against the latest approved version only. The approver records it on the normal path; anyone
+  // else who may prepare packages records it on the manual path, with a reason.
+  const noticeAllowed = selected !== null && selected.is_latest && selected.approval_state === "approved" && !closed;
+  const noticeReason = closed
+    ? "The case is closed. Its notices cannot change."
+    : selected !== null && !selected.is_latest
+      ? "A newer version of this package exists. Notices are recorded against the latest approved version."
+      : selected !== null && selected.approval_state !== "approved"
+        ? "Approve this version before a notice can be recorded for it."
+        : undefined;
+
+  async function recordSend() {
+    if (selectedId === null) return;
+    const recipient = noticeRecipient.trim();
+    if (!RECIPIENT_REF_PATTERN.test(recipient)) {
+      setNoticeFormError(
+        "The recipient reference is an identifier: letters, digits, '.', '_', ':' or '-', up to 64 characters. Do not enter a name or an address.",
+      );
+      return;
+    }
+    const other = noticeChannelOther.trim();
+    if (noticeChannel === "other" && (other === "" || other.length > CHANNEL_OTHER_LIMIT)) {
+      setNoticeFormError(`Describe the channel, up to ${CHANNEL_OTHER_LIMIT} characters.`);
+      return;
+    }
+    const reasonText = fallbackReason.trim();
+    if (!canApprove && (reasonText === "" || reasonText.length > REASON_LIMIT)) {
+      setNoticeFormError(
+        `The approver is not recording this notice, so give the reason, up to ${REASON_LIMIT} characters. Deadlines are not paused.`,
+      );
+      return;
+    }
+    const repeatText = repeatReason.trim();
+    if (repeatText.length > REASON_LIMIT) {
+      setNoticeFormError(`The repeat reason can be at most ${REASON_LIMIT} characters.`);
+      return;
+    }
+    const sentAt = zonedToUtcIso(sentDate, sentTime, zone);
+    if (sentAt === null) {
+      setNoticeFormError(
+        `This date and time does not exist in ${zone} because of a daylight saving change. Choose another time.`,
+      );
+      return;
+    }
+    if (new Date(sentAt).getTime() > Date.now()) {
+      setNoticeFormError("The time cannot be in the future. Enter the time the notice was sent.");
+      return;
+    }
+    setNoticeFormError(null);
+    setRecording(true);
+    try {
+      await recordNotice(caseId, selectedId, {
+        channel: noticeChannel,
+        channel_other: noticeChannel === "other" ? other : null,
+        recipient_ref: recipient,
+        sent_at: sentAt,
+        manual_fallback: !canApprove,
+        fallback_reason: canApprove ? null : reasonText,
+        repeat_reason: repeatText === "" ? null : repeatText,
+      });
+      toast.success("Notice recorded as sent. No receipt is assumed until a receipt is recorded.");
+      setNoticeChannelOther("");
+      setNoticeRecipient("");
+      setFallbackReason("");
+      setRepeatReason("");
+      setNoticeRevision((count) => count + 1);
+    } catch (caught) {
+      toast.error(describeError(caught));
+    } finally {
+      setRecording(false);
     }
   }
 
@@ -248,6 +386,173 @@ export function CaseDisclosures({ caseId, closed, canApprove }: Props) {
             <p className="text-sm">
               Approval: <span className="font-medium">{APPROVAL_TEXT[preview.approval_state]}</span>
             </p>
+          </section>
+        )}
+
+        {selected !== null && (
+          <section aria-label="External notices" className="flex flex-col gap-3 border-t pt-4">
+            <h3 className="text-sm font-medium">External notices of this version</h3>
+            <p className="text-sm text-muted-foreground">
+              A notice records a send that a person made. Sending is not done here, and nothing is sent again automatically.
+              A notice with no receipt stays unknown.
+            </p>
+            {noticesError && (
+              <Alert variant="destructive">
+                <AlertDescription>{noticesError}</AlertDescription>
+              </Alert>
+            )}
+            {notices === null && noticesError === null && (
+              <p className="text-sm text-muted-foreground">Loading the notices…</p>
+            )}
+            {notices !== null && notices.length === 0 && (
+              <p className="text-sm text-muted-foreground">No external notice is recorded for this version.</p>
+            )}
+            {notices !== null && notices.length > 0 && (
+              <div className="overflow-hidden rounded-md border">
+                <Table>
+                  <TableHeader className="bg-muted">
+                    <TableRow>
+                      <TableHead>Sent</TableHead>
+                      <TableHead>Channel</TableHead>
+                      <TableHead>Recipient reference</TableHead>
+                      <TableHead>State</TableHead>
+                      <TableHead>Path</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {notices.map((notice) => (
+                      <TableRow key={notice.id}>
+                        <TableCell>
+                          <Timestamp value={notice.sent_at} />
+                        </TableCell>
+                        <TableCell>
+                          {notice.channel === "other" ? (notice.channel_other ?? "Other") : CHANNEL_TEXT[notice.channel]}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{notice.recipient_ref}</TableCell>
+                        <TableCell>{NOTICE_STATE_TEXT[notice.state]}</TableCell>
+                        <TableCell>{notice.manual_fallback ? "Manual" : "Approver"}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+            {canRecordNotices && (
+              <form
+                aria-label="Record a notice"
+                className="flex flex-col gap-3"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void recordSend();
+                }}
+              >
+                <h4 className="text-sm font-medium">Record a notice that was sent</h4>
+                <Field>
+                  <FieldLabel htmlFor="notice-channel">Channel</FieldLabel>
+                  <Select
+                    value={noticeChannel}
+                    onValueChange={(value) => {
+                      if (value) setNoticeChannel(value as NoticeChannel);
+                    }}
+                    disabled={!noticeAllowed}
+                  >
+                    <SelectTrigger id="notice-channel" className="w-full">
+                      <SelectValue>
+                        {(value: string | null) =>
+                          value === "other" ? "Other" : value ? CHANNEL_TEXT[value as Exclude<NoticeChannel, "other">] : ""
+                        }
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(Object.keys(CHANNEL_TEXT) as Exclude<NoticeChannel, "other">[]).map((channel) => (
+                        <SelectItem key={channel} value={channel}>
+                          {CHANNEL_TEXT[channel]}
+                        </SelectItem>
+                      ))}
+                      <SelectItem value="other">Other</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                {noticeChannel === "other" && (
+                  <Field>
+                    <FieldLabel htmlFor="notice-channel-other">Describe the channel</FieldLabel>
+                    <Input
+                      id="notice-channel-other"
+                      value={noticeChannelOther}
+                      onChange={(event) => setNoticeChannelOther(event.target.value)}
+                      disabled={!noticeAllowed}
+                    />
+                  </Field>
+                )}
+                <Field>
+                  <FieldLabel htmlFor="notice-recipient">Recipient reference</FieldLabel>
+                  <Input
+                    id="notice-recipient"
+                    className="font-mono"
+                    value={noticeRecipient}
+                    onChange={(event) => setNoticeRecipient(event.target.value)}
+                    disabled={!noticeAllowed}
+                    aria-describedby="notice-recipient-help"
+                  />
+                  <FieldDescription id="notice-recipient-help">
+                    An identifier kept outside SAFE, such as cert-07. Not a name or an address.
+                  </FieldDescription>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="notice-sent-date">Sent on</FieldLabel>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input
+                      id="notice-sent-date"
+                      type="date"
+                      value={sentDate}
+                      onChange={(event) => setSentDate(event.target.value)}
+                      disabled={!noticeAllowed}
+                    />
+                    <Input
+                      id="notice-sent-time"
+                      type="time"
+                      aria-label="Time sent"
+                      value={sentTime}
+                      onChange={(event) => setSentTime(event.target.value)}
+                      disabled={!noticeAllowed}
+                    />
+                  </div>
+                  <FieldDescription>Times are in {zone}. The case stores the moment in UTC.</FieldDescription>
+                </Field>
+                {!canApprove && (
+                  <Field>
+                    <FieldLabel htmlFor="notice-fallback">Why the approver is not recording it</FieldLabel>
+                    <Textarea
+                      id="notice-fallback"
+                      value={fallbackReason}
+                      onChange={(event) => setFallbackReason(event.target.value)}
+                      disabled={!noticeAllowed}
+                      maxLength={REASON_LIMIT}
+                    />
+                    <FieldDescription>Manual path. Deadlines are not paused by recording a notice.</FieldDescription>
+                  </Field>
+                )}
+                <Field>
+                  <FieldLabel htmlFor="notice-repeat">Reason for a second notice (only if one exists)</FieldLabel>
+                  <Input
+                    id="notice-repeat"
+                    value={repeatReason}
+                    onChange={(event) => setRepeatReason(event.target.value)}
+                    disabled={!noticeAllowed}
+                  />
+                </Field>
+                {noticeFormError && (
+                  <Alert variant="destructive">
+                    <AlertDescription>{noticeFormError}</AlertDescription>
+                  </Alert>
+                )}
+                <DisabledHint reason={noticeReason}>
+                  <Button type="submit" disabled={!noticeAllowed || recording}>
+                    Record notice
+                  </Button>
+                </DisabledHint>
+              </form>
+            )}
           </section>
         )}
 
