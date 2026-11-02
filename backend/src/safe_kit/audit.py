@@ -61,6 +61,16 @@ EVIDENCE_RELEASE_APPROVED = "evidence.release_approved"
 EVIDENCE_AUDIT_ACTIONS = frozenset(
     {EVIDENCE_UPLOADED, EVIDENCE_DOWNLOADED, EVIDENCE_REDACTED, EVIDENCE_RELEASE_APPROVED}
 )
+# Catalog (safe_kit.catalog). Written against the recommendation or the entry (target_type "catalog_recommendation" or
+# "catalog_entry"). Free text is never written here; the details hold identifiers, version numbers, and results only.
+CATALOG_RECOMMENDATION_ADD = "catalog.recommendation_added"
+CATALOG_VERIFICATION_RECORD = "catalog.verification_recorded"
+CATALOG_ENTRY_CREATE = "catalog.entry_created"
+CATALOG_ENTRY_VERSION = "catalog.entry_versioned"
+CATALOG_ENTRY_CORRECTION = "catalog.entry_corrected"
+CATALOG_ENTRY_DISPUTE = "catalog.entry_disputed"
+CATALOG_ENTRY_WITHDRAWAL = "catalog.entry_withdrawn"
+CATALOG_ENTRY_SUPERSESSION = "catalog.entry_superseded"
 SYSTEM_TIMEZONE_SET = "system.timezone_set"
 SYSTEM_TIMEZONE_CHANGED = "system.timezone_changed"
 

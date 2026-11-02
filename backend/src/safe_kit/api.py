@@ -1186,4 +1186,9 @@ from safe_kit.overview_api import overview_router  # noqa: E402
 
 app.include_router(overview_router)
 
+# Catalog endpoints: recommendations, verification runs, and the versioned catalog (see safe_kit.catalog_api).
+from safe_kit.catalog_api import catalog_router  # noqa: E402
+
+app.include_router(catalog_router)
+
 app.include_router(profile_router)
