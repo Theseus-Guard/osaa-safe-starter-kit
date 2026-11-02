@@ -15,7 +15,6 @@ from fastapi.testclient import TestClient
 from safe_kit import api, auth, users
 from safe_kit.case_records import IMPACT_AREAS
 from safe_kit.db import connect
-from safe_kit.rbac import list_role_permissions, set_role_permissions
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("SAFE_TEST_DATABASE") != "1",
