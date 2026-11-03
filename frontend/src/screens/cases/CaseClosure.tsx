@@ -27,14 +27,18 @@ const REASON_MAX_LENGTH = 1000;
 export function CaseClosure({ caseId, status, closedAt, closeReason, reopenReason, canClose, onChanged }: Props) {
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // The field the current error is about, so that the field can point at the message.
+  const [errorField, setErrorField] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [reopenOpen, setReopenOpen] = useState(false);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
+    setErrorField(null);
     const trimmed = reason.trim();
     if (trimmed.length === 0) {
+      setErrorField("close-reason");
       setError("Enter the reason for closing the case.");
       return;
     }
@@ -113,9 +117,13 @@ export function CaseClosure({ caseId, status, closedAt, closeReason, reopenReaso
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <FieldGroup>
               <Field>
-                <FieldLabel htmlFor="close-reason">Reason</FieldLabel>
+                <FieldLabel htmlFor="close-reason">
+                  Reason <span className="font-normal text-muted-foreground">(required)</span>
+                </FieldLabel>
                 <Textarea
                   id="close-reason"
+                  aria-invalid={errorField === "close-reason" || undefined}
+                  aria-describedby={errorField === "close-reason" ? "close-error" : undefined}
                   value={reason}
                   maxLength={REASON_MAX_LENGTH}
                   onChange={(event) => setReason(event.target.value)}
@@ -126,7 +134,7 @@ export function CaseClosure({ caseId, status, closedAt, closeReason, reopenReaso
               </Field>
             </FieldGroup>
             {error && (
-              <Alert variant="destructive">
+              <Alert variant="destructive" id="close-error">
                 <AlertDescription>{error}</AlertDescription>
               </Alert>
             )}

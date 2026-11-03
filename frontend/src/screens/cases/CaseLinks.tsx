@@ -151,7 +151,9 @@ export function CaseLinks({ caseId, closed, canWrite }: Props) {
             }}
           >
             <Field>
-              <FieldLabel htmlFor="link-case-id">Case ID to link</FieldLabel>
+              <FieldLabel htmlFor="link-case-id">
+                Case ID to link <span className="font-normal text-muted-foreground">(required)</span>
+              </FieldLabel>
               <div className="flex flex-wrap items-start gap-2">
                 <Input
                   id="link-case-id"
@@ -159,6 +161,7 @@ export function CaseLinks({ caseId, closed, canWrite }: Props) {
                   placeholder="Case ID (UUID)"
                   value={linkedCaseId}
                   aria-invalid={inputError !== null}
+                  aria-describedby={inputError !== null ? "link-case-id-error" : undefined}
                   onChange={(event) => setLinkedCaseId(event.target.value)}
                 />
                 <Button type="submit" disabled={linking}>
@@ -167,7 +170,7 @@ export function CaseLinks({ caseId, closed, canWrite }: Props) {
               </div>
             </Field>
             {inputError && (
-              <Alert variant="destructive">
+              <Alert variant="destructive" id="link-case-id-error">
                 <AlertDescription>{inputError}</AlertDescription>
               </Alert>
             )}

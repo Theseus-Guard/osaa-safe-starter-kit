@@ -203,7 +203,8 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
                       <TableCell>
                         <div className="flex flex-wrap gap-1.5">
                           <DisabledHint reason={isSelf ? "Edit your own profile on the Account page." : undefined}>
-                            <Button variant="outline" size="sm" disabled={isSelf || busy} onClick={() => setEditing(user)}>
+                            <Button variant="outline" size="sm" disabled={isSelf || busy} aria-label={`Edit ${user.username}`}
+                              onClick={() => setEditing(user)}>
                               Edit
                             </Button>
                           </DisabledHint>
@@ -211,6 +212,7 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
                             <Button
                               variant="outline"
                               size="sm"
+                              aria-label={`${user.is_active ? "Disable" : "Enable"} ${user.username}`}
                               disabled={isLocked || busy}
                               onClick={() =>
                                 void applyChange(
@@ -229,13 +231,14 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
                               size="sm"
                               disabled={isSelf || busy}
                               aria-expanded={resettingId === user.id}
+                              aria-label={`Reset password for ${user.username}`}
                               onClick={() => setResettingId(resettingId === user.id ? null : user.id)}
                             >
                               Reset password
                             </Button>
                           </DisabledHint>
                           <DisabledHint reason={isLocked ? lockReason("You cannot delete your own account.") : undefined}>
-                            <Button variant="destructive" size="sm" disabled={isLocked || busy} onClick={() => void handleDelete(user)}>
+                            <Button variant="destructive" size="sm" disabled={isLocked || busy} aria-label={`Delete ${user.username}`} onClick={() => void handleDelete(user)}>
                               Delete
                             </Button>
                           </DisabledHint>

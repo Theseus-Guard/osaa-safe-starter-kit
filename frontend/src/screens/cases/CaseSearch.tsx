@@ -107,10 +107,12 @@ export function CaseSearch() {
       />
       {dropdownOpen && (
         <div className="absolute top-full right-0 left-0 z-30 mt-1 max-h-96 overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
-          {pending && <p className="px-2 py-1.5 text-sm text-muted-foreground">Searching…</p>}
-          {!pending && error !== null && <p className="px-2 py-1.5 text-sm text-destructive">{error}</p>}
+          {pending && <p role="status" className="px-2 py-1.5 text-sm text-muted-foreground">Searching…</p>}
+          {!pending && error !== null && (
+            <p role="alert" className="px-2 py-1.5 text-sm text-destructive">{error}</p>
+          )}
           {!pending && error === null && shown.length === 0 && (
-            <p className="px-2 py-1.5 text-sm text-muted-foreground">No cases found</p>
+            <p role="status" className="px-2 py-1.5 text-sm text-muted-foreground">No cases found</p>
           )}
           {!pending && shown.length > 0 && (
             <ul aria-label="Matching cases" className="flex flex-col">

@@ -166,6 +166,7 @@ export function RolesMatrix({ editable }: Props) {
                             <Button
                               size="sm"
                               disabled={isFixed || !isDirty(entry) || savingRole !== null}
+                              aria-label={`Save ${entry.role} permissions`}
                               onClick={() => void save(entry)}
                             >
                               {savingRole === entry.role ? "Saving…" : "Save"}

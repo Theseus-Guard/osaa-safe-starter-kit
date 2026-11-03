@@ -40,7 +40,7 @@ describe("CaseClosure", () => {
       />,
     );
 
-    await user.type(screen.getByLabelText("Reason"), "   ");
+    await user.type(screen.getByLabelText(/^Reason/), "   ");
     await user.click(screen.getByRole("button", { name: "Close case" }));
 
     expect(close).not.toHaveBeenCalled();
@@ -64,7 +64,7 @@ describe("CaseClosure", () => {
       />,
     );
 
-    await user.type(screen.getByLabelText("Reason"), "  Incident contained  ");
+    await user.type(screen.getByLabelText(/^Reason/), "  Incident contained  ");
     await user.click(screen.getByRole("button", { name: "Close case" }));
 
     await waitFor(() => expect(onChanged).toHaveBeenCalledWith(closed));
@@ -87,7 +87,7 @@ describe("CaseClosure", () => {
       />,
     );
 
-    await user.type(screen.getByLabelText("Reason"), "Done");
+    await user.type(screen.getByLabelText(/^Reason/), "Done");
     await user.click(screen.getByRole("button", { name: "Close case" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
@@ -177,7 +177,7 @@ describe("CaseClosure", () => {
 
     await user.click(screen.getByRole("button", { name: "Reopen case" }));
     const dialog = await screen.findByRole("dialog");
-    await user.type(within(dialog).getByLabelText("Reason"), "   ");
+    await user.type(within(dialog).getByLabelText(/^Reason/), "   ");
     await user.click(within(dialog).getByRole("button", { name: "Reopen case" }));
 
     expect(reopen).not.toHaveBeenCalled();
@@ -203,7 +203,7 @@ describe("CaseClosure", () => {
 
     await user.click(screen.getByRole("button", { name: "Reopen case" }));
     const dialog = await screen.findByRole("dialog");
-    await user.type(within(dialog).getByLabelText("Reason"), "  New evidence arrived  ");
+    await user.type(within(dialog).getByLabelText(/^Reason/), "  New evidence arrived  ");
     await user.click(within(dialog).getByRole("button", { name: "Reopen case" }));
 
     await waitFor(() => expect(onChanged).toHaveBeenCalledWith(reopened));
@@ -229,7 +229,7 @@ describe("CaseClosure", () => {
 
     await user.click(screen.getByRole("button", { name: "Reopen case" }));
     const dialog = await screen.findByRole("dialog");
-    await user.type(within(dialog).getByLabelText("Reason"), "Reopen");
+    await user.type(within(dialog).getByLabelText(/^Reason/), "Reopen");
     await user.click(within(dialog).getByRole("button", { name: "Reopen case" }));
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(

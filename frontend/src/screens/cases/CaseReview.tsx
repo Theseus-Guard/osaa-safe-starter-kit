@@ -238,13 +238,17 @@ function LayerForm({
   const [reason, setReason] = useState(active.layer.reason ?? "");
   const [evidence, setEvidence] = useState(active.layer.evidence_ids.join(", "));
   const [error, setError] = useState<string | null>(null);
+  // The field the current error is about, so that the field can point at the message.
+  const [errorField, setErrorField] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const label = layerLabel(active.layer.layer);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
+    setErrorField(null);
     if (outcome === null) {
+      setErrorField("review-outcome");
       setError("Choose the outcome of this layer.");
       return;
     }
@@ -297,14 +301,21 @@ function LayerForm({
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         <FieldGroup>
           <Field>
-            <FieldLabel htmlFor="review-layer-outcome">Outcome</FieldLabel>
+            <FieldLabel htmlFor="review-layer-outcome">
+              Outcome <span className="font-normal text-muted-foreground">(required)</span>
+            </FieldLabel>
             <Select
               value={outcome}
               onValueChange={(value) => {
                 if (value) setOutcome(value as LayerOutcome);
               }}
             >
-              <SelectTrigger id="review-layer-outcome" className="w-full">
+              <SelectTrigger
+                id="review-layer-outcome"
+                className="w-full"
+                aria-invalid={errorField === "review-outcome" || undefined}
+                aria-describedby={errorField === "review-outcome" ? "review-error" : undefined}
+              >
                 <SelectValue>{(value: LayerOutcome | null) => (value ? outcomeLabel(value) : "Choose an outcome")}</SelectValue>
               </SelectTrigger>
               <SelectContent>
@@ -336,7 +347,7 @@ function LayerForm({
           </Field>
         </FieldGroup>
         {error && (
-          <Alert variant="destructive">
+          <Alert variant="destructive" id="review-error">
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}

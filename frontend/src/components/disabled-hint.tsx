@@ -13,7 +13,14 @@ export function DisabledHint({ reason, children }: Props) {
   return (
     <Tooltip>
       <TooltipTrigger
-        render={<span tabIndex={0} className="inline-flex rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring" />}
+        render={
+          <span
+            tabIndex={0}
+            role="group"
+            aria-label={reason}
+            className="inline-flex rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring"
+          />
+        }
       >
         {children}
       </TooltipTrigger>

@@ -156,7 +156,9 @@ export function Login({ notice, onLogin, onDemoSignIn }: Props) {
                         </select>
                       </Field>
                       <Field>
-                        <FieldLabel htmlFor="login-demo-credential">Demo credential</FieldLabel>
+                        <FieldLabel htmlFor="login-demo-credential">
+                          Demo credential <span className="font-normal text-muted-foreground">(required)</span>
+                        </FieldLabel>
                         <div className="relative">
                           <Input
                             id="login-demo-credential"
@@ -174,7 +176,7 @@ export function Login({ notice, onLogin, onDemoSignIn }: Props) {
                             variant="ghost"
                             size="icon-sm"
                             className="absolute top-1/2 right-1 -translate-y-1/2"
-                            aria-label={showPassword ? "Hide credential" : "Show credential"}
+                            aria-label="Show credential"
                             aria-pressed={showPassword}
                             disabled={unavailable}
                             onClick={() => setShowPassword((value) => !value)}
@@ -188,7 +190,9 @@ export function Login({ notice, onLogin, onDemoSignIn }: Props) {
                   {!demoMode && (
                     <>
                     <Field>
-                      <FieldLabel htmlFor="login-username">Username</FieldLabel>
+                      <FieldLabel htmlFor="login-username">
+                        Username <span className="font-normal text-muted-foreground">(required)</span>
+                      </FieldLabel>
                       <Input
                         id="login-username"
                         name="username"
@@ -201,7 +205,9 @@ export function Login({ notice, onLogin, onDemoSignIn }: Props) {
                       />
                     </Field>
                     <Field>
-                      <FieldLabel htmlFor="login-password">Password</FieldLabel>
+                      <FieldLabel htmlFor="login-password">
+                        Password <span className="font-normal text-muted-foreground">(required)</span>
+                      </FieldLabel>
                       <div className="relative">
                         <Input
                           id="login-password"
@@ -219,7 +225,7 @@ export function Login({ notice, onLogin, onDemoSignIn }: Props) {
                           variant="ghost"
                           size="icon-sm"
                           className="absolute top-1/2 right-1 -translate-y-1/2"
-                          aria-label={showPassword ? "Hide password" : "Show password"}
+                          aria-label="Show password"
                           aria-pressed={showPassword}
                           disabled={unavailable}
                           onClick={() => setShowPassword((value) => !value)}

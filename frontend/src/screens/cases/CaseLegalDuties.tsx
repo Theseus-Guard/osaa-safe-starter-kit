@@ -11,7 +11,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldGroup, FieldLabel, FieldTitle } from "@/components/ui/field";
+import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -132,6 +133,7 @@ export function CaseLegalDuties({ caseId, closed, canWrite, canReadFullView, onR
                               size="sm"
                               variant="outline"
                               disabled={busyDutyId === duty.id}
+                              aria-label={`Mark done: ${humanize(duty.kind)} duty`}
                               onClick={() => void changeStatus(duty, "done")}
                             >
                               Mark done
@@ -141,6 +143,7 @@ export function CaseLegalDuties({ caseId, closed, canWrite, canReadFullView, onR
                               size="sm"
                               variant="outline"
                               disabled={busyDutyId === duty.id}
+                              aria-label={`Set open: ${humanize(duty.kind)} duty`}
                               onClick={() => void changeStatus(duty, "open")}
                             >
                               Set open
@@ -214,27 +217,34 @@ function AddLegalDutyForm({ caseId, onRecorded }: { caseId: string; onRecorded: 
   const [date, setDate] = useState(initial.date);
   const [time, setTime] = useState(initial.time);
   const [error, setError] = useState<string | null>(null);
+  // The field the current error is about, so that the field can point at the message.
+  const [errorField, setErrorField] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
+    setErrorField(null);
     if (kind === null) {
+      setErrorField("duty-kind");
       setError("Choose whether the duty is statutory or contractual.");
       return;
     }
     const trimmedDescription = description.trim();
     const trimmedSource = sourceReference.trim();
     if (trimmedDescription.length === 0 || trimmedSource.length === 0) {
+      setErrorField(trimmedDescription.length === 0 ? "duty-description" : "duty-source");
       setError("Enter the duty and the statute or clause that creates it.");
       return;
     }
     if (date === "" || time === "") {
+      setErrorField("duty-when");
       setError("Enter the date and time the duty is due.");
       return;
     }
     const dueAt = zonedToUtcIso(date, time, zone);
     if (dueAt === null) {
+      setErrorField("duty-when");
       setError(`This date and time does not exist in ${zone} because of a daylight saving change. Choose another time.`);
       return;
     }
@@ -265,14 +275,21 @@ function AddLegalDutyForm({ caseId, onRecorded }: { caseId: string; onRecorded: 
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         <FieldGroup>
           <Field>
-            <FieldLabel htmlFor="duty-kind">Kind</FieldLabel>
+            <FieldLabel htmlFor="duty-kind">
+              Kind <span className="font-normal text-muted-foreground">(required)</span>
+            </FieldLabel>
             <Select
               value={kind}
               onValueChange={(value) => {
                 if (value) setKind(value as DutyKind);
               }}
             >
-              <SelectTrigger id="duty-kind" className="w-full">
+              <SelectTrigger
+                id="duty-kind"
+                className="w-full"
+                aria-invalid={errorField === "duty-kind" || undefined}
+                aria-describedby={errorField === "duty-kind" ? "duty-error" : undefined}
+              >
                 <SelectValue>{(value: DutyKind | null) => (value ? humanize(value) : "Choose a kind")}</SelectValue>
               </SelectTrigger>
               <SelectContent>
@@ -285,9 +302,13 @@ function AddLegalDutyForm({ caseId, onRecorded }: { caseId: string; onRecorded: 
             </Select>
           </Field>
           <Field>
-            <FieldLabel htmlFor="duty-description">Duty</FieldLabel>
+            <FieldLabel htmlFor="duty-description">
+              Duty <span className="font-normal text-muted-foreground">(required)</span>
+            </FieldLabel>
             <Textarea
               id="duty-description"
+              aria-invalid={errorField === "duty-description" || undefined}
+              aria-describedby={errorField === "duty-description" ? "duty-error" : undefined}
               value={description}
               maxLength={DESCRIPTION_MAX_LENGTH}
               onChange={(event) => setDescription(event.target.value)}
@@ -295,9 +316,13 @@ function AddLegalDutyForm({ caseId, onRecorded }: { caseId: string; onRecorded: 
             />
           </Field>
           <Field>
-            <FieldLabel htmlFor="duty-source">Source</FieldLabel>
+            <FieldLabel htmlFor="duty-source">
+              Source <span className="font-normal text-muted-foreground">(required)</span>
+            </FieldLabel>
             <Input
               id="duty-source"
+              aria-invalid={errorField === "duty-source" || undefined}
+              aria-describedby={errorField === "duty-source" ? "duty-error" : undefined}
               value={sourceReference}
               maxLength={SOURCE_MAX_LENGTH}
               onChange={(event) => setSourceReference(event.target.value)}
@@ -315,22 +340,40 @@ function AddLegalDutyForm({ caseId, onRecorded }: { caseId: string; onRecorded: 
             <FieldDescription>Optional.</FieldDescription>
           </Field>
           <Field>
-            <FieldLabel htmlFor="duty-date">Due on</FieldLabel>
-            <div className="grid grid-cols-2 gap-2">
-              <Input id="duty-date" type="date" value={date} onChange={(event) => setDate(event.target.value)} required />
-              <Input
-                type="time"
-                aria-label="Due at"
-                value={time}
-                onChange={(event) => setTime(event.target.value)}
-                required
-              />
+            <FieldTitle id="duty-when-label">
+              Due on <span className="font-normal text-muted-foreground">(required)</span>
+            </FieldTitle>
+            <div role="group" aria-labelledby="duty-when-label" className="grid grid-cols-2 gap-2">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="duty-date">Date</Label>
+                <Input
+                  id="duty-date"
+                  type="date"
+                  value={date}
+                  onChange={(event) => setDate(event.target.value)}
+                  aria-invalid={errorField === "duty-when" || undefined}
+                  aria-describedby={errorField === "duty-when" ? "duty-error" : undefined}
+                  required
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="duty-time">Time</Label>
+                <Input
+                  id="duty-time"
+                  type="time"
+                  value={time}
+                  onChange={(event) => setTime(event.target.value)}
+                  aria-invalid={errorField === "duty-when" || undefined}
+                  aria-describedby={errorField === "duty-when" ? "duty-error" : undefined}
+                  required
+                />
+              </div>
             </div>
             <FieldDescription>Times are in {zone}. The case stores the moment in UTC.</FieldDescription>
           </Field>
         </FieldGroup>
         {error && (
-          <Alert variant="destructive">
+          <Alert variant="destructive" id="duty-error">
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}

@@ -6,7 +6,8 @@ import { offsetLabel, zonedParts, zonedToUtcIso } from "../../time";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldGroup, FieldLabel, FieldTitle } from "@/components/ui/field";
+import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 
 const TITLE_MAX_LENGTH = 200;
@@ -108,7 +109,9 @@ function NewCaseForm({ onCreated }: { onCreated: (created: CaseDetail) => void }
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         <FieldGroup>
           <Field>
-            <FieldLabel htmlFor="case-title">Title</FieldLabel>
+            <FieldLabel htmlFor="case-title">
+              Title <span className="font-normal text-muted-foreground">(required)</span>
+            </FieldLabel>
             <Input
               id="case-title"
               value={title}
@@ -120,26 +123,34 @@ function NewCaseForm({ onCreated }: { onCreated: (created: CaseDetail) => void }
             />
           </Field>
           <Field>
-            <FieldLabel htmlFor="case-date">Awareness date and time</FieldLabel>
-            <div className="grid grid-cols-2 gap-2">
-              <Input
-                id="case-date"
-                type="date"
-                value={date}
-                onChange={(event) => setDate(event.target.value)}
-                required
-                aria-invalid={error?.field === "awareness" ? true : undefined}
-                aria-describedby={error?.field === "awareness" ? ERROR_ID : undefined}
-              />
-              <Input
-                type="time"
-                aria-label="Awareness time"
-                value={time}
-                onChange={(event) => setTime(event.target.value)}
-                required
-                aria-invalid={error?.field === "awareness" ? true : undefined}
-                aria-describedby={error?.field === "awareness" ? ERROR_ID : undefined}
-              />
+            <FieldTitle id="case-when-label">
+              Awareness date and time <span className="font-normal text-muted-foreground">(required)</span>
+            </FieldTitle>
+            <div role="group" aria-labelledby="case-when-label" className="grid grid-cols-2 gap-2">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="case-date">Date</Label>
+                <Input
+                  id="case-date"
+                  type="date"
+                  value={date}
+                  onChange={(event) => setDate(event.target.value)}
+                  aria-invalid={error?.field === "awareness" ? true : undefined}
+                  aria-describedby={error?.field === "awareness" ? ERROR_ID : undefined}
+                  required
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="case-time">Time</Label>
+                <Input
+                  id="case-time"
+                  type="time"
+                  value={time}
+                  onChange={(event) => setTime(event.target.value)}
+                  aria-invalid={error?.field === "awareness" ? true : undefined}
+                  aria-describedby={error?.field === "awareness" ? ERROR_ID : undefined}
+                  required
+                />
+              </div>
             </div>
             <FieldDescription>
               Times are in {zone}

@@ -55,7 +55,7 @@ async function pick(
   label: string,
   option: string,
 ) {
-  await user.click(within(dialog).getByLabelText(label));
+  await user.click(within(dialog).getByLabelText(new RegExp(`^${label}`)));
   await user.click(await screen.findByRole("option", { name: option }));
 }
 
@@ -104,7 +104,7 @@ describe("CaseAwarenessEvents", () => {
     const dialog = await openDialog(user);
     await pick(user, dialog, "Awareness through", "Operator");
     await pick(user, dialog, "Event", "Incident");
-    await user.type(within(dialog).getByLabelText("Basis"), "  Alert from the log monitor  ");
+    await user.type(within(dialog).getByLabelText(/^Basis/), "  Alert from the log monitor  ");
     await user.click(within(dialog).getByRole("button", { name: "Add event" }));
 
     await waitFor(() =>
@@ -144,7 +144,7 @@ describe("CaseAwarenessEvents", () => {
     const dialog = await openDialog(user);
     await pick(user, dialog, "Awareness through", "Operator");
     await pick(user, dialog, "Event", "Incident");
-    await user.type(within(dialog).getByLabelText("Basis"), "Log alert");
+    await user.type(within(dialog).getByLabelText(/^Basis/), "Log alert");
     await user.click(within(dialog).getByRole("button", { name: "Add event" }));
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("This case is closed.");

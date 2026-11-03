@@ -66,7 +66,7 @@ describe("CaseLinks", () => {
     render(<CaseLinks caseId="case-1" closed={false} canWrite />);
 
     const row = (await screen.findByText("Not available to your account")).closest("tr") as HTMLElement;
-    expect(within(row).queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: /^Remove/ })).not.toBeInTheDocument();
     expect(within(row).getByText("-")).toBeInTheDocument();
   });
 
@@ -75,7 +75,7 @@ describe("CaseLinks", () => {
     render(<CaseLinks caseId="case-1" closed={false} canWrite={false} />);
 
     expect(await screen.findByText("Ministry portal exposure")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Remove/ })).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Case ID to link/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Link case" })).not.toBeInTheDocument();
   });
@@ -84,7 +84,7 @@ describe("CaseLinks", () => {
     list.mockResolvedValue([LINK]);
     render(<CaseLinks caseId="case-1" closed canWrite />);
 
-    expect(await screen.findByRole("button", { name: "Remove" })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: /^Remove/ })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Link case" })).not.toBeInTheDocument();
   });
 
@@ -100,7 +100,7 @@ describe("CaseLinks", () => {
     list.mockResolvedValue([]);
     render(<CaseLinks caseId="case-1" closed={false} canWrite />);
 
-    await user.type(await screen.findByLabelText("Case ID to link"), "not-an-id");
+    await user.type(await screen.findByLabelText(/^Case ID to link/), "not-an-id");
     await user.click(screen.getByRole("button", { name: "Link case" }));
 
     expect(await screen.findByText(/Enter the case ID as a UUID/)).toBeInTheDocument();
@@ -113,7 +113,7 @@ describe("CaseLinks", () => {
     add.mockResolvedValue(LINK);
     render(<CaseLinks caseId="case-1" closed={false} canWrite />);
 
-    await user.type(await screen.findByLabelText("Case ID to link"), `  ${OTHER_ID}  `);
+    await user.type(await screen.findByLabelText(/^Case ID to link/), `  ${OTHER_ID}  `);
     await user.click(screen.getByRole("button", { name: "Link case" }));
 
     await waitFor(() => expect(add).toHaveBeenCalledWith("case-1", OTHER_ID));
@@ -128,7 +128,7 @@ describe("CaseLinks", () => {
     add.mockRejectedValue(new ApiError(409, "cases are already linked"));
     render(<CaseLinks caseId="case-1" closed={false} canWrite />);
 
-    await user.type(await screen.findByLabelText("Case ID to link"), OTHER_ID);
+    await user.type(await screen.findByLabelText(/^Case ID to link/), OTHER_ID);
     await user.click(screen.getByRole("button", { name: "Link case" }));
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("These two cases are already linked."));
@@ -140,7 +140,7 @@ describe("CaseLinks", () => {
     remove.mockResolvedValue(undefined);
     render(<CaseLinks caseId="case-1" closed={false} canWrite />);
 
-    await user.click(await screen.findByRole("button", { name: "Remove" }));
+    await user.click(await screen.findByRole("button", { name: /^Remove/ }));
 
     await waitFor(() => expect(remove).toHaveBeenCalledWith("case-1", OTHER_ID));
     expect(toast.success).toHaveBeenCalledWith("The link was removed. No task, deadline or status changed.");
@@ -153,7 +153,7 @@ describe("CaseLinks", () => {
     remove.mockRejectedValue(new ApiError(404, "link not found"));
     render(<CaseLinks caseId="case-1" closed={false} canWrite />);
 
-    await user.click(await screen.findByRole("button", { name: "Remove" }));
+    await user.click(await screen.findByRole("button", { name: /^Remove/ }));
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("These two cases are not linked."));
   });
