@@ -281,7 +281,7 @@ def test_unknown_or_invisible_case_is_404_on_every_read(client, caller, monkeypa
     monkeypatch.setattr(api, "find_visible_case", lambda case_id, scope: None)
     monkeypatch.setattr(api, "list_assignments", lambda case_id, scope: None)
     monkeypatch.setattr(
-        api, "case_history", lambda case_id, scope, limit, offset, **kwargs: None
+        api, "case_history", lambda case_id, scope, limit, after, **kwargs: None
     )
     assert client.get(f"/api/v1/cases/{CASE_ID}").status_code == 404
     assert client.get(f"/api/v1/cases/{CASE_ID}/assignments").status_code == 404
@@ -762,8 +762,8 @@ def test_history_gives_triager_the_details_and_reporter_only_actions(
         details={"status": {"old": "open", "new": "closed"}},
     )
 
-    def fake_history(case_id, scope, limit, offset, **kwargs):
-        return [entry], 1
+    def fake_history(case_id, scope, limit, after, **kwargs):
+        return [entry], None
 
     monkeypatch.setattr(api, "case_history", fake_history)
 
@@ -774,7 +774,7 @@ def test_history_gives_triager_the_details_and_reporter_only_actions(
 
     as_role(caller, REPORTER_ID, "reporter")
     stripped = client.get(f"/api/v1/cases/{CASE_ID}/history").json()
-    assert stripped["total"] == 1
+    assert stripped["next_cursor"] is None
     assert stripped["items"][0]["action"] == audit.CASE_CLOSE
     assert stripped["items"][0]["details"] is None
     assert stripped["items"][0]["actor_id"] is None
@@ -785,9 +785,9 @@ def test_history_leaves_out_evidence_entries_unless_the_caller_holds_evidence_re
 ):
     seen = []
 
-    def fake_history(case_id, scope, limit, offset, **kwargs):
+    def fake_history(case_id, scope, limit, after, **kwargs):
         seen.append(kwargs["include_evidence"])
-        return [], 0
+        return [], None
 
     monkeypatch.setattr(api, "case_history", fake_history)
     as_role(caller, REPORTER_ID, "reporter")
@@ -799,7 +799,17 @@ def test_history_leaves_out_evidence_entries_unless_the_caller_holds_evidence_re
 
 def test_history_is_paged_with_the_standard_bounds(client, caller):
     assert client.get(f"/api/v1/cases/{CASE_ID}/history?limit=0").status_code == 400
-    assert client.get(f"/api/v1/cases/{CASE_ID}/history?offset=-1").status_code == 400
+    assert client.get(f"/api/v1/cases/{CASE_ID}/history?limit=201").status_code == 400
+
+
+def test_history_refuses_an_invalid_cursor_before_any_read(client, caller, monkeypatch):
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("an invalid cursor is refused before the history is read")
+
+    monkeypatch.setattr(api, "case_history", must_not_run)
+    response = client.get(f"/api/v1/cases/{CASE_ID}/history?cursor=not-a-cursor")
+    assert response.status_code == 400
+    assert response.json()["detail"] == {"status": "invalid_cursor"}
 
 
 # --- database: the same flow against PostgreSQL ------------------------------------------------------------------
@@ -1345,7 +1355,7 @@ def test_history_shows_details_only_to_the_triager(db_client, people):
     } <= actions
     assert full["items"][0]["action"] == audit.CASE_REVIEW_LAYER_SET  # newest first
     assert all(item["details"] is not None for item in full["items"])
-    assert stripped["total"] == full["total"]
+    assert len(stripped["items"]) == len(full["items"])
     assert all(
         item["details"] is None and item["actor_id"] is None
         for item in stripped["items"]
@@ -1463,7 +1473,7 @@ def test_evidence_history_entries_need_evidence_read(db_client, people):
     assert audit.EVIDENCE_UPLOADED not in {
         item["action"] for item in without_read["items"]
     }
-    assert without_read["total"] == with_read["total"] - 1
+    assert len(without_read["items"]) == len(with_read["items"]) - 1
 
 
 @requires_database

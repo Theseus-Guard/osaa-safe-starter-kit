@@ -36,6 +36,7 @@ from safe_kit.evidence_crypto import IntegrityError, open_sealed, seal, sha256_h
 from safe_kit.evidence_keys import KeyProvider, KeyProviderError
 from safe_kit.evidence_storage import EvidenceStorage, ObjectNotFound, StorageError
 from safe_kit.idempotency import KeyReused, KeyScope, Replayed, check, remember
+from safe_kit.pagination import encode_cursor
 
 DEFAULT_MAX_BYTES = 50 * 1024 * 1024
 MAX_FILENAME_LENGTH = 255
@@ -518,29 +519,40 @@ def record_failure(evidence_id: str, actor_id: str | None, reason: str) -> None:
 
 
 def list_evidence(
-    case_id: str, limit: int, offset: int, recipient: tlp.Recipient | None = None
-) -> tuple[list[EvidenceItem], int]:
-    """A page of the items of a case, and their total. With a recipient, items the TLP rule hides from it are left out
-    of both the page and the total, so the total never counts an item the caller cannot see."""
+    case_id: str,
+    limit: int,
+    after: tuple[datetime, str] | None = None,
+    recipient: tlp.Recipient | None = None,
+) -> tuple[list[EvidenceItem], str | None]:
+    """One page of the items of a case, oldest first, and the cursor of the next page (None on the last page).
+    after is the (created_at, id) position of the last row of the previous page. With a recipient, items the TLP rule
+    hides from it are left out, so no page carries an item the caller cannot see."""
     if recipient is None:
         audience, audience_params = "TRUE", ()
     else:
         audience, audience_params = tlp.visibility_sql(recipient)
+    # Matches the ORDER BY: created_at ascending, then id ascending.
+    if after is None:
+        keyset, keyset_params = "TRUE", ()
+    else:
+        created_at, row_id = after
+        keyset = "(e.created_at > %s OR (e.created_at = %s AND e.id > %s::uuid))"
+        keyset_params = (created_at, created_at, row_id)
     with connect() as conn:
+        # One extra row tells whether another page exists; it is not returned.
         rows = conn.execute(
             f"""
             SELECT {_ITEM_COLUMNS} FROM evidence_items e
-            WHERE e.case_id = %s AND NOT e.is_deleted AND {audience}
+            WHERE e.case_id = %s AND NOT e.is_deleted AND {audience} AND {keyset}
             ORDER BY e.created_at, e.id
-            LIMIT %s OFFSET %s
+            LIMIT %s
             """,
-            (case_id, *audience_params, limit, offset),
+            (case_id, *audience_params, *keyset_params, limit + 1),
         ).fetchall()
-        total = conn.execute(
-            f"SELECT count(*) FROM evidence_items e WHERE e.case_id = %s AND NOT e.is_deleted AND {audience}",
-            (case_id, *audience_params),
-        ).fetchone()[0]
-    return [_to_item(row) for row in rows], total
+    items = [_to_item(row) for row in rows[:limit]]
+    has_more = len(rows) > limit
+    next_cursor = encode_cursor(items[-1].created_at, items[-1].id) if has_more else None
+    return items, next_cursor
 
 
 def get_item(evidence_id: str) -> EvidenceItem | None:

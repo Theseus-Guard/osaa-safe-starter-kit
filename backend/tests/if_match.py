@@ -41,15 +41,16 @@ def duty_if_match(client, url: str) -> dict:
 
 def user_if_match(client, user_id: str) -> dict:
     """If-Match for PATCH users/{user_id}. The revision is read from the user list, which the admin may read."""
-    offset = 0
+    cursor = None
     while True:
-        response = client.get(f"/api/v1/users?limit=200&offset={offset}")
+        query = "limit=200" if cursor is None else f"limit=200&cursor={cursor}"
+        response = client.get(f"/api/v1/users?{query}")
         if response.status_code != 200:
             return PLACEHOLDER
         page = response.json()
         for user in page["items"]:
             if user["id"] == user_id:
                 return _if_match(user["revision"])
-        offset += 200
-        if offset >= page["total"]:
+        cursor = page["next_cursor"]
+        if cursor is None:
             return PLACEHOLDER

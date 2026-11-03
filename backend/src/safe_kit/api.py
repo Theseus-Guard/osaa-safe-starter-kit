@@ -78,7 +78,12 @@ from safe_kit.config_guard import (
     trusted_proxies,
 )
 from safe_kit.db import connect
-from safe_kit.pagination import decode_cursor, encode_cursor
+from safe_kit.pagination import (
+    decode_cursor,
+    decode_name_cursor,
+    encode_cursor,
+    encode_name_cursor,
+)
 from safe_kit.demo_auth import (
     DEMO_ROLES,
     DEMO_USERNAMES,
@@ -150,7 +155,6 @@ from safe_kit.users import (
     User,
     admin_exists,
     change_own_password,
-    count_users,
     create_user_with_profile,
     find_user,
     find_user_by_id,
@@ -539,9 +543,7 @@ class UserSummary(BaseModel):
 
 class UserPage(BaseModel):
     items: list[UserSummary]
-    total: int
-    limit: int
-    offset: int
+    next_cursor: str | None
 
 
 class RoleSummary(BaseModel):
@@ -853,14 +855,24 @@ def admin_set_system_timezone(
 @app.get("/api/v1/users", response_model=UserPage)
 def admin_list_users(
     limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
+    # Opaque. Omit it for the first page; use next_cursor from the previous page for the next one.
+    cursor: str | None = Query(default=None, max_length=200),
     actor: User = Depends(require_permission("users:manage")),
 ) -> UserPage:
+    after = None
+    if cursor is not None:
+        after = decode_name_cursor(cursor)
+        if after is None:
+            raise HTTPException(status_code=400, detail={"status": "invalid_cursor"})
+    # One extra row tells whether another page exists; it is not returned.
+    page_users = list_users(limit + 1, after)
+    has_more = len(page_users) > limit
+    page_users = page_users[:limit]
     return UserPage(
-        items=[_summary(user) for user in list_users(limit, offset)],
-        total=count_users(),
-        limit=limit,
-        offset=offset,
+        items=[_summary(user) for user in page_users],
+        next_cursor=encode_name_cursor(page_users[-1].username, page_users[-1].id)
+        if has_more
+        else None,
     )
 
 
@@ -1180,9 +1192,7 @@ class HistoryEntryResponse(BaseModel):
 
 class HistoryPage(BaseModel):
     items: list[HistoryEntryResponse]
-    total: int
-    limit: int
-    offset: int
+    next_cursor: str | None
 
 
 class CaseImportRecordResult(BaseModel):
@@ -1960,20 +1970,26 @@ def restore_case_deadline(
 def get_case_history(
     case_id: uuid.UUID,
     limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
+    # Opaque. Omit it for the first page; use next_cursor from the previous page for the next one.
+    cursor: str | None = Query(default=None, max_length=200),
     actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS)),
 ) -> HistoryPage:
     permissions = permissions_of(actor)
+    after = None
+    if cursor is not None:
+        after = decode_cursor(cursor)
+        if after is None:
+            raise HTTPException(status_code=400, detail={"status": "invalid_cursor"})
     result = case_history(
         str(case_id),
         _scope(actor),
         limit,
-        offset,
+        after,
         include_evidence="evidence:read" in permissions,
     )
     if result is None:
         raise CASE_NOT_FOUND
-    entries, total = result
+    entries, next_cursor = result
     # The reporter's account is never shown, not even to triagers: the reporter must not be exposed to retaliation.
     entries = hide_reporter(entries)
     # Full details go to callers who can read every case (the triager). Everyone else sees action and time only.
@@ -1990,9 +2006,7 @@ def get_case_history(
             )
             for entry in entries
         ],
-        total=total,
-        limit=limit,
-        offset=offset,
+        next_cursor=next_cursor,
     )
 
 

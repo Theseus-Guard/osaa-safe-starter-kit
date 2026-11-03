@@ -156,9 +156,9 @@ beforeEach(() => {
   close.mockReset();
   open.mockReset();
   assignments.mockReset().mockResolvedValue([]);
-  evidence.mockReset().mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
+  evidence.mockReset().mockResolvedValue({ items: [], next_cursor: null });
   reviews.mockReset().mockResolvedValue([]);
-  history.mockReset().mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
+  history.mockReset().mockResolvedValue({ items: [], next_cursor: null });
   awarenessEvents.mockReset().mockResolvedValue([]);
   impacts.mockReset().mockResolvedValue([]);
   legalDuties.mockReset().mockResolvedValue([]);
@@ -177,7 +177,7 @@ describe("CaseDetailPage", () => {
     expect(screen.getByRole("tab", { name: "Evidence" })).toBeInTheDocument();
     expect(screen.getByText("History")).toBeInTheDocument();
     expect(assignments).toHaveBeenCalledWith("case-1");
-    expect(evidence).toHaveBeenCalledWith("case-1", 20, 0);
+    expect(evidence).toHaveBeenCalledWith("case-1", 20, undefined);
   });
 
   it("reloads the history after the case is closed", async () => {
@@ -209,7 +209,7 @@ describe("CaseDetailPage", () => {
     render(<CaseDetailPage caseId="case-1" permissions={["cases:read_all", "evidence:read"]} />);
 
     expect(await screen.findByRole("tab", { name: "Evidence" })).toBeInTheDocument();
-    expect(evidence).toHaveBeenCalledWith("case-1", 20, 0);
+    expect(evidence).toHaveBeenCalledWith("case-1", 20, undefined);
     await openTab("Evidence");
     expect(screen.getByRole("tabpanel", { name: "Evidence" })).toBeInTheDocument();
     expect(screen.queryByLabelText(/Upload evidence/)).not.toBeInTheDocument();

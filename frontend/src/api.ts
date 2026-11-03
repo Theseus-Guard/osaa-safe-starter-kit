@@ -61,9 +61,8 @@ export interface UserSummary extends UserProfile {
 
 export interface UserPage {
   items: UserSummary[];
-  total: number;
-  limit: number;
-  offset: number;
+  // Pass this as the cursor of the next call. Null when there is no further page.
+  next_cursor: string | null;
 }
 
 export interface UserUpdate {
@@ -341,8 +340,10 @@ export function updateUserProfile(userId: string, body: ProfileUpdate): Promise<
   return request(`/users/${encodeURIComponent(userId)}/profile`, { method: "PATCH", json: body });
 }
 
-export function listUsers(limit: number, offset: number): Promise<UserPage> {
-  return request<UserPage>(`/users?limit=${limit}&offset=${offset}`);
+// cursor is the next_cursor of the previous page. Omitted means the first page.
+export function listUsers(limit: number, cursor?: string): Promise<UserPage> {
+  const position = cursor === undefined ? "" : `&cursor=${encodeURIComponent(cursor)}`;
+  return request<UserPage>(`/users?limit=${limit}${position}`);
 }
 
 // revision is the account revision the caller read (UserSummary.revision), sent as If-Match. A stale revision answers
@@ -789,13 +790,14 @@ export interface HistoryEntry {
 
 export interface HistoryPage {
   items: HistoryEntry[];
-  total: number;
-  limit: number;
-  offset: number;
+  // Pass this as the cursor of the next call. Null when there is no further page.
+  next_cursor: string | null;
 }
 
-export function getCaseHistory(caseId: string, limit: number, offset: number): Promise<HistoryPage> {
-  return request<HistoryPage>(`/cases/${encodeURIComponent(caseId)}/history?limit=${limit}&offset=${offset}`);
+// cursor is the next_cursor of the previous page. Omitted means the first page.
+export function getCaseHistory(caseId: string, limit: number, cursor?: string): Promise<HistoryPage> {
+  const position = cursor === undefined ? "" : `&cursor=${encodeURIComponent(cursor)}`;
+  return request<HistoryPage>(`/cases/${encodeURIComponent(caseId)}/history?limit=${limit}${position}`);
 }
 
 // Evidence. The list, download and custody log need evidence:read. Upload needs evidence:write. Both also need the case to be visible.
@@ -861,9 +863,8 @@ export interface RedactionRangeBody {
 
 export interface EvidencePage {
   items: EvidenceItem[];
-  total: number;
-  limit: number;
-  offset: number;
+  // Pass this as the cursor of the next call. Null when there is no further page.
+  next_cursor: string | null;
 }
 
 export interface CustodyEvent {
@@ -874,8 +875,10 @@ export interface CustodyEvent {
   created_at: string;
 }
 
-export function listEvidence(caseId: string, limit: number, offset: number): Promise<EvidencePage> {
-  return request<EvidencePage>(`/cases/${encodeURIComponent(caseId)}/evidence?limit=${limit}&offset=${offset}`);
+// cursor is the next_cursor of the previous page. Omitted means the first page.
+export function listEvidence(caseId: string, limit: number, cursor?: string): Promise<EvidencePage> {
+  const position = cursor === undefined ? "" : `&cursor=${encodeURIComponent(cursor)}`;
+  return request<EvidencePage>(`/cases/${encodeURIComponent(caseId)}/evidence?limit=${limit}${position}`);
 }
 
 export function uploadEvidence(caseId: string, file: File): Promise<EvidenceItem> {

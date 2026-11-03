@@ -521,11 +521,22 @@ def _uuid_arg(text: str, option: str) -> str:
 def _check_paging(args: argparse.Namespace) -> None:
     if not 1 <= args.limit <= MAX_PAGE_SIZE:
         raise UsageError(f"--limit must be between 1 and {MAX_PAGE_SIZE}")
-    if args.offset < 0:
-        raise UsageError("--offset must be 0 or more")
 
 
-CURSOR_INVALID_TEXT = "the cursor is not valid. Run 'case list' again without --cursor to start from the first page"
+def _cursor_invalid_text(command: str) -> str:
+    return (
+        "the cursor is not valid. Run '"
+        + command
+        + "' again without --cursor to start from the first page"
+    )
+
+
+def _is_invalid_cursor(error: RequestFailed) -> bool:
+    return (
+        error.status == 400
+        and isinstance(error.detail, dict)
+        and error.detail.get("status") == "invalid_cursor"
+    )
 
 
 def _case_list(base_url: str, args: argparse.Namespace) -> None:
@@ -541,14 +552,11 @@ def _case_list(base_url: str, args: argparse.Namespace) -> None:
         try:
             raw = _call(base, "GET", "/api/v1/cases", token=token, query=query)
         except RequestFailed as error:
-            detail = error.detail
-            if (
-                error.status == 400
-                and isinstance(detail, dict)
-                and detail.get("status") == "invalid_cursor"
-            ):
+            if _is_invalid_cursor(error):
                 raise RequestFailed(
-                    CURSOR_INVALID_TEXT, status=error.status, detail=detail
+                    _cursor_invalid_text("case list"),
+                    status=error.status,
+                    detail=error.detail,
                 ) from None
             raise
         if args.json:
@@ -751,7 +759,7 @@ def _print_evidence(item: dict) -> None:
 def _print_evidence_page(page: dict) -> None:
     items = page["items"]
     if not items:
-        print(f"No evidence for this case. Total: {page['total']}")
+        print("No evidence for this case.")
         return
     rows = [("ID", "STATUS", "MEDIA TYPE", "SIZE (BYTES)", "FILE")]
     rows += [
@@ -768,9 +776,8 @@ def _print_evidence_page(page: dict) -> None:
     for row in rows:
         cells = [row[column].ljust(widths[column]) for column in range(4)] + [row[4]]
         print("  ".join(cells).rstrip())
-    first = page["offset"] + 1
-    last = page["offset"] + len(items)
-    print(f"Showing {first}-{last} of {page['total']}")
+    if page["next_cursor"] is not None:
+        print(f"Next page: --cursor {page['next_cursor']}")
 
 
 def _print_tasks(case: dict) -> None:
@@ -853,15 +860,27 @@ def _evidence_add(base_url: str, args: argparse.Namespace) -> None:
 def _evidence_list(base_url: str, args: argparse.Namespace) -> None:
     case_id = _case_id_arg(args.case_id)
     _check_paging(args)
+    query: dict = {"limit": args.limit}
+    if args.cursor is not None:
+        query["cursor"] = args.cursor
 
     def action(base: str, token: str) -> None:
-        raw = _call(
-            base,
-            "GET",
-            f"/api/v1/cases/{case_id}/evidence",
-            token=token,
-            query={"limit": args.limit, "offset": args.offset},
-        )
+        try:
+            raw = _call(
+                base,
+                "GET",
+                f"/api/v1/cases/{case_id}/evidence",
+                token=token,
+                query=query,
+            )
+        except RequestFailed as error:
+            if _is_invalid_cursor(error):
+                raise RequestFailed(
+                    _cursor_invalid_text("evidence list"),
+                    status=error.status,
+                    detail=error.detail,
+                ) from None
+            raise
         if args.json:
             _print_json(raw)
         else:
@@ -3058,7 +3077,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--limit", type=int, default=DEFAULT_PAGE_SIZE, help="Items per page (1 to 200)"
     )
     evidence_list.add_argument(
-        "--offset", type=int, default=0, help="Number of items to skip"
+        "--cursor",
+        default=None,
+        metavar="CURSOR",
+        help="Continue from the cursor printed as 'Next page'",
     )
     _add_auth_options(evidence_list)
     evidence_list.set_defaults(handler=_evidence_list)

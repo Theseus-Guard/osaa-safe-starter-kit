@@ -136,10 +136,10 @@ def test_evidence_id_is_the_same_in_the_case_list_the_lookup_and_the_custody_log
         scope,
     )
 
-    listed, total = evidence.list_evidence(case_id, 50, 0)
+    listed, next_cursor = evidence.list_evidence(case_id, 50)
     stored = evidence.find_stored(item.id, scope)
 
-    assert total == 1
+    assert next_cursor is None
     assert [row.id for row in listed] == [item.id]
     assert stored is not None and stored.id == item.id
     assert {event.evidence_id for event in evidence.custody_events(item.id)} == {

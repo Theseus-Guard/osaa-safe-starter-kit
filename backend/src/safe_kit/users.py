@@ -527,11 +527,19 @@ def soft_delete_user(user_id: str, actor_id: str | None = None) -> UpdateOutcome
     return UpdateOutcome.OK
 
 
-def list_users(limit: int, offset: int) -> list[User]:
+def list_users(limit: int, after: tuple[str, str] | None = None) -> list[User]:
+    """One page of users in (username, id) order. after is the (username, id) position of the last row of the
+    previous page; None starts at the first user."""
+    if after is None:
+        keyset, keyset_params = "TRUE", ()
+    else:
+        username, row_id = after
+        keyset = "(username > %s OR (username = %s AND id > %s::uuid))"
+        keyset_params = (username, username, row_id)
     with connect() as conn:
         rows = conn.execute(
-            f"SELECT {_COLUMNS} FROM users WHERE NOT is_deleted ORDER BY username LIMIT %s OFFSET %s",
-            (limit, offset),
+            f"SELECT {_COLUMNS} FROM users WHERE NOT is_deleted AND {keyset} ORDER BY username, id LIMIT %s",
+            (*keyset_params, limit),
         ).fetchall()
     return [_to_user(row) for row in rows]
 

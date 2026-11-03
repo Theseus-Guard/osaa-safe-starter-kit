@@ -43,7 +43,7 @@ beforeEach(() => {
   vi.mocked(demoStatus).mockResolvedValue({ demo: false, users: [] });
   vi.mocked(listCases).mockResolvedValue({ items: [], next_cursor: null });
   vi.mocked(createReport).mockReset();
-  vi.mocked(listEvidence).mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
+  vi.mocked(listEvidence).mockResolvedValue({ items: [], next_cursor: null });
 });
 
 describe("labelled form controls on the main pages", () => {

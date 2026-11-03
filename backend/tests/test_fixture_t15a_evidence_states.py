@@ -68,8 +68,8 @@ def test_an_empty_case_answers_200_with_no_items_and_no_result_field(evidence_wo
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["items"] == []
-    assert body["total"] == 0
-    assert set(body) == {"items", "total", "limit", "offset"}
+    assert body["next_cursor"] is None
+    assert set(body) == {"items", "next_cursor"}
 
 
 @requires_database
