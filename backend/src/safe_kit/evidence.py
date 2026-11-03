@@ -10,6 +10,9 @@ a crash is marked failed by fail_stale_pending, which the worker runs on a fixed
 The case visibility is checked again inside the transaction that inserts the pending row, so a case that stops being
 visible after the API check is refused before any row or object exists.
 
+Evidence may be uploaded to a closed case: late-arriving or later-discovered evidence is legitimate. The upload's audit
+row records case_closed, the status of the case when the pending row was inserted. No extra permission is needed.
+
 Download decrypts only after the ciphertext checksum matches. The plaintext checksum is checked before any byte is
 returned. A failed check records a "failed" custody event, and an integrity failure also moves the item to failed.
 The caller gets no content.
@@ -287,7 +290,7 @@ def create_evidence(
     name = sanitize_filename(filename)
     storage_key = str(uuid.uuid4())
     sealed = seal(data, storage_key, provider)
-    evidence_id = _insert_pending(
+    evidence_id, case_closed = _insert_pending(
         case_id,
         uploader_id,
         name,
@@ -331,6 +334,7 @@ def create_evidence(
             uploader_id,
             plaintext_digest,
             ciphertext_digest,
+            case_closed=case_closed,
             idempotency=idempotency,
             render=render,
         )
@@ -351,14 +355,18 @@ def _insert_pending(
     nonce: bytes,
     scope: CaseScope,
     idempotency: KeyScope | None = None,
-) -> str:
+) -> tuple[str, bool]:
+    """Insert the pending row. Returns its ID and whether the case was closed when the row was inserted."""
     with connect() as conn:
         check(conn, idempotency)
         # Lock the case row first, then check visibility, on this connection. The lock holds until this insert
         # commits or rolls back, so a concurrent assignment or closure waits for it, and the check and the insert are
         # serialized against it. The same visibility rule as the API check applies.
-        if lock_visible_case(conn, case_id, scope) is None:
+        locked = lock_visible_case(conn, case_id, scope)
+        if locked is None:
             raise CaseNotVisible()
+        # A closed case takes evidence too. The closed state is recorded in the upload's audit row, not refused.
+        case_closed = locked[0] == "closed"
         row = conn.execute(
             """
             INSERT INTO evidence_items
@@ -379,7 +387,7 @@ def _insert_pending(
                 nonce,
             ),
         ).fetchone()
-    return row[0]
+    return row[0], case_closed
 
 
 def _mark_available(
@@ -388,6 +396,7 @@ def _mark_available(
     sha_plaintext: str,
     sha_ciphertext: str,
     *,
+    case_closed: bool,
     idempotency: KeyScope | None = None,
     render: Callable[[EvidenceItem], Any] | None = None,
 ) -> EvidenceItem:
@@ -412,7 +421,7 @@ def _mark_available(
             EVIDENCE_TARGET,
             evidence_id,
             actor_id=uploader_id,
-            details={"case_id": item.case_id},
+            details={"case_id": item.case_id, "case_closed": case_closed},
         )
         if idempotency is not None:
             assert render is not None

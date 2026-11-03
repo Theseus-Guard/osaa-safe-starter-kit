@@ -56,7 +56,8 @@ CASE_LINK_REMOVE = "case.link_removed"
 CASE_WEEKLY_UPDATE_CREATED = "case.weekly_update_created"
 # Written against the import record (target_type "case_import"), not the case, so it stays out of the case history.
 CASE_IMPORT = "case.import"
-# Written by safe_kit.evidence against the evidence item (target_type "evidence").
+# Written by safe_kit.evidence against the evidence item (target_type "evidence"). Details hold case_id and case_closed
+# (whether the case was closed when the upload's pending row was inserted).
 EVIDENCE_UPLOADED = "evidence.uploaded"
 EVIDENCE_DOWNLOADED = "evidence.downloaded"
 # Redaction creates a derived item (target: the derived evidence ID). Details hold IDs and counts, never removed text.

@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from safe_kit import (
     api,
+    audit,
     auth,
     cases,
     evidence,
@@ -985,6 +986,84 @@ def test_missing_evidence_permission_is_403_before_visibility_is_checked(
         headers={"Content-Type": content_type},
     )
     assert upload.status_code == 403
+
+
+def upload_as(user_id: str, case_id: str):
+    body, content_type = multipart("notes.pdf", "application/pdf", PDF[:100])
+    return request_as(
+        user_id,
+        "post",
+        f"/api/v1/cases/{case_id}/evidence",
+        content=body,
+        headers={**idem(), "Content-Type": content_type},
+    )
+
+
+def close_case_row(case_id: str, user_id: str) -> None:
+    """Mark the case closed in the table. cases.close_case is not used: its rules need a review and done deadline
+    tasks, which these tests do not set up. The closed state is all the upload path reads."""
+    with connect() as conn:
+        status = conn.execute(
+            """
+            UPDATE cases SET status = 'closed', closed_at = now(), closed_by = %s, close_reason = 'test'
+            WHERE id = %s RETURNING status
+            """,
+            (user_id, case_id),
+        ).fetchone()[0]
+    assert status == "closed"
+
+
+def upload_audit_details(evidence_id: str) -> list[dict]:
+    """The details of every evidence.uploaded row for one item. One row per upload is expected."""
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT details FROM audit_events
+            WHERE action = %s AND target_type = %s AND target_id = %s AND NOT is_deleted
+            """,
+            (audit.EVIDENCE_UPLOADED, evidence.EVIDENCE_TARGET, evidence_id),
+        ).fetchall()
+    return [row[0] for row in rows]
+
+
+@requires_database
+def test_upload_to_an_open_case_is_audited_once_with_case_closed_false(evidence_world):
+    investigator = evidence_world["people"]["investigator"]
+    case_id = evidence_world["case_id"]
+    response = upload_as(investigator, case_id)
+    assert response.status_code == 201
+    assert upload_audit_details(response.json()["id"]) == [
+        {"case_id": case_id, "case_closed": False}
+    ]
+
+
+@requires_database
+def test_upload_to_a_closed_case_succeeds_and_is_audited_with_case_closed_true(
+    evidence_world,
+):
+    people = evidence_world["people"]
+    case_id = evidence_world["case_id"]
+    close_case_row(case_id, people["triager"])
+    response = upload_as(people["investigator"], case_id)
+    assert response.status_code == 201
+    assert upload_audit_details(response.json()["id"]) == [
+        {"case_id": case_id, "case_closed": True}
+    ]
+    assert evidence_count(case_id) == 2
+
+
+@requires_database
+def test_closed_case_upload_still_needs_evidence_write(evidence_world):
+    people = evidence_world["people"]
+    case_id = evidence_world["case_id"]
+    close_case_row(case_id, people["triager"])
+    # The reporter can see the case but holds no evidence:write, so a closed case does not open the route to it.
+    response = upload_as(people["reporter"], case_id)
+    assert response.status_code == 403
+    assert evidence_count(case_id) == 1
+    assert upload_audit_details(evidence_world["evidence_id"]) == [
+        {"case_id": case_id, "case_closed": False}
+    ]
 
 
 @requires_database
