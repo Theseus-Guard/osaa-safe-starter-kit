@@ -199,11 +199,7 @@ def reporter_contact_granted_directly(role: str):
 
 @contextmanager
 def reporter_contact_holder(role: str = "triager"):
-    """A holder of reporter_contact:read for the length of the block.
-
-    Only a holder of reporter_contact:read can assign a reporter-channel case before it has an assignee
-    (cases.CaseScope.visibility_sql), so the assignment in the tests below runs inside this block.
-    """
+    """A holder of reporter_contact:read for the length of the block, so the contact can be read inside it."""
     with reporter_contact_granted_directly(role):
         yield
 
@@ -211,12 +207,12 @@ def reporter_contact_holder(role: str = "triager"):
 def assign_investigator(
     triager: ActingClient, case_id: str, investigator_id: str
 ) -> None:
-    with reporter_contact_holder():
-        response = triager.post(
-            f"/api/v1/cases/{case_id}/assignments",
-            json={"user_id": investigator_id},
-            headers=idem(),
-        )
+    # A triager (cases:assign) sees a reporter-channel case before it has an assignee: no contact permission needed.
+    response = triager.post(
+        f"/api/v1/cases/{case_id}/assignments",
+        json={"user_id": investigator_id},
+        headers=idem(),
+    )
     assert response.status_code == 201, response.text
 
 
@@ -343,15 +339,19 @@ def test_reporter_reads_own_awareness_without_the_basis_and_others_get_404(peopl
     )
 
 
-def test_reporter_channel_case_is_hidden_from_triagers_until_assigned(people):
+def test_triager_reads_the_records_of_an_unassigned_reporter_case(people):
     case_id = new_reporter_channel_case(people["reporter"], contact="contact-1")
     triager = people["triager"]
-    assert triager.get(f"/api/v1/cases/{case_id}/impacts").status_code == 404
-    assert triager.get(f"/api/v1/cases/{case_id}/classification").status_code == 404
-    assert triager.get(f"/api/v1/cases/{case_id}/preliminary-report").status_code == 404
-
-    assign_investigator(triager, case_id, people["investigator_id"])
     assert triager.get(f"/api/v1/cases/{case_id}/impacts").status_code == 200
+    assert triager.get(f"/api/v1/cases/{case_id}/classification").status_code == 200
+    assert triager.get(f"/api/v1/cases/{case_id}/preliminary-report").status_code == 200
+
+    # An investigator with no assignment still gets the same 404 as for a missing case.
+    investigator = ActingClient(people["investigator_id"])
+    assert investigator.get(f"/api/v1/cases/{case_id}/impacts").status_code == 404
+    assert (
+        investigator.get(f"/api/v1/cases/{case_id}/classification").status_code == 404
+    )
 
 
 def test_investigator_cannot_write_triage_records(people):

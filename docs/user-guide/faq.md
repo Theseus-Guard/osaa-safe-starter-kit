@@ -6,11 +6,12 @@ The list shows only the cases your role may see:
 
 - A reporter sees only the cases it opened. With none, the list says "You have not opened any cases yet."
 - An investigator or a reviewer sees only the cases it is assigned to.
-- A triager or a disclosure approver sees every case, except reporter-channel cases that have no assignment yet.
+- A triager sees every case, including a reporter-channel case that has no assignment yet, so it can assign one. It never sees the reporter or the reporter contact.
+- A disclosure approver sees every case, except reporter-channel cases that have no assignment yet.
 - The administrator and auditor roles have no case access. The Cases page says so.
 - A search or a status filter narrows the list. The list then says "No cases match this search." or "No cases have this status."
 
-A case opened through the reporter channel is hidden from triagers until it is assigned. Under the default roles, nobody can make that first assignment yet: a triager cannot see the case, and the reporting owner can see it but its role does not have the assignment permission. See [Workflows](./workflows.md#2-assign-investigators-and-reviewers).
+A case opened through the reporter channel is visible to a triager before it is assigned, so the triager can make the first assignment. See [Workflows](./workflows.md#2-assign-investigators-and-reviewers).
 
 ## What does Overdue mean?
 

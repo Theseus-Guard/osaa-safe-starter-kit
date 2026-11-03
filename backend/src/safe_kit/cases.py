@@ -81,14 +81,18 @@ class CaseScope:
     """What the caller may see, taken from the caller's permissions.
 
     read_own: the caller created the case. read_all: every case. read_assigned: the caller has an active assignment.
-    reporter_contact: the caller holds reporter_contact:read. Such a caller sees every case, including reporter-channel
-    cases that have no assignment yet, so the reporting owner can assign them.
+    can_assign: the caller holds cases:assign. With read_all, such a caller sees every case, including reporter-channel
+    cases that have no assignment yet, so it can assign them (the triager). The reporter identity and the contact stay
+    hidden from it: the contact needs reporter_contact:read.
+    reporter_contact: the caller holds reporter_contact:read. With read_all, such a caller sees every case in the same
+    way, so the reporting owner can assign reporter-channel cases too.
     """
 
     user_id: str
     read_all: bool = False
     read_own: bool = False
     read_assigned: bool = False
+    can_assign: bool = False
     reporter_contact: bool = False
 
     @classmethod
@@ -98,17 +102,20 @@ class CaseScope:
             read_all="cases:read_all" in permissions,
             read_own="cases:read_own" in permissions,
             read_assigned="cases:read_assigned" in permissions,
+            can_assign="cases:assign" in permissions,
             reporter_contact="reporter_contact:read" in permissions,
         )
 
     def visibility_sql(self) -> tuple[str, tuple[Any, ...]]:
         """A condition on the cases table that holds exactly for the cases this scope may see.
 
-        A case opened through the reporter channel (it has an active reporter identity) is hidden from read_all
-        callers until it has an active assignment. A caller with reporter_contact:read sees it regardless.
+        A case opened through the reporter channel (it has an active reporter identity) is hidden from a read_all
+        caller until it has an active assignment, unless the caller holds cases:assign or reporter_contact:read. Those
+        two see it before assignment. A read_all caller with neither (for example the disclosure approver) keeps the
+        old rule.
         """
         if self.read_all:
-            if self.reporter_contact:
+            if self.reporter_contact or self.can_assign:
                 return "TRUE", ()
             return f"(NOT {REPORTER_CASE_SQL} OR {ASSIGNED_CASE_SQL})", ()
         clauses: list[str] = []

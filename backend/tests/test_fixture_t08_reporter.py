@@ -11,7 +11,8 @@ Asserted without a database:
 Asserted with a database:
 - only a holder of reporter_contact:read reads a contact, and each read writes one audit row; a non-holder and an
   administrator are refused and write nothing;
-- a reporter-channel case is hidden from triagers until it has an assignee, and the assignment needs the holder.
+- a reporter-channel case is visible to a triager (cases:assign) before it has an assignee, so the triager can assign
+  it, and the case stays hidden from administrators and from every role without a case permission.
 
 - No role other than reporting_owner can be granted reporter_contact:read through the role matrix, so an administrator
   cannot hand the contact to a triager account. The refusal is 409 with detail status reporter_contact_not_grantable.
@@ -247,20 +248,23 @@ def test_only_a_holder_reads_the_contact_and_every_read_is_audited(channel_peopl
 
 
 @requires_database
-def test_a_reporter_channel_case_is_hidden_from_triagers_until_assigned(channel_people):
-    case_id = open_report(channel_people["reporter"], "fixture-contact-hidden")
+def test_a_reporter_channel_case_is_visible_to_a_triager_before_assignment(
+    channel_people,
+):
+    case_id = open_report(channel_people["reporter"], "fixture-contact-visible")
     triager, admin = channel_people["triager"], channel_people["admin"]
 
-    assert case_id not in {
+    assert case_id in {
         item["id"]
         for item in triager.get("/api/v1/cases", params={"limit": 200}).json()["items"]
     }
-    assert triager.get(f"/api/v1/cases/{case_id}").status_code == 404
+    assert triager.get(f"/api/v1/cases/{case_id}").status_code == 200
     assert admin.get(f"/api/v1/cases/{case_id}").status_code == 403
 
+    # The triager assigns it without the contact permission, and the contact is still refused to the triager.
     assign_investigator(triager, case_id, channel_people["investigator_id"])
-
-    assert triager.get(f"/api/v1/cases/{case_id}").status_code == 200
+    assert triager.get(f"/api/v1/reports/{case_id}/contact").status_code == 403
+    assert contact_audit_rows(case_id) == 0
 
 
 @requires_database

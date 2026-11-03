@@ -107,7 +107,7 @@ def test_holder_of_cases_assign_gets_the_listed_users_with_name_and_role_only(
     ]
     assert seen["case_id"] == CASE_ID
     assert seen["scope"] == CaseScope(
-        user_id=TRIAGER_ID, read_all=True, read_assigned=True
+        user_id=TRIAGER_ID, read_all=True, read_assigned=True, can_assign=True
     )
 
 

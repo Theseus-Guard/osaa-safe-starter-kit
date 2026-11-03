@@ -41,7 +41,7 @@ Each demo role has its own credential. The sign-in page lists the roles, and a b
 |---|---|---|
 | `demo-admin` | `admin` | Users, roles, privacy inventory, settings |
 | `demo-reporter` | `reporter` | The cases it opened |
-| `demo-triager` | `triager` | Every case, except reporter-channel cases with no assignment |
+| `demo-triager` | `triager` | Every case, including reporter-channel cases with no assignment |
 | `demo-investigator` | `investigator` | Its assigned cases and their evidence |
 | `demo-reviewer` | `reviewer` | Its assigned cases and their reviews |
 | `demo-approver` | `disclosure_approver` | Disclosure versions and approval |

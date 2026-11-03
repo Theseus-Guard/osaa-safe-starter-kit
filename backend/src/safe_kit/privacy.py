@@ -221,8 +221,9 @@ CATALOG: tuple[TableEntry, ...] = (
         security=(
             "Visible to the creator (cases:read_own), to triagers and disclosure approvers (cases:read_all), and to "
             "investigators and reviewers with an active assignment (cases:read_assigned). A case opened through the "
-            "reporter intake is hidden from read_all holders until it has an active assignment; holders of "
-            "reporter_contact:read always see it. Disclosure approvers read the full case to approve its disclosure "
+            "reporter intake is visible to triagers (cases:assign) before it has an assignment, and to holders of "
+            "reporter_contact:read; other read_all holders see it only once it has an active assignment. Triagers never "
+            "see the reporter account or the contact. Disclosure approvers read the full case to approve its disclosure "
             "versions, but may not change its deadlines or file appeals. Administrators have no case permissions."
         ),
         deletion_mode="Soft delete (is_deleted, deleted_at).",
