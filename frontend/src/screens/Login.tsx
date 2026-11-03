@@ -56,6 +56,7 @@ export function Login({ notice, onLogin, onDemoSignIn }: Props) {
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    if (busy) return;
     setFailure(null);
     setBusy(true);
     try {
@@ -237,7 +238,8 @@ export function Login({ notice, onLogin, onDemoSignIn }: Props) {
                     </>
                   )}
                 </FieldGroup>
-                <Button type="submit" className="w-full" disabled={busy || unavailable} aria-busy={busy}>
+                {/* Not disabled while busy: a disabled button loses focus, and the error would then leave the keyboard user nowhere. */}
+                <Button type="submit" className="w-full" disabled={unavailable} aria-busy={busy}>
                   {busy && <Loader2Icon className="animate-spin" />}
                   {busy ? "Logging in…" : "Log in"}
                 </Button>

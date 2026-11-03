@@ -88,10 +88,11 @@ function dateTooltip() {
   return <ChartTooltipContent labelFormatter={(value) => formatChartDate(String(value))} />;
 }
 
-function DailyLineChart({ rows, series }: { rows: Row[]; series: Series[] }) {
+// The label names the chart for screen readers. The focusable chart surface has no text of its own.
+function DailyLineChart({ rows, series, label }: { rows: Row[]; series: Series[]; label: string }) {
   return (
     <ChartContainer config={configFor(series)} className={TIME_CHART_CLASS}>
-      <LineChart data={rows} margin={TIME_CHART_MARGIN} accessibilityLayer>
+      <LineChart data={rows} margin={TIME_CHART_MARGIN} accessibilityLayer aria-label={label}>
         <CartesianGrid vertical={false} />
         <DateAxis rows={rows} />
         <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={32} tick={{ fontSize: 12 }} />
@@ -112,10 +113,10 @@ function DailyLineChart({ rows, series }: { rows: Row[]; series: Series[] }) {
   );
 }
 
-function DailyStackedBars({ rows, series }: { rows: Row[]; series: Series[] }) {
+function DailyStackedBars({ rows, series, label }: { rows: Row[]; series: Series[]; label: string }) {
   return (
     <ChartContainer config={configFor(series)} className={TIME_CHART_CLASS}>
-      <BarChart data={rows} margin={TIME_CHART_MARGIN} accessibilityLayer>
+      <BarChart data={rows} margin={TIME_CHART_MARGIN} accessibilityLayer aria-label={label}>
         <CartesianGrid vertical={false} />
         <DateAxis rows={rows} />
         <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={32} tick={{ fontSize: 12 }} />
@@ -197,7 +198,7 @@ export function CasesOverTimeChart({ days, wide }: ChartProps & { days: Overview
       state={state}
       wide={wide}
       isEmpty={(rows) => isAllZero(rows, ["count"])}
-      chart={(rows) => <DailyLineChart rows={rows} series={CASES_SERIES} />}
+      chart={(rows) => <DailyLineChart rows={rows} series={CASES_SERIES} label="Cases over time" />}
       table={(rows) => (
         <DataTable
           label="Cases created per day"
@@ -234,7 +235,7 @@ export function LoginsChart({ days, wide }: ChartProps & { days: OverviewRange }
       state={state}
       wide={wide}
       isEmpty={(rows) => isAllZero(rows, ["success", "failed"])}
-      chart={(rows) => <DailyLineChart rows={rows} series={LOGIN_SERIES} />}
+      chart={(rows) => <DailyLineChart rows={rows} series={LOGIN_SERIES} label="Login activity" />}
       table={(rows) => (
         <DataTable
           label="Logins per day"
@@ -287,7 +288,7 @@ export function MyCasesChart({ days, wide }: ChartProps & { days: OverviewRange 
       state={state}
       wide={wide}
       isEmpty={(rows) => isAllZero(rows, ["open", "closed"])}
-      chart={(rows) => <DailyLineChart rows={rows} series={MY_CASES_SERIES} />}
+      chart={(rows) => <DailyLineChart rows={rows} series={MY_CASES_SERIES} label="My cases over time" />}
       table={(rows) => (
         <DataTable
           label="My cases per day"
@@ -330,7 +331,7 @@ export function MyContributionsChart({ days, wide }: ChartProps & { days: Overvi
       state={state}
       wide={wide}
       isEmpty={(rows) => isAllZero(rows, ["opened", "assigned", "reviewed", "closed"])}
-      chart={(rows) => <DailyStackedBars rows={rows} series={MY_ACTIONS_SERIES} />}
+      chart={(rows) => <DailyStackedBars rows={rows} series={MY_ACTIONS_SERIES} label="My contributions over time" />}
       table={(rows) => (
         <DataTable
           label="My actions per day"
@@ -363,7 +364,13 @@ export function DeadlinesChart({ wide }: ChartProps) {
       isEmpty={(rows) => isAllZero(rows, ["open", "overdue", "done", "notApplicable"])}
       chart={(rows) => (
         <ChartContainer config={configFor(DEADLINE_SERIES)} className="h-72 w-full">
-          <BarChart data={rows} layout="vertical" margin={{ top: 8, right: 12, left: 0, bottom: 0 }} accessibilityLayer>
+          <BarChart
+            data={rows}
+            layout="vertical"
+            margin={{ top: 8, right: 12, left: 0, bottom: 0 }}
+            accessibilityLayer
+            aria-label="Deadlines in my cases"
+          >
             <CartesianGrid horizontal={false} />
             <XAxis type="number" allowDecimals={false} tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
             <YAxis type="category" dataKey="label" width={170} tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
@@ -417,7 +424,7 @@ export function AuditChart({ days, wide }: ChartProps & { days: OverviewRange })
       state={state}
       wide={wide}
       isEmpty={(view) => isAllZero(view.rows, view.series.map((item) => item.key))}
-      chart={(view) => <DailyStackedBars rows={view.rows} series={view.series} />}
+      chart={(view) => <DailyStackedBars rows={view.rows} series={view.series} label="Audit actions" />}
       table={(view) => (
         <DataTable
           label="Audit actions per day"
@@ -454,7 +461,7 @@ export function OutboxChart({ wide }: ChartProps) {
       isEmpty={(view) => view.rows.every((row) => row.jobs === 0)}
       chart={(view) => (
         <ChartContainer config={{ jobs: { label: "Jobs", color: "var(--chart-1)" } }} className={TIME_CHART_CLASS}>
-          <BarChart data={view.rows} margin={TIME_CHART_MARGIN} accessibilityLayer>
+          <BarChart data={view.rows} margin={TIME_CHART_MARGIN} accessibilityLayer aria-label="Outbox health">
             <CartesianGrid vertical={false} />
             <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} tick={{ fontSize: 12 }} />
             <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={32} tick={{ fontSize: 12 }} />
@@ -514,7 +521,13 @@ export function UsersChart({ wide }: ChartProps) {
       isEmpty={(view) => view.total === 0}
       chart={(view) => (
         <ChartContainer config={configFor(USER_SERIES)} className="h-72 w-full">
-          <BarChart data={view.rows} layout="vertical" margin={{ top: 8, right: 12, left: 0, bottom: 0 }} accessibilityLayer>
+          <BarChart
+            data={view.rows}
+            layout="vertical"
+            margin={{ top: 8, right: 12, left: 0, bottom: 0 }}
+            accessibilityLayer
+            aria-label="Accounts by role"
+          >
             <CartesianGrid horizontal={false} />
             <XAxis type="number" allowDecimals={false} tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
             <YAxis type="category" dataKey="role" width={150} tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
