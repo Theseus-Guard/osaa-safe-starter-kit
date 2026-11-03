@@ -154,7 +154,10 @@ def item_for(page: dict, case_id: str) -> dict:
 
 
 def fresh_case_with_known_deadlines(reporter: ActingClient) -> str:
-    """A case whose five SAFE tasks have known due dates: affected customers done, broader advisory not applicable."""
+    """A case whose SAFE tasks have known due dates: affected customers done, broader advisory not applicable.
+
+    The analysis obligation is due last (day 5), so it does not change the earliest-open tests.
+    """
     case_id = new_case(reporter)["id"]
     set_deadline(
         case_id, "affected_customers", due_at=BASE + timedelta(days=1), status="done"
@@ -163,6 +166,9 @@ def fresh_case_with_known_deadlines(reporter: ActingClient) -> str:
     set_deadline(case_id, "broader_advisory", due_at=BASE + timedelta(hours=1))
     set_deadline(case_id, "preliminary_public_report", due_at=BASE + timedelta(days=3))
     set_deadline(case_id, "remediation_status", due_at=BASE + timedelta(days=4))
+    set_deadline(
+        case_id, "preliminary_control_failure_analysis", due_at=BASE + timedelta(days=5)
+    )
     return case_id
 
 
@@ -185,6 +191,7 @@ def test_next_deadline_is_null_when_no_task_is_open():
     for kind in (
         "preliminary_safe_report",
         "preliminary_public_report",
+        "preliminary_control_failure_analysis",
         "remediation_status",
     ):
         set_deadline(case_id, kind, status="done")

@@ -251,6 +251,7 @@ const DEADLINE_LABELS: Record<string, string> = {
   preliminary_safe_report: "Preliminary SAFE report",
   broader_advisory: "Broader advisory",
   preliminary_public_report: "Preliminary public report",
+  preliminary_control_failure_analysis: "Preliminary control-failure analysis",
   remediation_status: "Remediation status",
   weekly_update: "Weekly update",
 };

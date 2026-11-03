@@ -732,7 +732,7 @@ def test_preliminary_report_is_complete_when_every_field_is_recorded(people):
     assert report["missing_fields"] == []
     assert report["contact"] == {"status": "recorded"}
     assert len(report["legal_duties"]) == 1
-    assert len(report["safe_deadlines"]) == 5
+    assert len(report["safe_deadlines"]) == 6
 
 
 def test_preliminary_report_marks_an_unknown_impact_as_unknown(people):

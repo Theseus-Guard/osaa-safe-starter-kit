@@ -669,8 +669,9 @@ def test_upgrade_on_a_version_1_database_adds_the_credentials_once(tmp_path_fact
     legacy_credential = secrets.token_urlsafe(demo_seed.CREDENTIAL_BYTES)
     upto_0045 = work / "migrations-0045"
     upto_0045.mkdir()
+    # The seed writes the deadline kinds of the current code, so 0051 (the analysis kind) is applied as well.
     for path in sorted(MIGRATIONS.glob("*.sql")):
-        if path.name < "0046":
+        if path.name < "0046" or path.name.startswith("0051_"):
             (upto_0045 / path.name).write_bytes(path.read_bytes())
 
     with patch.dict(os.environ, env, clear=False):

@@ -118,6 +118,7 @@ def test_case_stores_the_timezone_snapshot_and_its_deadline_tasks():
         "preliminary_safe_report": "open",
         "broader_advisory": "not_applicable",
         "preliminary_public_report": "open",
+        "preliminary_control_failure_analysis": "open",
         "remediation_status": "open",
     }
 

@@ -1165,11 +1165,13 @@ def test_close_succeeds_after_review_and_tasks_done_or_not_applicable(
 
     tasks = task_ids(db_client, people["triager"], case_id)
     # An assigned investigator may mark tasks done, but not not_applicable. The conditional advisory starts not
-    # applicable, and only a triager may change that, so it is left as it is and closure accepts it.
+    # applicable, and only a triager may change that, so it is left as it is and closure accepts it. The analysis
+    # obligation is a task too, so it is marked done as well.
     for kind in (
         "affected_customers",
         "preliminary_safe_report",
         "preliminary_public_report",
+        "preliminary_control_failure_analysis",
     ):
         url = f"/api/v1/cases/{case_id}/deadlines/{tasks[kind]}"
         assert (
