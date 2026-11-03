@@ -746,12 +746,30 @@ export function removeAssignment(caseId: string, userId: string): Promise<void> 
   });
 }
 
-// A link between two cases that concern the same incident. Linking changes nothing else on either case.
-// linked_case_id and linked_case_title are null when the caller cannot see the other case.
+// The three link types. A duplicate closes the duplicate case when the link is made; a related link is reference
+// only; a root_sub link lets a reader of the sub-case read the root case (read only).
+export type CaseLinkType = "duplicate" | "related" | "root_sub";
+
+// A link between two cases. linked_case_id and linked_case_title are null when the caller cannot see the other case.
+// primary_side says which case is the main case of a duplicate or the root case of a root_sub link: "this" or "linked".
+// It is null for a related link. reason is null only for a link made before link types existed.
 export interface CaseLink {
   linked_case_id: string | null;
   linked_case_title: string | null;
+  link_type: CaseLinkType;
+  reason: string | null;
+  share_visibility: boolean;
+  primary_side: "this" | "linked" | null;
   created_at: string;
+}
+
+export interface AddCaseLinkRequest {
+  linked_case_id: string;
+  link_type: CaseLinkType;
+  reason: string;
+  share_visibility: boolean;
+  // The main case of a duplicate or the root case of a root_sub link. One of the two cases. Not sent for related.
+  primary_case_id?: string;
 }
 
 // Needs case read access. Answers 404 when the caller cannot see the case.
@@ -759,11 +777,12 @@ export function listCaseLinks(caseId: string): Promise<CaseLink[]> {
   return request<CaseLink[]>(`/cases/${encodeURIComponent(caseId)}/links`);
 }
 
-// Needs cases:triage. Both cases must be visible to the caller and open, and not linked yet.
-export function addCaseLink(caseId: string, linkedCaseId: string): Promise<CaseLink> {
+// Needs cases:triage. Both cases must be visible to the caller for a change and open, and not linked yet.
+// A duplicate link closes the duplicate in the same step, and is refused while that case has an open deadline task.
+export function addCaseLink(caseId: string, link: AddCaseLinkRequest): Promise<CaseLink> {
   return request<CaseLink>(`/cases/${encodeURIComponent(caseId)}/links`, {
     method: "POST",
-    json: { linked_case_id: linkedCaseId },
+    json: link,
     headers: idempotencyHeaders(),
   });
 }

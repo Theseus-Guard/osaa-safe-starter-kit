@@ -697,14 +697,44 @@ describe("case and evidence endpoints", () => {
     expect(methodOf(0)).toBe("GET");
   });
 
-  it("adds a link with the linked case ID in the body", async () => {
+  it("adds a link with its type, reason, visibility checkbox and main case in the body", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(201, {}));
 
-    await api.addCaseLink("case-1", "case-2");
+    await api.addCaseLink("case-1", {
+      linked_case_id: "case-2",
+      link_type: "root_sub",
+      reason: "Root of the analysis",
+      share_visibility: true,
+      primary_case_id: "case-2",
+    });
 
     expect(urlOf(0)).toBe("/api/v1/cases/case-1/links");
     expect(methodOf(0)).toBe("POST");
-    expect(bodyOf(0)).toEqual({ linked_case_id: "case-2" });
+    expect(bodyOf(0)).toEqual({
+      linked_case_id: "case-2",
+      link_type: "root_sub",
+      reason: "Root of the analysis",
+      share_visibility: true,
+      primary_case_id: "case-2",
+    });
+  });
+
+  it("sends no main case for a related link", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(201, {}));
+
+    await api.addCaseLink("case-1", {
+      linked_case_id: "case-2",
+      link_type: "related",
+      reason: "Same incident",
+      share_visibility: false,
+    });
+
+    expect(bodyOf(0)).toEqual({
+      linked_case_id: "case-2",
+      link_type: "related",
+      reason: "Same incident",
+      share_visibility: false,
+    });
   });
 
   it("removes a link by the linked case ID and encodes the segment", async () => {

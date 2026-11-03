@@ -123,7 +123,7 @@ def test_done_and_not_applicable_tasks_do_not_block_closure():
 def test_reporter_scope_sees_only_own_cases():
     sql, params = CaseScope.from_permissions(
         REPORTER_ID, frozenset({"cases:read_own"})
-    ).visibility_sql()
+    ).visibility_sql(writing=True)
     assert sql == "(cases.created_by = %s)"
     assert params == (REPORTER_ID,)
 
@@ -133,18 +133,45 @@ def test_triager_scope_sees_every_case_including_unassigned_reporter_cases():
     scope = CaseScope.from_permissions(TRIAGER_ID, DEFAULT_ROLE_PERMISSIONS["triager"])
     assert scope.can_assign is True
     assert scope.reporter_contact is False
-    assert scope.visibility_sql() == ("TRUE", ())
+    assert scope.visibility_sql(writing=True) == ("TRUE", ())
 
 
 def test_read_all_without_assign_keeps_hiding_unassigned_reporter_cases():
     # The disclosure approver holds cases:read_all but not cases:assign, so the reporter-channel rule is unchanged.
     sql, params = CaseScope.from_permissions(
         TRIAGER_ID, frozenset({"cases:read_all"})
-    ).visibility_sql()
+    ).visibility_sql(writing=True)
     assert sql == (
         "(NOT EXISTS (SELECT 1 FROM reporter_identities ri WHERE ri.case_id = cases.id AND NOT ri.is_deleted) "
         "OR EXISTS (SELECT 1 FROM case_assignments ca WHERE ca.case_id = cases.id AND NOT ca.is_deleted))"
     )
+    assert params == ()
+
+
+def test_read_mode_adds_the_link_rules_and_its_parameters_match_the_placeholders():
+    # A reader also sees the other case of a shared link, and the root of a root_sub link, by the peer's own rights.
+    scope = CaseScope.from_permissions(REPORTER_ID, frozenset({"cases:read_own"}))
+    sql, params = scope.visibility_sql()
+    assert "case_links" in sql and "share_visibility" in sql
+    assert "link_type = 'root_sub'" in sql and "primary_case_id = cases.id" in sql
+    assert sql.count("%s") == len(params) == 3
+    assert params == (REPORTER_ID, REPORTER_ID, REPORTER_ID)
+
+
+def test_write_mode_has_no_link_rules():
+    # A case seen only through a link is never locked or changed: writes use the own rights alone.
+    scope = CaseScope.from_permissions(REPORTER_ID, frozenset({"cases:read_own"}))
+    sql, params = scope.visibility_sql(writing=True)
+    assert "case_links" not in sql
+    assert (sql, params) == ("(cases.created_by = %s)", (REPORTER_ID,))
+
+
+def test_read_mode_for_read_all_without_link_rules_still_has_no_parameters():
+    sql, params = CaseScope.from_permissions(
+        TRIAGER_ID, DEFAULT_ROLE_PERMISSIONS["triager"]
+    ).visibility_sql()
+    assert "case_links" in sql
+    assert sql.startswith("(TRUE OR ")
     assert params == ()
 
 
@@ -153,7 +180,7 @@ def test_reporter_contact_holder_sees_every_case_including_unassigned_reporter_c
         TRIAGER_ID, DEFAULT_ROLE_PERMISSIONS["triager"] | {"reporter_contact:read"}
     )
     assert scope.reporter_contact is True
-    assert scope.visibility_sql() == ("TRUE", ())
+    assert scope.visibility_sql(writing=True) == ("TRUE", ())
 
 
 def test_reporter_contact_permission_is_granted_by_default_to_reporting_owner_only():
@@ -168,7 +195,7 @@ def test_reporter_contact_permission_is_granted_by_default_to_reporting_owner_on
 def test_assignee_scope_needs_an_active_assignment():
     sql, params = CaseScope.from_permissions(
         INVESTIGATOR_ID, DEFAULT_ROLE_PERMISSIONS["investigator"]
-    ).visibility_sql()
+    ).visibility_sql(writing=True)
     assert "case_assignments" in sql and "NOT ca.is_deleted" in sql
     assert params == (INVESTIGATOR_ID,)
 
@@ -176,7 +203,7 @@ def test_assignee_scope_needs_an_active_assignment():
 @pytest.mark.parametrize("role", ["admin", "auditor"])
 def test_roles_without_case_permissions_see_no_case(role):
     scope = CaseScope.from_permissions(ADMIN_ID, DEFAULT_ROLE_PERMISSIONS[role])
-    assert scope.visibility_sql() == ("FALSE", ())
+    assert scope.visibility_sql(writing=True) == ("FALSE", ())
 
 
 def test_history_redaction_keeps_only_action_and_timestamp():

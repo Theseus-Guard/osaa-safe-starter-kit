@@ -2084,26 +2084,143 @@ LINKED_ID = "dddddddd-eeee-4fff-8000-111111111111"
 LINK_BODY = {
     "linked_case_id": LINKED_ID,
     "linked_case_title": "Related case",
+    "link_type": "related",
+    "reason": "Same incident",
+    "share_visibility": False,
+    "primary_side": None,
     "created_at": "2026-11-01T09:00:00Z",
 }
 HIDDEN_LINK_BODY = {
     "linked_case_id": None,
     "linked_case_title": None,
+    "link_type": "related",
+    "reason": "Same incident",
+    "share_visibility": False,
+    "primary_side": None,
     "created_at": "2026-11-01T09:00:00Z",
 }
 
 
-def test_link_add_sends_the_linked_case_id_and_says_nothing_else_changes(api, capsys):
+def test_link_add_sends_the_type_reason_and_defaults_then_says_nothing_else_changes(
+    api, capsys
+):
     api.route("POST", LINKS_PATH, status=201, body=LINK_BODY)
     code, out, err = run(
-        capsys, "case", "link", "add", CASE_ID, LINKED_ID, "--username", "alice"
+        capsys,
+        "case",
+        "link",
+        "add",
+        CASE_ID,
+        LINKED_ID,
+        "--type",
+        "related",
+        "--reason",
+        "Same incident",
+        "--username",
+        "alice",
     )
     assert code == 0
     assert api.calls[1]["method"] == "POST"
-    assert api.calls[1]["json"] == {"linked_case_id": LINKED_ID}
+    assert api.calls[1]["json"] == {
+        "linked_case_id": LINKED_ID,
+        "link_type": "related",
+        "reason": "Same incident",
+        "share_visibility": False,
+        "primary_case_id": None,
+    }
     assert out.startswith("Cases linked. Linking changes no task, deadline or status.")
     assert LINKED_ID in out and "Related case" in out
+    assert "Link type:        related" in out
     assert err == ""
+
+
+def test_link_add_sends_the_main_case_and_the_visibility_checkbox(api, capsys):
+    api.route("POST", LINKS_PATH, status=201, body=LINK_BODY)
+    code, out, err = run(
+        capsys,
+        "case",
+        "link",
+        "add",
+        CASE_ID,
+        LINKED_ID,
+        "--type",
+        "root_sub",
+        "--reason",
+        "Root of the analysis",
+        "--primary-case-id",
+        LINKED_ID,
+        "--share-visibility",
+        "--username",
+        "alice",
+    )
+    assert code == 0
+    assert api.calls[1]["json"] == {
+        "linked_case_id": LINKED_ID,
+        "link_type": "root_sub",
+        "reason": "Root of the analysis",
+        "share_visibility": True,
+        "primary_case_id": LINKED_ID,
+    }
+
+
+def test_link_add_duplicate_reports_that_the_duplicate_is_closed(api, capsys):
+    duplicate_body = dict(LINK_BODY, link_type="duplicate", primary_side="linked")
+    api.route("POST", LINKS_PATH, status=201, body=duplicate_body)
+    code, out, err = run(
+        capsys,
+        "case",
+        "link",
+        "add",
+        CASE_ID,
+        LINKED_ID,
+        "--type",
+        "duplicate",
+        "--reason",
+        "Same incident",
+        "--primary-case-id",
+        LINKED_ID,
+        "--username",
+        "alice",
+    )
+    assert code == 0
+    assert out.startswith("Duplicate linked. The duplicate case is now closed.")
+    assert "Main or root:     the linked case" in out
+
+
+def test_link_add_type_is_required_and_checked_by_the_parser(api, capsys):
+    code, out, err = run(
+        capsys,
+        "case",
+        "link",
+        "add",
+        CASE_ID,
+        LINKED_ID,
+        "--type",
+        "partner",
+        "--reason",
+        "Same incident",
+        "--username",
+        "alice",
+    )
+    assert code == 2
+    assert api.calls == []
+
+
+def test_link_add_reason_is_required_by_the_parser(api, capsys):
+    code, out, err = run(
+        capsys,
+        "case",
+        "link",
+        "add",
+        CASE_ID,
+        LINKED_ID,
+        "--type",
+        "related",
+        "--username",
+        "alice",
+    )
+    assert code == 2
+    assert api.calls == []
 
 
 def test_link_add_json_prints_the_api_body_exactly(api, capsys):
@@ -2115,6 +2232,10 @@ def test_link_add_json_prints_the_api_body_exactly(api, capsys):
         "add",
         CASE_ID,
         LINKED_ID,
+        "--type",
+        "related",
+        "--reason",
+        "Same incident",
         "--username",
         "alice",
         "--json",
@@ -2139,6 +2260,12 @@ def test_link_add_json_prints_the_api_body_exactly(api, capsys):
             id="duplicate-or-closed",
         ),
         pytest.param(
+            409,
+            {"detail": "duplicate case cannot be closed: no review is recorded"},
+            "cannot be closed yet",
+            id="duplicate-blocked",
+        ),
+        pytest.param(
             422,
             {"detail": "a case cannot be linked to itself"},
             "cannot be linked to itself",
@@ -2151,7 +2278,18 @@ def test_link_add_refusals_are_reported_as_messages(
 ):
     api.route("POST", LINKS_PATH, status=status, body=detail)
     code, out, err = run(
-        capsys, "case", "link", "add", CASE_ID, LINKED_ID, "--username", "alice"
+        capsys,
+        "case",
+        "link",
+        "add",
+        CASE_ID,
+        LINKED_ID,
+        "--type",
+        "related",
+        "--reason",
+        "Same incident",
+        "--username",
+        "alice",
     )
     assert code == 1
     assert message in err
@@ -2161,7 +2299,18 @@ def test_link_add_rejects_a_linked_case_id_that_is_not_a_uuid_without_a_request(
     api, capsys
 ):
     code, out, err = run(
-        capsys, "case", "link", "add", CASE_ID, "not-a-uuid", "--username", "alice"
+        capsys,
+        "case",
+        "link",
+        "add",
+        CASE_ID,
+        "not-a-uuid",
+        "--type",
+        "related",
+        "--reason",
+        "Same incident",
+        "--username",
+        "alice",
     )
     assert code == 2
     assert "LINKED_CASE_ID must be a UUID" in err

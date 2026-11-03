@@ -145,6 +145,7 @@ const MESSAGES: Record<string, string> = {
 // Codes that carry a variable part after a fixed prefix.
 const PREFIXED_MESSAGES: [prefix: string, render: (rest: string) => string][] = [
   ["case cannot be closed: ", (blockers) => `The case cannot be closed yet: ${blockers}.`],
+  ["duplicate case cannot be closed: ", (blockers) => `The duplicate cannot be closed yet: ${blockers}. No link was made.`],
   ["file exceeds the limit of ", (limit) => `The file is larger than the limit of ${limit}.`],
   ["request exceeds the limit of ", (limit) => `The upload is larger than the limit of ${limit}.`],
 ];

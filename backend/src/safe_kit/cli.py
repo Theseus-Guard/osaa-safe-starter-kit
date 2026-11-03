@@ -1208,8 +1208,8 @@ UNASSIGN_MESSAGES = {
 }
 LINK_ADD_MESSAGES = {
     404: "case not found, or the other case is not available to your account",
-    409: "a case is closed, or the two cases are already linked",
-    422: "a case cannot be linked to itself",
+    409: "a case is closed, the two cases are already linked, or the duplicate case cannot be closed yet",
+    422: "the link is not valid: a case cannot be linked to itself, and the type, reason and main case must fit the type",
 }
 LINK_REMOVE_MESSAGES = {
     404: "case not found, or there is no link between the two cases",
@@ -1330,18 +1330,35 @@ def _case_unassign(base_url: str, args: argparse.Namespace) -> None:
     )
 
 
+LINK_MAIN_CASE_TEXT = {
+    "this": "this case",
+    "linked": "the linked case",
+}
+
+
 def _print_link(link: dict) -> None:
     # The other case is shown only when the API gives its ID, which it does only for a case the caller can see.
     print(
         f"  Linked case ID:   {link['linked_case_id'] or '(not available to your account)'}"
     )
     print(f"  Title:            {link['linked_case_title'] or '-'}")
+    print(f"  Link type:        {link['link_type']}")
+    print(f"  Reason:           {link['reason'] or '-'}")
+    if link["primary_side"] is not None:
+        print(f"  Main or root:     {LINK_MAIN_CASE_TEXT[link['primary_side']]}")
+    print(f"  Visible to both:  {'yes' if link['share_visibility'] else 'no'}")
     print(f"  Linked (UTC):     {link['created_at']}")
 
 
 def _render_link_added(raw: bytes) -> None:
-    print("Cases linked. Linking changes no task, deadline or status.")
-    _print_link(_json_object(raw))
+    link = _json_object(raw)
+    if link["link_type"] == "duplicate":
+        print(
+            "Duplicate linked. The duplicate case is now closed. No task was moved to the main case."
+        )
+    else:
+        print("Cases linked. Linking changes no task, deadline or status.")
+    _print_link(link)
 
 
 CASE_TITLE_UPDATE_MESSAGES = {
@@ -1419,12 +1436,23 @@ def _case_title_update(base_url: str, args: argparse.Namespace) -> None:
 def _case_link_add(base_url: str, args: argparse.Namespace) -> None:
     case_id = _case_id_arg(args.case_id)
     linked_case_id = _uuid_arg(args.linked_case_id, "LINKED_CASE_ID")
+    primary_case_id = (
+        _uuid_arg(args.primary_case_id, "PRIMARY_CASE_ID")
+        if args.primary_case_id is not None
+        else None
+    )
     _write_case(
         base_url,
         args,
         "POST",
         f"/api/v1/cases/{case_id}/links",
-        payload={"linked_case_id": linked_case_id},
+        payload={
+            "linked_case_id": linked_case_id,
+            "link_type": args.link_type,
+            "reason": args.reason,
+            "share_visibility": args.share_visibility,
+            "primary_case_id": primary_case_id,
+        },
         messages=LINK_ADD_MESSAGES,
         render=_render_link_added,
     )
@@ -3290,6 +3318,32 @@ def _add_case_update_commands(case_commands) -> None:
         "linked_case_id",
         metavar="LINKED_CASE_ID",
         help="Case ID (UUID) of the other case",
+    )
+    link_add.add_argument(
+        "--type",
+        dest="link_type",
+        required=True,
+        choices=["duplicate", "related", "root_sub"],
+        help="duplicate: this link closes the duplicate case and points to the main case; "
+        "related: reference only; root_sub: a reader of the sub-case may read the root case",
+    )
+    link_add.add_argument(
+        "--reason",
+        required=True,
+        help="Short reason for the link (required, up to 500 characters)",
+    )
+    link_add.add_argument(
+        "--primary-case-id",
+        metavar="PRIMARY_CASE_ID",
+        default=None,
+        help="Case ID (UUID) of the main case of a duplicate or the root case of a root_sub link. "
+        "It is one of the two cases. Not for a related link",
+    )
+    link_add.add_argument(
+        "--share-visibility",
+        action="store_true",
+        default=False,
+        help="Users who can see one of the two cases can see the other too (default: off)",
     )
     _add_idempotency_option(link_add)
     _add_auth_options(link_add)

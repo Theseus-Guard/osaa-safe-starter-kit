@@ -93,7 +93,7 @@ def test_a_reporter_sees_only_the_cases_it_created():
         REPORTER_ID, DEFAULT_ROLE_PERMISSIONS["reporter"]
     )
     assert scope.read_all is False
-    assert scope.visibility_sql() == ("(cases.created_by = %s)", (REPORTER_ID,))
+    assert scope.visibility_sql(writing=True) == ("(cases.created_by = %s)", (REPORTER_ID,))
 
 
 def test_a_reporter_list_and_search_run_inside_the_reporters_scope(

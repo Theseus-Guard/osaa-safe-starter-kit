@@ -161,7 +161,7 @@ def _insert_pending_derived(
 ) -> str:
     with connect() as conn:
         # The same visibility rule as the API check, on this connection (see evidence._insert_pending).
-        if not is_visible_on(conn, original.case_id, scope):
+        if not is_visible_on(conn, original.case_id, scope, writing=True):
             raise RedactionRefused("not_found")
         row = conn.execute(
             """
@@ -393,7 +393,7 @@ def create_derivative(
         elif found is KeyLookup.REUSED:
             failure_reason = "superseded_by_key_reuse"
             replay_result = Result(Outcome.KEY_REUSED)
-        elif not is_visible_on(conn, original.case_id, scope):
+        elif not is_visible_on(conn, original.case_id, scope, writing=True):
             failure_reason = "case_not_visible"
         else:
             derivation = _finalize(

@@ -209,6 +209,9 @@ def test_expand_pair_0049_0050_keeps_rows_and_current_reads_work(server, tmp_pat
         ).fetchone()[0]
     assert recipient_ref is None
 
+    # The current read paths read case_links, which migration 0052 extends, so they run on the head schema.
+    assert server.migrate(MIGRATIONS) == 0
+
     # The current read paths work on the migrated rows.
     scope = CaseScope(user_id=ids["triager"], read_all=True)
     listed = {user.username: user for user in users.list_users(limit=100)}
@@ -218,7 +221,9 @@ def test_expand_pair_0049_0050_keeps_rows_and_current_reads_work(server, tmp_pat
     assert [duty.revision for duty in duties] == [1]
     with connect() as conn:
         tasks = cases._load_tasks(conn, ids["case"])
+    # Migration 0051 backfills the 30-day analysis task onto the existing case, once.
     assert sorted(task.kind for task in tasks) == [
+        "preliminary_control_failure_analysis",
         "preliminary_safe_report",
         "weekly_update",
     ]

@@ -105,13 +105,15 @@ class AppealEntry:
     created_at: datetime
 
 
-def _visible_round_case(conn, round_id: str, scope: CaseScope) -> str | None:
+def _visible_round_case(
+    conn, round_id: str, scope: CaseScope, *, writing: bool = False
+) -> str | None:
     """The case of a round that the scope may see, or None when the round is missing or its case is not visible."""
     row = conn.execute(
         "SELECT case_id::text FROM review_rounds WHERE id = %s AND NOT is_deleted",
         (round_id,),
     ).fetchone()
-    if row is None or not is_visible_on(conn, row[0], scope):
+    if row is None or not is_visible_on(conn, row[0], scope, writing=writing):
         return None
     return row[0]
 
@@ -269,7 +271,7 @@ def declare_conflict(
         if replayed is not None:
             outcome, stored = replayed
             return outcome, None, stored
-        case_id = _visible_round_case(conn, round_id, scope)
+        case_id = _visible_round_case(conn, round_id, scope, writing=True)
         if case_id is None:
             return IndependenceOutcome.NOT_FOUND, None, None
         locked = lock_visible_case(conn, case_id, scope)
@@ -348,7 +350,7 @@ def record_recusal(
         if replayed is not None:
             outcome, stored = replayed
             return outcome, None, stored
-        case_id = _visible_round_case(conn, round_id, scope)
+        case_id = _visible_round_case(conn, round_id, scope, writing=True)
         if case_id is None:
             return IndependenceOutcome.NOT_FOUND, None, None
         locked = lock_visible_case(conn, case_id, scope)
@@ -464,7 +466,7 @@ def file_appeal(
         if replayed is not None:
             outcome, stored = replayed
             return outcome, None, stored
-        case_id = _visible_round_case(conn, round_id, scope)
+        case_id = _visible_round_case(conn, round_id, scope, writing=True)
         if case_id is None:
             return IndependenceOutcome.NOT_FOUND, None, None
         # Locks the case so the eligibility checks and the choice see the state that the insert commits against.
