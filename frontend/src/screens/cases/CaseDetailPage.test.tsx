@@ -188,7 +188,7 @@ describe("CaseDetailPage", () => {
     await screen.findByText("Example incident");
     expect(history).toHaveBeenCalledTimes(1);
 
-    await user.type(await screen.findByLabelText("Reason"), "Done");
+    await user.type(await screen.findByLabelText(/^Reason/), "Done");
     await user.click(screen.getByRole("button", { name: "Close case" }));
 
     await waitFor(() => expect(history).toHaveBeenCalledTimes(2));

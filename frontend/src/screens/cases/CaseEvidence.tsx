@@ -195,15 +195,19 @@ function EvidenceUploadForm({ caseId, onUploaded }: UploadProps) {
   const [file, setFile] = useState<File | null>(null);
   const [inputKey, setInputKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  // The field the current error is about, so that the field can point at the message.
+  const [errorField, setErrorField] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     if (file === null) {
+      setErrorField("evidence-file");
       setError("Choose a file to upload.");
       return;
     }
     setError(null);
+    setErrorField(null);
     setBusy(true);
     try {
       const item = await uploadEvidence(caseId, file);
@@ -221,10 +225,14 @@ function EvidenceUploadForm({ caseId, onUploaded }: UploadProps) {
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-3 rounded-md border p-3">
       <Field>
-        <FieldLabel htmlFor="evidence-file">Upload evidence</FieldLabel>
+        <FieldLabel htmlFor="evidence-file">
+          Upload evidence <span className="font-normal text-muted-foreground">(required)</span>
+        </FieldLabel>
         <Input
           key={inputKey}
           id="evidence-file"
+          aria-invalid={errorField === "evidence-file" || undefined}
+          aria-describedby={errorField === "evidence-file" ? "evidence-error" : undefined}
           type="file"
           accept={ACCEPTED_EVIDENCE_TYPES.join(",")}
           onChange={(event) => setFile(event.target.files?.[0] ?? null)}
@@ -232,7 +240,7 @@ function EvidenceUploadForm({ caseId, onUploaded }: UploadProps) {
         <FieldDescription>Allowed types: {ACCEPTED_EVIDENCE_TYPE_NAMES}. The server also limits the file size.</FieldDescription>
       </Field>
       {error && (
-        <Alert variant="destructive">
+        <Alert variant="destructive" id="evidence-error">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
@@ -290,13 +298,13 @@ function EvidenceRowGroup({
         </TableCell>
         <TableCell>
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="outline" disabled={!canDownload || downloading} onClick={onDownload}>
+            <Button size="sm" variant="outline" disabled={!canDownload || downloading} onClick={onDownload} aria-label={`Download ${item.original_filename}`}>
               {downloading ? "Downloading…" : "Download"}
             </Button>
-            <Button size="sm" variant="ghost" aria-expanded={detailOpen} onClick={onToggleDetail}>
+            <Button size="sm" variant="ghost" aria-expanded={detailOpen} onClick={onToggleDetail} aria-label={`Details of ${item.original_filename}`}>
               {detailOpen ? "Hide details" : "Details"}
             </Button>
-            <Button size="sm" variant="ghost" aria-expanded={custodyOpen} onClick={onToggleCustody}>
+            <Button size="sm" variant="ghost" aria-expanded={custodyOpen} onClick={onToggleCustody} aria-label={`Custody of ${item.original_filename}`}>
               {custodyOpen ? "Hide custody" : "Custody"}
             </Button>
           </div>

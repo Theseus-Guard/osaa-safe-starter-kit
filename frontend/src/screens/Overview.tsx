@@ -67,7 +67,7 @@ export function Overview({ profile, notice }: Props) {
   return (
     <>
       {notice && (
-        <Alert>
+        <Alert role="status">
           <AlertDescription>{notice}</AlertDescription>
         </Alert>
       )}

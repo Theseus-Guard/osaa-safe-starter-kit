@@ -47,7 +47,7 @@ describe("RolesMatrix with the reporting_owner row", () => {
       // The checkbox is a span, so the locked state is exposed as aria-disabled rather than the disabled attribute.
       expect(checkbox).toHaveAttribute("aria-disabled", "true");
     }
-    expect(within(row).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(row).getByRole("button", { name: /^Save/ })).toBeDisabled();
   });
 
   it("keeps the other rows editable", async () => {

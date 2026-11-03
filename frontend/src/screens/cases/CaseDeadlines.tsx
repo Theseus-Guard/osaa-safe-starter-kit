@@ -8,6 +8,7 @@ import { DisabledHint } from "@/components/disabled-hint";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
@@ -32,6 +33,7 @@ export function CaseDeadlines({ caseId, deadlines, closed, canUpdate, canMarkNot
   // Only one row at a time asks for a not-applicable reason.
   const [reasonFor, setReasonFor] = useState<string | null>(null);
   const [reason, setReason] = useState("");
+  const [reasonError, setReasonError] = useState<string | null>(null);
 
   async function change(task: DeadlineTask, status: DeadlineStatus, why?: string) {
     if (task.id === null || task.revision === null) return;
@@ -69,7 +71,7 @@ export function CaseDeadlines({ caseId, deadlines, closed, canUpdate, canMarkNot
     event.preventDefault();
     const trimmed = reason.trim();
     if (trimmed.length === 0) {
-      toast.error("Enter the reason the deadline does not apply.");
+      setReasonError("Enter the reason the deadline does not apply.");
       return;
     }
     void change(task, "not_applicable", trimmed);
@@ -121,13 +123,24 @@ export function CaseDeadlines({ caseId, deadlines, closed, canUpdate, canMarkNot
                       <TableCell className="whitespace-normal">
                         {reasonFor !== null && reasonFor === task.id ? (
                           <form className="flex flex-col gap-2" onSubmit={(event) => submitReason(event, task)}>
+                            <Label htmlFor="deadline-reason">
+                              Reason <span className="font-normal text-muted-foreground">(required)</span>
+                            </Label>
                             <Textarea
-                              aria-label={`Reason ${humanize(task.kind)} does not apply`}
+                              id="deadline-reason"
+                              autoFocus
+                              aria-invalid={reasonError !== null || undefined}
+                              aria-describedby={reasonError !== null ? "deadline-reason-error" : undefined}
                               value={reason}
                               maxLength={1000}
                               onChange={(event) => setReason(event.target.value)}
                               rows={2}
                             />
+                            {reasonError !== null && (
+                              <p id="deadline-reason-error" role="alert" className="text-sm text-destructive">
+                                {reasonError}
+                              </p>
+                            )}
                             <div className="flex gap-2">
                               <Button type="submit" size="sm" disabled={busy}>
                                 Confirm
@@ -148,21 +161,23 @@ export function CaseDeadlines({ caseId, deadlines, closed, canUpdate, canMarkNot
                         ) : (
                           <div className="flex flex-wrap gap-2">
                             {task.status !== "done" && (
-                              <RowAction reason={lockReason} disabled={busy} onClick={() => void change(task, "done")}>
+                              <RowAction reason={lockReason} label={`Mark done: ${humanize(task.kind)}`} disabled={busy} onClick={() => void change(task, "done")}>
                                 Mark done
                               </RowAction>
                             )}
                             {task.status !== "open" && (
-                              <RowAction reason={lockReason} disabled={busy} onClick={() => void change(task, "open")}>
+                              <RowAction reason={lockReason} label={`Set open: ${humanize(task.kind)}`} disabled={busy} onClick={() => void change(task, "open")}>
                                 Set open
                               </RowAction>
                             )}
                             {task.status !== "not_applicable" && (
                               <RowAction
                                 reason={notApplicableLock}
+                                label={`Not applicable: ${humanize(task.kind)}`}
                                 disabled={busy}
                                 onClick={() => {
                                   setReason("");
+                                  setReasonError(null);
                                   setReasonFor(task.id);
                                 }}
                               >
@@ -195,15 +210,16 @@ export function CaseDeadlines({ caseId, deadlines, closed, canUpdate, canMarkNot
 
 interface RowActionProps {
   reason?: string;
+  label?: string;
   disabled: boolean;
   onClick: () => void;
   children: string;
 }
 
-function RowAction({ reason, disabled, onClick, children }: RowActionProps) {
+function RowAction({ reason, label, disabled, onClick, children }: RowActionProps) {
   return (
     <DisabledHint reason={reason}>
-      <Button size="sm" variant="outline" disabled={disabled || reason !== undefined} onClick={onClick}>
+      <Button size="sm" variant="outline" disabled={disabled || reason !== undefined} onClick={onClick} aria-label={label}>
         {children}
       </Button>
     </DisabledHint>

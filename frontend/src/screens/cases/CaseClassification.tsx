@@ -25,7 +25,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldGroup, FieldLabel, FieldTitle } from "@/components/ui/field";
+import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -224,6 +225,8 @@ function EditClassificationForm({ caseId, current, zone, onSaved, onConflict }: 
       : zonedParts(new Date(current.next_update_due_at), zone),
   );
   const [error, setError] = useState<string | null>(null);
+  // The field the current error is about, so that the field can point at the message.
+  const [errorField, setErrorField] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   function toggleTrigger(trigger: Trigger, checked: boolean) {
@@ -239,6 +242,7 @@ function EditClassificationForm({ caseId, current, zone, onSaved, onConflict }: 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
+    setErrorField(null);
     const cleanTexts = Object.fromEntries(
       CLASSIFICATION_TEXT_FIELDS.map((field) => {
         const trimmed = texts[field].trim();
@@ -248,11 +252,13 @@ function EditClassificationForm({ caseId, current, zone, onSaved, onConflict }: 
     let nextUpdateDueAt: string | null = null;
     if (nextParts.date !== "" || nextParts.time !== "") {
       if (nextParts.date === "" || nextParts.time === "") {
+        setErrorField("classification-next-when");
         setError("Enter both the date and the time of the next update, or neither.");
         return;
       }
       nextUpdateDueAt = zonedToUtcIso(nextParts.date, nextParts.time, zone);
       if (nextUpdateDueAt === null) {
+        setErrorField("classification-next-when");
         setError(`This date and time does not exist in ${zone} because of a daylight saving change. Choose another time.`);
         return;
       }
@@ -337,6 +343,8 @@ function EditClassificationForm({ caseId, current, zone, onSaved, onConflict }: 
               <FieldLabel htmlFor={`classification-${field}`}>{TEXT_FIELD_LABELS[field]}</FieldLabel>
               <Textarea
                 id={`classification-${field}`}
+                aria-invalid={errorField === `classification-${field}` || undefined}
+                aria-describedby={errorField === `classification-${field}` ? "classification-error" : undefined}
                 value={texts[field]}
                 maxLength={TEXT_MAX_LENGTH}
                 onChange={(event) => setTexts((previous) => ({ ...previous, [field]: event.target.value }))}
@@ -345,26 +353,36 @@ function EditClassificationForm({ caseId, current, zone, onSaved, onConflict }: 
             </Field>
           ))}
           <Field>
-            <FieldLabel htmlFor="classification-next-date">Next update due</FieldLabel>
-            <div className="grid grid-cols-2 gap-2">
-              <Input
-                id="classification-next-date"
-                type="date"
-                value={nextParts.date}
-                onChange={(event) => setNextParts((parts) => ({ ...parts, date: event.target.value }))}
-              />
-              <Input
-                type="time"
-                aria-label="Next update time"
-                value={nextParts.time}
-                onChange={(event) => setNextParts((parts) => ({ ...parts, time: event.target.value }))}
-              />
+            <FieldTitle id="classification-next-label">Next update due</FieldTitle>
+            <div role="group" aria-labelledby="classification-next-label" className="grid grid-cols-2 gap-2">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="classification-next-date">Date</Label>
+                <Input
+                  id="classification-next-date"
+                  type="date"
+                  value={nextParts.date}
+                  onChange={(event) => setNextParts((parts) => ({ ...parts, date: event.target.value }))}
+                  aria-invalid={errorField === "classification-next-when" || undefined}
+                  aria-describedby={errorField === "classification-next-when" ? "classification-error" : undefined}
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="classification-next-time">Time</Label>
+                <Input
+                  id="classification-next-time"
+                  type="time"
+                  value={nextParts.time}
+                  onChange={(event) => setNextParts((parts) => ({ ...parts, time: event.target.value }))}
+                  aria-invalid={errorField === "classification-next-when" || undefined}
+                  aria-describedby={errorField === "classification-next-when" ? "classification-error" : undefined}
+                />
+              </div>
             </div>
             <FieldDescription>Optional. Times are in {zone}. Clear both fields to remove it.</FieldDescription>
           </Field>
         </FieldGroup>
         {error && (
-          <Alert variant="destructive">
+          <Alert variant="destructive" id="classification-error">
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}

@@ -111,11 +111,14 @@ describe("CaseDeadlines", () => {
       />,
     );
 
-    await user.click(within(openRow()).getByRole("button", { name: "Not applicable" }));
+    await user.click(within(openRow()).getByRole("button", { name: /^Not applicable/ }));
     await user.click(screen.getByRole("button", { name: "Confirm" }));
 
     expect(update).not.toHaveBeenCalled();
-    expect(toast.error).toHaveBeenCalledWith("Enter the reason the deadline does not apply.");
+    // The reason error is shown inline and linked to the textarea, not raised as a toast.
+    expect(screen.getByRole("alert")).toHaveTextContent("Enter the reason the deadline does not apply.");
+    expect(screen.getByLabelText(/^Reason/)).toHaveAttribute("aria-invalid", "true");
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it("sends the trimmed reason with a not-applicable change", async () => {
@@ -132,8 +135,8 @@ describe("CaseDeadlines", () => {
       />,
     );
 
-    await user.click(within(openRow()).getByRole("button", { name: "Not applicable" }));
-    await user.type(screen.getByLabelText("Reason Preliminary safe report does not apply"), "  Not a reportable incident  ");
+    await user.click(within(openRow()).getByRole("button", { name: /^Not applicable/ }));
+    await user.type(screen.getByLabelText(/^Reason/), "  Not a reportable incident  ");
     await user.click(screen.getByRole("button", { name: "Confirm" }));
 
     await waitFor(() =>
@@ -156,8 +159,8 @@ describe("CaseDeadlines", () => {
       />,
     );
 
-    await user.click(within(openRow()).getByRole("button", { name: "Not applicable" }));
-    await user.type(screen.getByLabelText("Reason Preliminary safe report does not apply"), "Not relevant");
+    await user.click(within(openRow()).getByRole("button", { name: /^Not applicable/ }));
+    await user.type(screen.getByLabelText(/^Reason/), "Not relevant");
     await user.click(screen.getByRole("button", { name: "Confirm" }));
 
     await waitFor(() =>
@@ -188,7 +191,7 @@ describe("CaseDeadlines", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Mark done" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^Mark done/ })).toBeDisabled();
   });
 
   it("locks every status action for a caller without case update rights", () => {
@@ -203,9 +206,9 @@ describe("CaseDeadlines", () => {
       />,
     );
 
-    expect(within(openRow()).getByRole("button", { name: "Mark done" })).toBeDisabled();
-    expect(within(openRow()).getByRole("button", { name: "Not applicable" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Set open" })).toBeDisabled();
+    expect(within(openRow()).getByRole("button", { name: /^Mark done/ })).toBeDisabled();
+    expect(within(openRow()).getByRole("button", { name: /^Not applicable/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^Set open/ })).toBeDisabled();
   });
 
   it("locks only Not applicable for a caller who is not a triager", async () => {
@@ -222,10 +225,10 @@ describe("CaseDeadlines", () => {
       />,
     );
 
-    expect(within(openRow()).getByRole("button", { name: "Not applicable" })).toBeDisabled();
-    expect(within(openRow()).getByRole("button", { name: "Mark done" })).toBeEnabled();
+    expect(within(openRow()).getByRole("button", { name: /^Not applicable/ })).toBeDisabled();
+    expect(within(openRow()).getByRole("button", { name: /^Mark done/ })).toBeEnabled();
 
-    await user.click(within(openRow()).getByRole("button", { name: "Mark done" }));
+    await user.click(within(openRow()).getByRole("button", { name: /^Mark done/ }));
     expect(update).toHaveBeenCalledWith("case-1", "task-1", "done", undefined, 2);
   });
 

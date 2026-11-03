@@ -52,8 +52,8 @@ describe("NewCaseDialog", () => {
   it("pre-fills the awareness time in the system timezone", () => {
     renderDialog();
 
-    expect(screen.getByLabelText("Awareness date and time")).toHaveValue("2026-11-01");
-    expect(screen.getByLabelText("Awareness time")).toHaveValue("09:00");
+    expect(screen.getByLabelText("Date")).toHaveValue("2026-11-01");
+    expect(screen.getByLabelText("Time")).toHaveValue("09:00");
     expect(screen.getByText(/Times are in Europe\/Istanbul \(UTC\+03:00\)/)).toBeInTheDocument();
   });
 
@@ -70,8 +70,8 @@ describe("NewCaseDialog", () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderDialog();
 
-    await user.type(screen.getByLabelText("Title"), "Example incident");
-    fireEvent.change(screen.getByLabelText("Awareness time"), { target: { value: "10:00" } });
+    await user.type(screen.getByLabelText(/^Title/), "Example incident");
+    fireEvent.change(screen.getByLabelText("Time"), { target: { value: "10:00" } });
     await user.click(screen.getByRole("button", { name: "Create case" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("The awareness time cannot be in the future.");
@@ -84,8 +84,8 @@ describe("NewCaseDialog", () => {
     report.mockResolvedValue(created);
     const { onOpenChange, onCreated } = renderDialog();
 
-    await user.type(screen.getByLabelText("Title"), "Example incident");
-    fireEvent.change(screen.getByLabelText("Awareness time"), { target: { value: "08:30" } });
+    await user.type(screen.getByLabelText(/^Title/), "Example incident");
+    fireEvent.change(screen.getByLabelText("Time"), { target: { value: "08:30" } });
     await user.click(screen.getByRole("button", { name: "Create case" }));
 
     expect(report).toHaveBeenCalledWith({
@@ -103,9 +103,9 @@ describe("NewCaseDialog", () => {
     report.mockResolvedValue({ id: "case-1" } as CaseDetail);
     renderDialog();
 
-    await user.type(screen.getByLabelText("Title"), "Example incident");
+    await user.type(screen.getByLabelText(/^Title/), "Example incident");
     await user.type(screen.getByLabelText("Contact for follow-up"), "  reporter@example.com  ");
-    fireEvent.change(screen.getByLabelText("Awareness time"), { target: { value: "08:30" } });
+    fireEvent.change(screen.getByLabelText("Time"), { target: { value: "08:30" } });
     await user.click(screen.getByRole("button", { name: "Create case" }));
 
     expect(report).toHaveBeenCalledWith(expect.objectContaining({ contact: "reporter@example.com" }));
@@ -116,9 +116,9 @@ describe("NewCaseDialog", () => {
     report.mockResolvedValue({ id: "case-1" } as CaseDetail);
     renderDialog();
 
-    await user.type(screen.getByLabelText("Title"), "Example incident");
+    await user.type(screen.getByLabelText(/^Title/), "Example incident");
     await user.type(screen.getByLabelText("Contact for follow-up"), "   ");
-    fireEvent.change(screen.getByLabelText("Awareness time"), { target: { value: "08:30" } });
+    fireEvent.change(screen.getByLabelText("Time"), { target: { value: "08:30" } });
     await user.click(screen.getByRole("button", { name: "Create case" }));
 
     expect(report).toHaveBeenCalledWith(expect.objectContaining({ contact: null }));
@@ -128,12 +128,12 @@ describe("NewCaseDialog", () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderDialog();
 
-    fireEvent.change(screen.getByLabelText("Awareness time"), { target: { value: "08:30" } });
+    fireEvent.change(screen.getByLabelText("Time"), { target: { value: "08:30" } });
     await user.click(screen.getByRole("button", { name: "Create case" }));
 
     expect(report).not.toHaveBeenCalled();
     // The title is required, so the browser blocks the submit before the custom check runs.
-    expect(screen.getByLabelText("Title")).toBeInvalid();
+    expect(screen.getByLabelText(/^Title/)).toBeInvalid();
   });
 
   it("explains a local time that does not exist because of a DST change", async () => {
@@ -141,9 +141,9 @@ describe("NewCaseDialog", () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderDialog();
 
-    await user.type(screen.getByLabelText("Title"), "Example incident");
-    fireEvent.change(screen.getByLabelText("Awareness date and time"), { target: { value: "2026-03-08" } });
-    fireEvent.change(screen.getByLabelText("Awareness time"), { target: { value: "02:30" } });
+    await user.type(screen.getByLabelText(/^Title/), "Example incident");
+    fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2026-03-08" } });
+    fireEvent.change(screen.getByLabelText("Time"), { target: { value: "02:30" } });
     await user.click(screen.getByRole("button", { name: "Create case" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("does not exist in America/New_York");
@@ -156,8 +156,8 @@ describe("NewCaseDialog", () => {
     report.mockRejectedValue(new ApiError(400, "system timezone is not configured"));
     renderDialog();
 
-    await user.type(screen.getByLabelText("Title"), "Example incident");
-    fireEvent.change(screen.getByLabelText("Awareness time"), { target: { value: "08:30" } });
+    await user.type(screen.getByLabelText(/^Title/), "Example incident");
+    fireEvent.change(screen.getByLabelText("Time"), { target: { value: "08:30" } });
     await user.click(screen.getByRole("button", { name: "Create case" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("The system timezone is not set yet.");

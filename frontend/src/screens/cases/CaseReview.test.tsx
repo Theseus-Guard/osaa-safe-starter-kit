@@ -76,7 +76,7 @@ async function openLayerDialog(user: ReturnType<typeof userEvent.setup>, layerLa
 }
 
 async function chooseOutcome(user: ReturnType<typeof userEvent.setup>, dialog: HTMLElement, outcome: string) {
-  await user.click(within(dialog).getByLabelText("Outcome"));
+  await user.click(within(dialog).getByLabelText(/^Outcome/));
   await user.click(await screen.findByRole("option", { name: outcome }));
 }
 
