@@ -15,7 +15,7 @@ Rules:
 - The backup must be an active user who holds disclosures:approve. That is the only approval authority the system defines.
 - Free text (authority basis, missing facts, next update) is kept in the rows and is never written to the audit log: the
   audit log keeps lengths only. Every record writes one audit row in the same transaction.
-- Records are insert-only (migration 0052). No record is ever deleted or edited; a corrected fact is a new record.
+- Records are insert-only (migration 0053). No record is ever deleted or edited; a corrected fact is a new record.
 
 Nothing here sends a notice or approves a version. The notice itself is still recorded through safe_kit.external_notices.
 """
