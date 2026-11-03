@@ -1344,6 +1344,78 @@ def _render_link_added(raw: bytes) -> None:
     _print_link(_json_object(raw))
 
 
+CASE_TITLE_UPDATE_MESSAGES = {
+    403: "forbidden: only a triager can change the case title",
+    404: "case not found, or its case is not available to your account",
+    409: "the case is closed, so its title cannot change",
+    412: "the case changed since you read it, so nothing was saved. Run 'case show' again",
+}
+
+
+def _case_revision(base: str, token: str, case_id: str) -> int:
+    """The current revision of one case, as 'case show' reads it."""
+    case = _json_object(
+        _call(
+            base,
+            "GET",
+            f"/api/v1/cases/{case_id}",
+            token=token,
+            messages=READ_MESSAGES,
+        )
+    )
+    revision = case.get("revision")
+    if isinstance(revision, int) and not isinstance(revision, bool):
+        return revision
+    raise RequestFailed("unexpected response from the server")
+
+
+def _case_title_update(base_url: str, args: argparse.Namespace) -> None:
+    """Change the title of one case. Nothing else of the case changes.
+
+    Without --revision, the current revision is read in the same session and sent as If-Match.
+    """
+    case_id = _case_id_arg(args.case_id)
+    title = args.title
+    # The same checks as case create: 1 to 200 characters, not only whitespace.
+    if not 1 <= len(title) <= MAX_TITLE_LENGTH or not title.strip():
+        raise UsageError(
+            f"the title must be 1 to {MAX_TITLE_LENGTH} characters and not only spaces"
+        )
+    if args.revision is not None and args.revision < 1:
+        raise UsageError(
+            "--revision must be 1 or more. Read it with: case show CASE_ID, or leave it out"
+        )
+    stated = args.revision is not None
+    try:
+        _write_case(
+            base_url,
+            args,
+            "PATCH",
+            f"/api/v1/cases/{case_id}",
+            payload={"title": title.strip()},
+            messages=CASE_TITLE_UPDATE_MESSAGES,
+            render=_render_case_change("Case title updated."),
+            if_match=args.revision,
+            read_if_match=None
+            if stated
+            else (lambda base, token: _case_revision(base, token, case_id)),
+        )
+    except RequestFailed as error:
+        current = _precondition_revision(error)
+        if current is None:
+            raise
+        # Nothing was saved. The command never retries: the user reads the case again and runs it again.
+        if not stated:
+            raise RequestFailed(
+                f"the case changed after this command read it, so nothing was saved. Run "
+                f"'case show {case_id}' to check it, then run this command again"
+            ) from None
+        raise RequestFailed(
+            f"the case changed, so nothing was saved. Its current revision is {current}. Run "
+            f"'case show {case_id}' to check it, then run this command again with --revision {current}"
+        ) from None
+
+
 def _case_link_add(base_url: str, args: argparse.Namespace) -> None:
     case_id = _case_id_arg(args.case_id)
     linked_case_id = _uuid_arg(args.linked_case_id, "LINKED_CASE_ID")
@@ -3186,6 +3258,24 @@ def _add_case_update_commands(case_commands) -> None:
     )
     _add_auth_options(unassign, json_output=False)
     unassign.set_defaults(handler=_case_unassign)
+
+    title = case_commands.add_parser("title", help="Change the title of a case")
+    title_commands = title.add_subparsers(dest="title_command", required=True)
+    title_update = title_commands.add_parser(
+        "update", help="Change the title of one of your cases. Needs cases:triage"
+    )
+    title_update.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    title_update.add_argument(
+        "--title", required=True, help="New title, 1 to 200 characters"
+    )
+    title_update.add_argument(
+        "--revision",
+        type=int,
+        help="Revision of the case you read with 'case show'. Optional: without it, the current revision is read first",
+    )
+    _add_idempotency_option(title_update)
+    _add_auth_options(title_update)
+    title_update.set_defaults(handler=_case_title_update)
 
     link = case_commands.add_parser(
         "link",

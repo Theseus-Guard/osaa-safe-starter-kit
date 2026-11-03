@@ -482,6 +482,7 @@ describe("endpoints", () => {
     ["listCases omits blank q", (a) => a.listCases(8, undefined, "   "), "GET", "/api/v1/cases?limit=8"],
     ["listCases with cursor, q and status", (a) => a.listCases(8, "next", "SAFE", "closed"), "GET", "/api/v1/cases?limit=8&cursor=next&q=SAFE&status=closed"],
     ["getCase", (a) => a.getCase("case-1"), "GET", "/api/v1/cases/case-1"],
+    ["updateCaseTitle", (a) => a.updateCaseTitle("case-1", "New title", 4), "PATCH", "/api/v1/cases/case-1"],
     ["getSystemTimezone", (a) => a.getSystemTimezone(), "GET", "/api/v1/system/timezone"],
     [
       "updateSystemTimezone",

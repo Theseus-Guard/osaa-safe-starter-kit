@@ -56,7 +56,7 @@ The header search box finds a case by reference or ID from any page.
 
 ![Case detail, Overview tab, with the risk score and impact values](images/investigator-case-detail-SAFE-DEMO-000002.png)
 
-Opened from a case reference. The header shows the reference, the title, the status and the risk score. **Edit impact values** changes the impact values (C, B and A); each save stores a new version and keeps the earlier ones. A closed case is read only: every change is disabled.
+Opened from a case reference. The header shows the reference, the title, the status and the risk score. **Edit impact values** changes the impact values (C, B and A); each save stores a new version and keeps the earlier ones. **Edit title** changes the case title; it is offered to a triager (`cases:triage`). If someone else changed the title after the case was loaded, the save is refused and nothing changes: reload the case and edit it again. A closed case is read only: every change is disabled.
 
 The tabs are listed below in the order the screen shows them. The **Evidence** tab appears only for roles that can read or write evidence. The **Disclosure** tab appears only for roles that can read disclosures. Inside **Links and reporting**, the reporter contact appears only for the reporting owner, and the preliminary report only for roles that can read the full case.
 

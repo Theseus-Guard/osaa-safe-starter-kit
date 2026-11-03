@@ -133,6 +133,7 @@ const OPEN_CASE: CaseDetail = {
   awareness_time: "2026-11-01T05:00:00Z",
   status: "open",
   calendar_version: "2026.1",
+  revision: 3,
   created_at: "2026-11-01T06:00:00Z",
   closed_at: null,
   close_reason: null,
@@ -345,6 +346,25 @@ describe("CaseDetailPage", () => {
     expect(screen.queryByRole("button", { name: "Add awareness event" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add legal duty" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit classification" })).not.toBeInTheDocument();
+  });
+
+  it("offers the title edit to a caller with cases:triage only, and not once the case is closed", async () => {
+    const { unmount } = render(<CaseDetailPage caseId="case-1" permissions={FULL_ACCESS} />);
+    expect(await screen.findByText("Example incident")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit title" })).toBeInTheDocument();
+    unmount();
+
+    render(<CaseDetailPage caseId="case-1" permissions={["cases:read_all", "evidence:read"]} />);
+    expect(await screen.findByText("Example incident")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit title" })).not.toBeInTheDocument();
+  });
+
+  it("hides the title edit once the case is closed", async () => {
+    get.mockResolvedValue({ ...OPEN_CASE, status: "closed", closed_at: "2026-11-01T07:00:00Z", close_reason: "Done" });
+    render(<CaseDetailPage caseId="case-1" permissions={FULL_ACCESS} />);
+
+    expect((await screen.findAllByText("Closed")).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "Edit title" })).not.toBeInTheDocument();
   });
 
   it("offers the reporter contact to a caller with reporter_contact:read, without reading it on load", async () => {
