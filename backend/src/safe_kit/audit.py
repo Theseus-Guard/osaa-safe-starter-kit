@@ -113,6 +113,12 @@ DISCLOSURE_NOTICE_STATE = "disclosure.notice_state_changed"
 # the reason code, the digest and the length of each free-text field, never the text itself.
 DISCLOSURE_ESCALATION = "disclosure.notice_escalated"
 DISCLOSURE_REVIEW = "disclosure.notice_reviewed"
+# The backup approver (safe_kit.external_notice_backup). A pool change is written against the backup row ("external_notice_backup"),
+# one row per person added or removed. A decision is written against its own row ("external_notice_backup_decision").
+# Details hold identifiers, the decision, and the length of the reason, never the reason itself.
+DISCLOSURE_BACKUP_ASSIGNED = "disclosure.backup_assigned"
+DISCLOSURE_BACKUP_REVOKED = "disclosure.backup_revoked"
+DISCLOSURE_BACKUP_DECISION = "disclosure.backup_decided"
 SYSTEM_TIMEZONE_SET = "system.timezone_set"
 SYSTEM_TIMEZONE_CHANGED = "system.timezone_changed"
 

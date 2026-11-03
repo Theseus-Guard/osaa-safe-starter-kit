@@ -30,7 +30,7 @@ from test_fixture_t12_notices import (  # the notice helpers of the disclosure w
     record,
     with_independent_triager,
 )
-from test_fixture_t12a_records import escalate, escalation_values, review
+from test_fixture_t12a_records import escalate, escalation_values, review, with_pool
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("SAFE_TEST_DATABASE") != "1",
@@ -749,13 +749,14 @@ def test_an_open_notice_refuses_the_duplicate_closure_until_it_is_cancelled(
 
 
 def test_an_escalation_and_a_notice_review_are_open_until_a_notice_is_recorded(
-    people, dworld
+    people, dworld, monkeypatch
 ):
-    dw = with_independent_triager(dworld)
+    dw = with_pool(with_independent_triager(dworld), monkeypatch)
     settle_for_closure(people, dw["case_id"])
     version, _ = approved_version(dw)
+    # Only the person who prepared the version opens an escalation (owner decision 2026-11-03).
     escalated = escalate(
-        dw, "independent", version["id"], escalation_values(db_user("disclosure_approver"))
+        dw, "triager", version["id"], escalation_values(dw["backups"][0])
     )
     assert escalated.status_code == 201, escalated.text
     package = review(dw, "approver", version["id"], "package")
