@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from safe_kit import api, audit, auth, users
 from safe_kit.db import connect
+from safe_kit.rbac import list_role_permissions, set_role_permissions
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("SAFE_TEST_DATABASE") != "1",
@@ -301,20 +302,49 @@ def test_a_closed_case_on_either_side_refuses_the_link(people):
 def test_the_case_must_be_visible_to_add_a_link_and_is_not_found_otherwise(people):
     own = new_case(people["reporter"], "Own")
     channel = new_reporter_channel_case(people["reporter"])
-    # The triager cannot see a reporter-channel case until it is assigned, so the link is refused as not found.
-    response = people["triager"].post(
-        f"/api/v1/cases/{own}/links", json={"linked_case_id": channel}, headers=idem()
+    # An investigator assigned to the own case cannot see the unassigned reporter-channel case, so the link is refused
+    # as not found.
+    investigator = new_user("investigator")
+    assigned = people["triager"].post(
+        f"/api/v1/cases/{own}/assignments",
+        json={"user_id": investigator},
+        headers=idem(),
     )
+    assert assigned.status_code == 201, assigned.text
+    # Linking needs cases:triage, granted to the investigator for this block only, so the 404 comes from visibility.
+    before = frozenset(list_role_permissions()["investigator"])
+    set_role_permissions("investigator", before | {"cases:triage"})
+    try:
+        response = ActingClient(investigator).post(
+            f"/api/v1/cases/{own}/links",
+            json={"linked_case_id": channel},
+            headers=idem(),
+        )
+    finally:
+        set_role_permissions("investigator", before)
     assert response.status_code == 404
     assert response.json()["detail"] == "case not found"
+    # The triager (cases:assign) sees the reporter-channel case before assignment, so the same link is accepted.
+    linked = people["triager"].post(
+        f"/api/v1/cases/{own}/links", json={"linked_case_id": channel}, headers=idem()
+    )
+    assert linked.status_code == 201, linked.text
 
 
 def test_a_link_to_a_case_the_reader_cannot_see_has_no_id_and_no_title(people):
     own = new_case(people["reporter"], "Own")
     channel = new_reporter_channel_case(people["reporter"])
+    investigator = new_user("investigator")
+    assigned = people["triager"].post(
+        f"/api/v1/cases/{own}/assignments",
+        json={"user_id": investigator},
+        headers=idem(),
+    )
+    assert assigned.status_code == 201, assigned.text
     insert_link(own, channel, new_user("triager"))
 
-    listed = people["triager"].get(f"/api/v1/cases/{own}/links")
+    # The investigator sees the own case but not the reporter-channel case it links to.
+    listed = ActingClient(investigator).get(f"/api/v1/cases/{own}/links")
     assert listed.status_code == 200
     assert listed.json()[0]["linked_case_id"] is None
     assert listed.json()[0]["linked_case_title"] is None

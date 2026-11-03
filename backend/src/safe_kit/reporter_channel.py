@@ -9,7 +9,8 @@ hides the actor of the case-creation entry for every caller, triagers included. 
 that actor is the reporter. Retaliation is a risk for the reporter, so the rule does not depend on the caller's role.
 
 The contact is returned only by read_reporter_contact, to a caller with reporter_contact:read, and every read writes
-an audit row in the same transaction. Reporter-channel cases are hidden from read_all callers until they are assigned
+an audit row in the same transaction. A triager (cases:assign) sees a reporter-channel case before it is assigned, so
+it can assign it, but never sees the reporter or the contact. Other read_all callers see it only once it is assigned
 (see cases.CaseScope.visibility_sql).
 
 The contact can be read while the case is open, or within REPORTER_CONTACT_WINDOW_HOURS after its latest closure. A

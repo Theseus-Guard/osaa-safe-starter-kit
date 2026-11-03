@@ -49,8 +49,9 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "disclosure_approver": frozenset({"disclosures:approve", "cases:read_all"}),
     "auditor": frozenset({"audit:read"}),
     # Reads the reporter contact (the fixed grant, see REPORTING_OWNER_ROLE). cases:read_all is needed as well: the
-    # contact route checks case visibility, and only a read_all caller can see a reporter-channel case that has no
-    # assignee (cases.CaseScope.visibility_sql). It holds no triage, assign, evidence or review permission.
+    # contact route checks case visibility, and reporter_contact:read is what lets a read_all caller see a
+    # reporter-channel case that has no assignee (cases.CaseScope.visibility_sql). It holds no triage, assign,
+    # evidence or review permission.
     "reporting_owner": frozenset({"cases:read_all", "reporter_contact:read"}),
     # By design the admin role has no case permissions: platform administration
     # does not grant access to case content.

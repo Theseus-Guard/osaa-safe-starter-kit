@@ -447,22 +447,22 @@ def test_report_stores_the_reporter_and_contact_apart_from_the_case(db_client, p
 @requires_database
 def test_no_caller_gets_the_reporter_account_or_contact(db_client, people):
     case_id = open_report_via_api(db_client, people["reporter"])
-    # A triager sees a reporter-channel case only once it is assigned (see test_case_access.py). The reporting owner,
-    # who holds reporter_contact:read, makes the assignment.
-    with role_holds("triager", "reporter_contact:read"):
-        assigned = db_client(people["triager"]).post(
-            f"/api/v1/cases/{case_id}/assignments",
-            json={"user_id": people["investigator"]},
-            headers=idem(),
-        )
-    assert assigned.status_code == 201, assigned.text
+    # A triager (cases:assign) sees the unassigned reporter-channel case and assigns it without the contact permission.
     triager = db_client(people["triager"])
+    assigned = triager.post(
+        f"/api/v1/cases/{case_id}/assignments",
+        json={"user_id": people["investigator"]},
+        headers=idem(),
+    )
+    assert assigned.status_code == 201, assigned.text
     responses = [
         db_client(people["reporter"]).get(f"/api/v1/cases/{case_id}"),
         db_client(people["reporter"]).get(f"/api/v1/cases/{case_id}/history"),
         triager.get(f"/api/v1/cases/{case_id}"),
         triager.get(f"/api/v1/cases/{case_id}/history?limit=200"),
+        triager.get(f"/api/v1/cases/{case_id}/assignments"),
         triager.get("/api/v1/cases?limit=200"),
+        triager.get(f"/api/v1/cases?limit=200&q={case_id[:8]}"),
     ]
     for response in responses:
         assert response.status_code == 200, response.text
@@ -571,15 +571,14 @@ def test_contact_of_a_report_without_contact_is_null_and_still_audited(
 def close_reporter_case(db_client, people, case_id: str) -> None:
     """Close a reporter-channel case through the API: assign a reviewer, review it, finish every task, then close.
 
-    The first assignment needs reporter_contact:read, because the case has no assignee yet.
+    The triager sees the unassigned case through cases:assign, so no contact permission is needed for the assignment.
     """
     triager = db_client(people["triager"])
-    with role_holds("triager", "reporter_contact:read"):
-        assigned = triager.post(
-            f"/api/v1/cases/{case_id}/assignments",
-            json={"user_id": people["reviewer"]},
-            headers=idem(),
-        )
+    assigned = triager.post(
+        f"/api/v1/cases/{case_id}/assignments",
+        json={"user_id": people["reviewer"]},
+        headers=idem(),
+    )
     assert assigned.status_code == 201, assigned.text
     opened = db_client(people["reviewer"]).post(
         "/api/v1/reviews", headers=idem(), json={"case_id": case_id}

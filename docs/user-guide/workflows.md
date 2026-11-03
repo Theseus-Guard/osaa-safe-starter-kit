@@ -12,7 +12,7 @@ A reporter (a role with `cases:submit`) opens a case from **Cases**, with **New 
 
 The application stores the contact apart from the case content. It is never shown in the case; only the reporting owner can read it, and every read is audited. The case opens with the SAFE deadlines calculated from the awareness time (see below).
 
-A case opened this way is a reporter-channel case. A triager cannot see it until it has an assignment. The reporter sees its own cases.
+A case opened this way is a reporter-channel case. A triager sees it before it has an assignment, so the triager can assign an investigator or reviewer. The triager never sees the reporter account or the contact. The reporter sees its own cases.
 
 **Deadlines.** The deadline start is the earliest of the case's awareness time and the operator awareness events recorded on the case. It never moves later. The application then sets these SAFE deadline tasks:
 

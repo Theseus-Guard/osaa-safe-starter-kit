@@ -28,6 +28,7 @@ from safe_kit.cases import (
     redact_history,
 )
 from safe_kit.db import connect
+from safe_kit.reporter_channel import REPORTER_CONTACT_READ
 from safe_kit.reviews import RoundOutcome
 from test_case_records_db import reporter_contact_granted_directly
 from safe_kit.rbac import (
@@ -127,9 +128,18 @@ def test_reporter_scope_sees_only_own_cases():
     assert params == (REPORTER_ID,)
 
 
-def test_triager_scope_sees_every_case_except_unassigned_reporter_cases():
+def test_triager_scope_sees_every_case_including_unassigned_reporter_cases():
+    # The triager holds cases:assign, so it may assign a reporter-channel case that has no assignee yet.
+    scope = CaseScope.from_permissions(TRIAGER_ID, DEFAULT_ROLE_PERMISSIONS["triager"])
+    assert scope.can_assign is True
+    assert scope.reporter_contact is False
+    assert scope.visibility_sql() == ("TRUE", ())
+
+
+def test_read_all_without_assign_keeps_hiding_unassigned_reporter_cases():
+    # The disclosure approver holds cases:read_all but not cases:assign, so the reporter-channel rule is unchanged.
     sql, params = CaseScope.from_permissions(
-        TRIAGER_ID, DEFAULT_ROLE_PERMISSIONS["triager"]
+        TRIAGER_ID, frozenset({"cases:read_all"})
     ).visibility_sql()
     assert sql == (
         "(NOT EXISTS (SELECT 1 FROM reporter_identities ri WHERE ri.case_id = cases.id AND NOT ri.is_deleted) "
@@ -289,7 +299,7 @@ def test_list_is_built_from_the_callers_scope(client, caller, monkeypatch):
     as_role(caller, TRIAGER_ID, "triager")
     assert client.get("/api/v1/cases").status_code == 200
     assert seen["scope"] == CaseScope(
-        user_id=TRIAGER_ID, read_all=True, read_assigned=True
+        user_id=TRIAGER_ID, read_all=True, read_assigned=True, can_assign=True
     )
 
 
@@ -1700,80 +1710,108 @@ def listed_ids(db_client, actor: str, q: str | None = None) -> set[str]:
     return {item["id"] for item in response.json()["items"]}
 
 
-# --- reporter-channel cases are hidden from read_all callers until assigned (D2) -----------------------------------
+# --- reporter-channel cases: a triager sees them before assignment (cases:assign), other roles keep the old rule ----
 
 
 @requires_database
-def test_unassigned_reporter_case_is_hidden_from_a_triager(db_client, people):
-    case_id = open_report_via_api(db_client, people["reporter"])
+def test_unassigned_reporter_case_is_visible_to_a_triager(db_client, people):
+    case_id = open_report_via_api(
+        db_client, people["reporter"], title="Unassigned reporter case"
+    )
     triager = db_client(people["triager"])
-    # In the list, on the case read, and in the history, the triager gets the same answer as for a missing case.
-    assert case_id not in listed_ids(db_client, people["triager"])
-    assert triager.get(f"/api/v1/cases/{case_id}").status_code == 404
-    assert triager.get(f"/api/v1/cases/{case_id}/history").status_code == 404
-    assert triager.get(f"/api/v1/cases/{case_id}/assignments").status_code == 404
-    # The reporter still sees its own case, with no assignment.
+    # In the list, the search, the case read, the history and the assignments, the triager sees it like any other case.
+    assert case_id in listed_ids(db_client, people["triager"])
+    assert case_id in listed_ids(db_client, people["triager"], q=case_id[:8])
+    assert get_case(db_client, people["triager"], case_id).status_code == 200
+    assert triager.get(f"/api/v1/cases/{case_id}/history").status_code == 200
+    assert triager.get(f"/api/v1/cases/{case_id}/assignments").status_code == 200
+    # The reporter still sees its own case.
     assert case_id in listed_ids(db_client, people["reporter"])
     assert get_case(db_client, people["reporter"], case_id).status_code == 200
 
 
 @requires_database
-def test_assigned_reporter_case_is_visible_to_a_triager(db_client, people):
+def test_triager_assigns_an_unassigned_reporter_case_and_the_assignment_is_audited(
+    db_client, people
+):
     case_id = open_report_via_api(db_client, people["reporter"])
-    # The reporting owner assigns it. Assignment needs the case to be visible, so the owner holds reporter_contact:read.
-    with role_holds("triager", "reporter_contact:read"):
-        response = db_client(people["triager"]).post(
-            f"/api/v1/cases/{case_id}/assignments",
-            json={"user_id": people["investigator"]},
-            headers=idem(),
-        )
-    assert response.status_code == 201, response.text
-    # The case now has an active assignment, so the triager without the permission sees it too.
-    assert case_id in listed_ids(db_client, people["triager"])
-    assert get_case(db_client, people["triager"], case_id).status_code == 200
-    assert (
-        db_client(people["triager"]).get(f"/api/v1/cases/{case_id}/history").status_code
-        == 200
+    response = db_client(people["triager"]).post(
+        f"/api/v1/cases/{case_id}/assignments",
+        json={"user_id": people["investigator"]},
+        headers=idem(),
     )
+    assert response.status_code == 201, response.text
+    assert response.json()["user_id"] == people["investigator"]
+    # The assignee sees the case; another investigator gets the 404 of a missing case.
+    assert get_case(db_client, people["investigator"], case_id).status_code == 200
+    assert get_case(db_client, people["other_investigator"], case_id).status_code == 404
+    # The audit row names the actor and the assignee, and nothing about the reporter.
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT actor_id::text, details FROM audit_events "
+            "WHERE action = %s AND target_id = %s AND NOT is_deleted",
+            (audit.CASE_ASSIGNMENT_ADD, case_id),
+        ).fetchall()
+    assert len(rows) == 1
+    actor, details = rows[0]
+    assert actor == people["triager"]
+    assert details == {"assignee_id": {"old": None, "new": people["investigator"]}}
+    assert people["reporter"] not in json.dumps(details)
 
 
 @requires_database
-def test_reporter_contact_holder_sees_unassigned_reporter_case(db_client, people):
+def test_unassigned_reporter_case_stays_hidden_from_the_other_roles(db_client, people):
     case_id = open_report_via_api(db_client, people["reporter"])
-    assert case_id not in listed_ids(db_client, people["triager"])
-    # Only the triager role has read_all, so the holder is a triager that has been granted the permission.
+    # An investigator, a reviewer and another reporter get the same 404 as for a missing case, in the list and on
+    # the case read, the history and the assignments.
+    for actor in (people["investigator"], people["reviewer"], people["other_reporter"]):
+        assert case_id not in listed_ids(db_client, actor)
+        for url in ("", "/history", "/assignments"):
+            response = db_client(actor).get(f"/api/v1/cases/{case_id}{url}")
+            assert response.status_code == 404, (actor, url, response.text)
+    # The disclosure approver holds cases:read_all without cases:assign, so the reporter-channel rule still applies.
+    approver = new_user("disclosure_approver")
+    assert case_id not in listed_ids(db_client, approver)
+    assert get_case(db_client, approver, case_id).status_code == 404
+    # The reporter sees its own case, and the other reporter does not.
+    assert case_id in listed_ids(db_client, people["reporter"])
+    assert get_case(db_client, people["reporter"], case_id).status_code == 200
+    assert get_case(db_client, people["other_reporter"], case_id).status_code == 404
+    # Auditor and admin hold no case read permission, so the case read is refused by permission.
+    for role in ("auditor", "admin"):
+        assert get_case(db_client, people[role], case_id).status_code == 403
+
+
+@requires_database
+def test_reporter_contact_stays_with_the_contact_permission_for_an_unassigned_reporter_case(
+    db_client, people
+):
+    case_id = open_report_via_api(db_client, people["reporter"])
+    triager = db_client(people["triager"])
+    # The triager sees the case, but the contact is refused without reporter_contact:read.
+    assert case_id in listed_ids(db_client, people["triager"])
+    assert triager.get(f"/api/v1/reports/{case_id}/contact").status_code == 403
+    # The holder of reporter_contact:read reads it (the reporting owner, in production). The read is audited.
     with role_holds("triager", "reporter_contact:read"):
-        assert case_id in listed_ids(db_client, people["triager"])
-        assert get_case(db_client, people["triager"], case_id).status_code == 200
-        assert (
-            db_client(people["triager"])
-            .get(f"/api/v1/cases/{case_id}/history")
-            .status_code
-            == 200
-        )
         contact = db_client(people["triager"]).get(f"/api/v1/reports/{case_id}/contact")
         assert contact.status_code == 200, contact.text
-    # Without the permission again, the case is hidden again.
-    assert case_id not in listed_ids(db_client, people["triager"])
-    assert get_case(db_client, people["triager"], case_id).status_code == 404
+    with connect() as conn:
+        audited = conn.execute(
+            "SELECT actor_id::text FROM audit_events WHERE action = %s AND target_id = %s AND NOT is_deleted",
+            (REPORTER_CONTACT_READ, case_id),
+        ).fetchall()
+    assert audited == [(people["triager"],)]
 
 
 @requires_database
-def test_hidden_reporter_case_is_not_listed_for_a_triager(db_client, people):
-    before = {
-        item["id"]
-        for item in db_client(people["triager"])
-        .get("/api/v1/cases?limit=200")
-        .json()["items"]
-    }
-    open_report_via_api(db_client, people["reporter"], title="Hidden from triagers")
-    after = {
-        item["id"]
-        for item in db_client(people["triager"])
-        .get("/api/v1/cases?limit=200")
-        .json()["items"]
-    }
-    assert after == before
+def test_reporting_owner_still_sees_an_unassigned_reporter_case(db_client, people):
+    case_id = open_report_via_api(db_client, people["reporter"])
+    owner = new_user("reporting_owner")
+    # cases:read_all plus reporter_contact:read: the reporting owner sees the case before assignment, as before.
+    assert case_id in listed_ids(db_client, owner)
+    assert get_case(db_client, owner, case_id).status_code == 200
+    assert db_client(owner).get(f"/api/v1/cases/{case_id}/history").status_code == 200
+    assert db_client(owner).get(f"/api/v1/reports/{case_id}/contact").status_code == 200
 
 
 @requires_database
