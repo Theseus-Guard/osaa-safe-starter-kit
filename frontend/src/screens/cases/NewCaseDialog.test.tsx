@@ -132,8 +132,11 @@ describe("NewCaseDialog", () => {
     await user.click(screen.getByRole("button", { name: "Create case" }));
 
     expect(report).not.toHaveBeenCalled();
-    // The title is required, so the browser blocks the submit before the custom check runs.
-    expect(screen.getByLabelText(/^Title/)).toBeInvalid();
+    // The form has noValidate, so the message is the one the screen announces, linked to the title field.
+    const title = screen.getByLabelText(/^Title/);
+    expect(title).toBeInvalid();
+    expect(title).toHaveAccessibleDescription("Enter a title for the case.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Enter a title for the case.");
   });
 
   it("explains a local time that does not exist because of a DST change", async () => {

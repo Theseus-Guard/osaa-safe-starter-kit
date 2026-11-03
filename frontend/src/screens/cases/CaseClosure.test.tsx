@@ -47,6 +47,29 @@ describe("CaseClosure", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Enter the reason for closing the case.");
   });
 
+  it("reports an empty reason in the same message, linked to the field", async () => {
+    const user = userEvent.setup();
+    render(
+      <CaseClosure
+        caseId="case-1"
+        status="open"
+        closedAt={null}
+        closeReason={null}
+        reopenReason={null}
+        canClose
+        onChanged={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Close case" }));
+
+    expect(close).not.toHaveBeenCalled();
+    const reason = screen.getByLabelText(/^Reason/);
+    expect(reason).toBeInvalid();
+    expect(reason).toHaveAccessibleDescription("Enter the reason for closing the case.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Enter the reason for closing the case.");
+  });
+
   it("closes the case with the trimmed reason and reports the result", async () => {
     const closed = { id: "case-1", status: "closed" } as CaseDetail;
     close.mockResolvedValue(closed);
