@@ -10,6 +10,9 @@ from safe_kit import api, auth
 from safe_kit.cases import (
     BROADER_ADVISORY_CONDITION_REASON,
     CALENDAR_VERSION,
+    CONTROL_FAILURE_ANALYSIS_KIND,
+    SAFE_DEADLINE_KINDS,
+    T0_DEADLINE_KINDS,
     Case,
     calendar_for,
     create_case,
@@ -51,6 +54,14 @@ def test_calendar_takes_the_timezone_and_keeps_the_provisional_version():
     assert calendar.version == CALENDAR_VERSION == "provisional-1"
 
 
+def test_the_analysis_task_follows_t0_but_not_the_weekly_update_kinds():
+    # The weekly update document lists SAFE_DEADLINE_KINDS, which stays at the five SAFE kinds. The analysis task
+    # only joins the kinds that the resync moves with t0.
+    assert CONTROL_FAILURE_ANALYSIS_KIND not in SAFE_DEADLINE_KINDS
+    assert len(SAFE_DEADLINE_KINDS) == 5
+    assert T0_DEADLINE_KINDS == (*SAFE_DEADLINE_KINDS, CONTROL_FAILURE_ANALYSIS_KIND)
+
+
 def test_deadline_tasks_come_from_deadlines_for():
     t0 = datetime(2026, 11, 6, 9, 0, tzinfo=ZoneInfo("Europe/Istanbul"))  # Friday
     tasks = {
@@ -62,6 +73,7 @@ def test_deadline_tasks_come_from_deadlines_for():
         "preliminary_safe_report",
         "broader_advisory",
         "preliminary_public_report",
+        "preliminary_control_failure_analysis",
         "remediation_status",
     }
     assert tasks["affected_customers"].due_at == t0 + timedelta(hours=72)
@@ -79,8 +91,14 @@ def test_deadline_tasks_come_from_deadlines_for():
         "affected_customers",
         "preliminary_safe_report",
         "preliminary_public_report",
+        "preliminary_control_failure_analysis",
         "remediation_status",
     }
+    # The 30-day analysis obligation is due at the same elapsed time as the public report, weekend or not.
+    assert tasks["preliminary_control_failure_analysis"].due_at == t0 + timedelta(days=30)
+    assert tasks["preliminary_control_failure_analysis"].due_at == (
+        tasks["preliminary_public_report"].due_at
+    )
     assert all(
         task.not_applicable_reason is None
         for kind, task in tasks.items()

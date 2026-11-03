@@ -69,6 +69,7 @@ class DeadlineSet:
     preliminary_safe_report: datetime
     broader_advisory: datetime
     preliminary_public_report: datetime
+    preliminary_control_failure_analysis: datetime
     remediation_status: datetime
 
 
@@ -77,11 +78,14 @@ def deadlines_for(t0: datetime, calendar: BusinessCalendar) -> DeadlineSet:
     if t0.tzinfo is None:
         raise ValueError("t0 must be timezone-aware")
     t0 = t0.astimezone(UTC)
+    # The 30-day row of plans/01 has two parts, the preliminary public report and the preliminary control-failure
+    # analysis. Both are due at t0 + 30 elapsed days; the analysis keeps a task of its own.
     return DeadlineSet(
         affected_customers=t0 + timedelta(hours=72),
         preliminary_safe_report=calendar.add_business_days(t0, 4),
         broader_advisory=t0 + timedelta(days=14),
         preliminary_public_report=t0 + timedelta(days=30),
+        preliminary_control_failure_analysis=t0 + timedelta(days=30),
         remediation_status=t0 + timedelta(days=90),
     )
 

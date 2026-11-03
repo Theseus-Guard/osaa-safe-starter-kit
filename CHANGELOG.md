@@ -8,6 +8,9 @@ Every release entry states the **SAFE compatibility baseline**: the SAFE version
 
 Changes after 0.2.0 go here.
 
+### Added
+- Deadlines: the 30-day analysis obligation is a deadline task of its own, `preliminary_control_failure_analysis`. It is due 30 elapsed days after t0, at the same time as the preliminary public report task, so a weekend or a holiday does not move it. Each new case gets it with its other tasks, and it moves with t0 like them. It is not an external notice, so the internal incident option does not change it. Migration 0051 adds it to the cases that already exist, once per case.
+
 ### Changed
 - The default stack (`compose.yaml`) runs in production mode: `SAFE_MODE=production` for `api` and `worker`, with no demo dataset, so the sign-in page takes a username and password. The demo is an overlay: `scripts/demo.sh` starts it with `compose.demo.yaml`, which sets demo mode and the synthetic dataset for `api` and `worker`.
 
@@ -110,7 +113,6 @@ Changes after 0.2.0 go here.
 
 - Whether a weekly update moves its task's due date. Today it does not, so the task can go overdue while updates are produced on time.
 - The holiday calendar for deadlines. Today the calendar counts weekends only.
-- Whether the 30-day analysis obligation gets its own deadline task. Today it has none.
 
 ### Not yet verified
 

@@ -60,6 +60,7 @@ DEADLINE_KINDS = (
     "preliminary_safe_report",
     "broader_advisory",
     "preliminary_public_report",
+    "preliminary_control_failure_analysis",
     "remediation_status",
     "weekly_update",
 )

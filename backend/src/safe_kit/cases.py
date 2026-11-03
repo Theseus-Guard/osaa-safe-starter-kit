@@ -198,6 +198,11 @@ SAFE_DEADLINE_KINDS = (
     "preliminary_public_report",
     "remediation_status",
 )
+# The 30-day analysis obligation (plans/01, t0 + 30 days): its own task, due at t0 + 30 days like the public report.
+# It is not in SAFE_DEADLINE_KINDS, so the weekly update document keeps its five kinds.
+CONTROL_FAILURE_ANALYSIS_KIND = "preliminary_control_failure_analysis"
+# Every task whose due date follows t0. resync_deadlines moves these.
+T0_DEADLINE_KINDS = (*SAFE_DEADLINE_KINDS, CONTROL_FAILURE_ANALYSIS_KIND)
 
 
 # The 14-day broader advisory is conditional, and the case data has no field that records the condition. Until it
@@ -230,6 +235,11 @@ def deadline_tasks_for(t0: datetime, calendar: BusinessCalendar) -> list[Deadlin
         DeadlineTask(
             "preliminary_public_report", due.preliminary_public_report, "open"
         ),
+        DeadlineTask(
+            CONTROL_FAILURE_ANALYSIS_KIND,
+            due.preliminary_control_failure_analysis,
+            "open",
+        ),
         DeadlineTask("remediation_status", due.remediation_status, "open"),
     ]
 
@@ -259,7 +269,7 @@ def resync_deadlines(conn, case_id: str) -> tuple[datetime, dict[str, dict[str, 
     moved: dict[str, dict[str, str]] = {}
     stored = conn.execute(
         "SELECT id::text, kind, due_at FROM deadline_tasks WHERE case_id = %s AND NOT is_deleted AND kind = ANY(%s)",
-        (case_id, list(SAFE_DEADLINE_KINDS)),
+        (case_id, list(T0_DEADLINE_KINDS)),
     ).fetchall()
     for task_id, kind, due_at in stored:
         if due_at != expected[kind]:
