@@ -107,6 +107,11 @@ DISCLOSURE_RELEASE_REFUSED = "disclosure.release_refused"
 # identifiers, the channel, states, reason codes and the length of each free-text reason, never the text itself.
 DISCLOSURE_NOTICE_RECORD = "disclosure.notice_recorded"
 DISCLOSURE_NOTICE_STATE = "disclosure.notice_state_changed"
+# T12-A records (safe_kit.external_notice_records). An escalation is written against its own row (target_type
+# "disclosure_escalation"), a recipient or package review against its row ("disclosure_review"). Details hold identifiers,
+# the reason code, the digest and the length of each free-text field, never the text itself.
+DISCLOSURE_ESCALATION = "disclosure.notice_escalated"
+DISCLOSURE_REVIEW = "disclosure.notice_reviewed"
 SYSTEM_TIMEZONE_SET = "system.timezone_set"
 SYSTEM_TIMEZONE_CHANGED = "system.timezone_changed"
 
