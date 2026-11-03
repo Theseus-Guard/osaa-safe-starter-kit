@@ -30,6 +30,7 @@ export function CreateUserForm({ onCreated }: Props) {
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    if (busy) return;
     setError(null);
     setErrorField(null);
     setCreated(null);
@@ -147,7 +148,8 @@ export function CreateUserForm({ onCreated }: Props) {
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           )}
-          <Button type="submit" disabled={busy} className="self-start">
+          {/* Not disabled while busy: a disabled button loses focus, and the error would then leave the keyboard user nowhere. */}
+          <Button type="submit" aria-busy={busy} className="self-start">
             Create user
           </Button>
         </form>
