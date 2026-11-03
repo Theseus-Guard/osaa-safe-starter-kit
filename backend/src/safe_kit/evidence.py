@@ -30,7 +30,7 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from safe_kit import audit, tlp
-from safe_kit.cases import CaseScope, is_visible_on
+from safe_kit.cases import CaseScope, lock_visible_case
 from safe_kit.db import connect
 from safe_kit.evidence_crypto import IntegrityError, open_sealed, seal, sha256_hex
 from safe_kit.evidence_keys import KeyProvider, KeyProviderError
@@ -353,9 +353,10 @@ def _insert_pending(
 ) -> str:
     with connect() as conn:
         check(conn, idempotency)
-        # The same visibility rule as the API check, run on this connection so the check and the insert commit or
-        # roll back together. A visibility change committed before this statement is seen here.
-        if not is_visible_on(conn, case_id, scope):
+        # Lock the case row first, then check visibility, on this connection. The lock holds until this insert
+        # commits or rolls back, so a concurrent assignment or closure waits for it, and the check and the insert are
+        # serialized against it. The same visibility rule as the API check applies.
+        if lock_visible_case(conn, case_id, scope) is None:
             raise CaseNotVisible()
         row = conn.execute(
             """

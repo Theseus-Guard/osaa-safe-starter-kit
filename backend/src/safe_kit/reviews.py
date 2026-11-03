@@ -20,9 +20,9 @@ from safe_kit.cases import (
     CaseScope,
     _change,
     _is_assigned,
-    _lock_visible_case,
     _text_marker,
     is_visible_on,
+    lock_visible_case,
 )
 from safe_kit.db import connect
 from safe_kit.idempotency import (
@@ -177,7 +177,7 @@ def open_round(
                 return RoundOutcome.REPLAY, None, stored
             if found is KeyLookup.REUSED:
                 return RoundOutcome.KEY_REUSED, None, None
-        locked = _lock_visible_case(conn, case_id, scope)
+        locked = lock_visible_case(conn, case_id, scope)
         if locked is None:
             return RoundOutcome.NOT_FOUND, None, None
         if locked[0] == "closed":
@@ -266,7 +266,7 @@ def set_layer(
         if head is None:
             return RoundOutcome.NOT_FOUND, None
         case_id = head[0]
-        locked = _lock_visible_case(conn, case_id, scope)
+        locked = lock_visible_case(conn, case_id, scope)
         if locked is None:
             return RoundOutcome.NOT_FOUND, None
         if locked[0] == "closed":

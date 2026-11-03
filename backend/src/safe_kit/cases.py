@@ -366,8 +366,13 @@ def _load_tasks(conn, case_id: str) -> list[DeadlineTask]:
     ]
 
 
-def _lock_visible_case(conn, case_id: str, scope: CaseScope) -> tuple | None:
-    """Lock the case row until the transaction ends. Returns (status, closed_at, closed_by, revision) or None if not visible."""
+def lock_visible_case(conn, case_id: str, scope: CaseScope) -> tuple | None:
+    """Lock the case row until the transaction ends. Returns (status, closed_at, closed_by, revision) or None if not visible.
+
+    The lock and the visibility check are one statement. A concurrent change that commits first is seen by the check;
+    a concurrent change that waits for this transaction runs after the caller's insert. Callers that write under a
+    case (assignment, closure, evidence upload) use it so their check and their write are serialized.
+    """
     visibility, params = scope.visibility_sql()
     return conn.execute(
         f"SELECT status, closed_at, closed_by::text, revision FROM cases "
@@ -534,7 +539,7 @@ def restore_deadline(
     """
     with connect() as conn:
         check(conn, idempotency)
-        locked = _lock_visible_case(conn, case_id, scope)
+        locked = lock_visible_case(conn, case_id, scope)
         if locked is None:
             return Outcome.NOT_FOUND
         if locked[0] == "closed":
@@ -932,7 +937,7 @@ def assign_member(
     """
     with connect() as conn:
         check(conn, idempotency)
-        locked = _lock_visible_case(conn, case_id, scope)
+        locked = lock_visible_case(conn, case_id, scope)
         if locked is None:
             return Outcome.NOT_FOUND, None
         if locked[0] == "closed":
@@ -981,7 +986,7 @@ def assign_member(
 def unassign_member(case_id: str, user_id: str, scope: CaseScope) -> Outcome:
     """Soft delete the active assignment. The row is kept, so the history stays complete."""
     with connect() as conn:
-        locked = _lock_visible_case(conn, case_id, scope)
+        locked = lock_visible_case(conn, case_id, scope)
         if locked is None:
             return Outcome.NOT_FOUND
         if locked[0] == "closed":
@@ -1030,7 +1035,7 @@ def update_deadline(
     new_reason = reason if status == "not_applicable" else None
     with connect() as conn:
         check(conn, idempotency)
-        locked = _lock_visible_case(conn, case_id, scope)
+        locked = lock_visible_case(conn, case_id, scope)
         if locked is None:
             return Outcome.NOT_FOUND, None
         if locked[0] == "closed":
@@ -1093,7 +1098,7 @@ def update_case_title(
     """
     with connect() as conn:
         check(conn, idempotency)
-        locked = _lock_visible_case(conn, case_id, scope)
+        locked = lock_visible_case(conn, case_id, scope)
         if locked is None:
             return Outcome.NOT_FOUND, 0
         status, _, _, revision = locked
@@ -1136,7 +1141,7 @@ def close_case(
     """
     with connect() as conn:
         check(conn, idempotency)
-        locked = _lock_visible_case(conn, case_id, scope)
+        locked = lock_visible_case(conn, case_id, scope)
         if locked is None:
             return Outcome.NOT_FOUND, []
         if locked[0] == "closed":
@@ -1210,7 +1215,7 @@ def reopen_case(
     """
     with connect() as conn:
         check(conn, idempotency)
-        locked = _lock_visible_case(conn, case_id, scope)
+        locked = lock_visible_case(conn, case_id, scope)
         if locked is None:
             return Outcome.NOT_FOUND
         status, closed_at, closed_by, _ = locked
