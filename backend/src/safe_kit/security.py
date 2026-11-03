@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import re
 import secrets
 import uuid
 from collections.abc import Iterable
@@ -111,6 +112,14 @@ def new_refresh_token() -> str:
 def new_csrf_token() -> str:
     """Random value of the CSRF cookie. The page reads it and sends it back in the X-CSRF-Token header."""
     return secrets.token_urlsafe(32)
+
+
+_CSRF_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{43}")
+
+
+def is_csrf_token(value: str | None) -> bool:
+    """True when a value has the shape new_csrf_token() produces: 32 random bytes, URL-safe base64, 43 characters."""
+    return value is not None and _CSRF_TOKEN_PATTERN.fullmatch(value) is not None
 
 
 def hash_refresh_token(token: str) -> str:

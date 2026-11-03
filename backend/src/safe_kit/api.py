@@ -124,6 +124,7 @@ from safe_kit.security import (
     access_token_ttl,
     decode_access_token,
     issue_access_token,
+    is_csrf_token,
     new_csrf_token,
     verify_password,
 )
@@ -754,13 +755,11 @@ def refresh(
     if user is None or not user.is_active:
         raise INVALID_CREDENTIALS
     tokens = _issue_tokens(user, new_refresh_token)
-    # The CSRF value stays the same across a refresh, so requests already in flight with it still pass.
-    set_session_cookies(
-        response,
-        tokens.access_token,
-        tokens.refresh_token,
-        request.cookies.get(CSRF_COOKIE) or new_csrf_token(),
-    )
+    # The CSRF value stays the same across a refresh, so requests already in flight with it still pass. Only a value
+    # of the expected shape is kept; anything else is replaced by a new token.
+    existing_csrf = request.cookies.get(CSRF_COOKIE)
+    csrf_value = existing_csrf if is_csrf_token(existing_csrf) else new_csrf_token()
+    set_session_cookies(response, tokens.access_token, tokens.refresh_token, csrf_value)
     return tokens
 
 
