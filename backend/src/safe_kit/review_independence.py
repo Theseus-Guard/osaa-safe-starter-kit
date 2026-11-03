@@ -30,9 +30,9 @@ from safe_kit import audit
 from safe_kit.cases import (
     CaseScope,
     _is_assigned,
-    _lock_visible_case,
     _text_marker,
     is_visible_on,
+    lock_visible_case,
 )
 from safe_kit.db import connect
 from safe_kit.idempotency import (
@@ -272,7 +272,7 @@ def declare_conflict(
         case_id = _visible_round_case(conn, round_id, scope)
         if case_id is None:
             return IndependenceOutcome.NOT_FOUND, None, None
-        locked = _lock_visible_case(conn, case_id, scope)
+        locked = lock_visible_case(conn, case_id, scope)
         if locked is None:
             return IndependenceOutcome.NOT_FOUND, None, None
         if locked[0] == "closed":
@@ -351,7 +351,7 @@ def record_recusal(
         case_id = _visible_round_case(conn, round_id, scope)
         if case_id is None:
             return IndependenceOutcome.NOT_FOUND, None, None
-        locked = _lock_visible_case(conn, case_id, scope)
+        locked = lock_visible_case(conn, case_id, scope)
         if locked is None:
             return IndependenceOutcome.NOT_FOUND, None, None
         if locked[0] == "closed":
@@ -468,7 +468,7 @@ def file_appeal(
         if case_id is None:
             return IndependenceOutcome.NOT_FOUND, None, None
         # Locks the case so the eligibility checks and the choice see the state that the insert commits against.
-        if _lock_visible_case(conn, case_id, scope) is None:
+        if lock_visible_case(conn, case_id, scope) is None:
             return IndependenceOutcome.NOT_FOUND, None, None
         independent_reviewer_id = _choose_independent_reviewer(
             conn, round_id, case_id, scope.user_id
