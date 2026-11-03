@@ -191,7 +191,7 @@ def test_expand_pair_0049_0050_keeps_rows_and_current_reads_work(server, tmp_pat
     ids = seed_previous_release()
     before = snapshot()
 
-    assert server.migrate(MIGRATIONS) == 0
+    assert server.migrate(migrations_up_to(50, tmp_path / "head-50")) == 0
 
     # No row is lost or changed by the expand step.
     assert snapshot() == before
@@ -211,7 +211,7 @@ def test_expand_pair_0049_0050_keeps_rows_and_current_reads_work(server, tmp_pat
 
     # The current read paths work on the migrated rows.
     scope = CaseScope(user_id=ids["triager"], read_all=True)
-    listed = {user.username: user for user in users.list_users(limit=100, offset=0)}
+    listed = {user.username: user for user in users.list_users(limit=100)}
     assert listed["rehearsal-triager"].revision == 1
     duties = case_records.list_legal_duties(ids["case"], scope)
     assert duties is not None
@@ -370,5 +370,5 @@ def test_rollback_is_a_restore_of_the_pre_migration_copy(server, tmp_path):
     assert descriptions == ["Rehearsal duty"]
 
     # Roll forward again on the restored copy.
-    assert server.migrate(MIGRATIONS) == 0
+    assert server.migrate(migrations_up_to(50, tmp_path / "head-50")) == 0
     assert snapshot() == before
