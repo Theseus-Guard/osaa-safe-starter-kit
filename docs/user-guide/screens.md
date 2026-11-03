@@ -135,8 +135,6 @@ Audited: `catalog.entry_created`, `catalog.entry_versioned`, `catalog.entry_corr
 
 ## Users
 
-![Users as the administrator sees it](images/admin-users.png)
-
 Admin only.
 
 - **User list**: Username, Must change password, Status (Active or Disabled) and a Protected badge for protected accounts.
