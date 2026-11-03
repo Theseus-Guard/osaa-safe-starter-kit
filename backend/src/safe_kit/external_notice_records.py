@@ -1,18 +1,24 @@
 """The T12-A records of an external notice (F3, work package A8; plans/03 T12-A; plans/02 disclosure flow; plans/01 roles 5).
 
 Three records, each about one disclosure version of a case:
-- Escalation: the named approver cannot send an urgent notice (unreachable, or in a conflict of interest). An independent
-  backup who holds disclosures:approve is named, with the authority basis, the missing facts and the next update. The
-  escalation changes no deadline task: the deadline keeps running (plans/02: "deadline durmaz").
-- Recipient review: a review of the selected recipient, bound to the version digest.
+- Escalation: the named approver cannot send an urgent notice (unreachable, or in a conflict of interest). The preparer of
+  the version opens it, and names one backup from the case's backup pool (safe_kit.external_notice_backup), with the
+  authority basis, the missing facts and the next update. The escalation changes no deadline task: the deadline keeps
+  running (plans/02: "deadline durmaz"). It also records when the backup may first act (backup_may_act_at).
+- Recipient review: a review of the selected recipient, bound to the version digest. It is accepted only when the
+  recipient it names is the recipient the approval confirmed (owner decision 2026-11-03). A different recipient, or an
+  approval with no recipient reference, is refused, and the approval must be taken again.
 - Package review: a review of the package, bound to the version digest.
 
 Rules:
 - The case must be visible to the caller and open. A closed case refuses new records (the same rule as notices).
 - The version must belong to the case.
-- The person who prepared the version may not name themselves as the backup (independence, plans/02: the approver and the
-  preparer differ) and may not review their own version.
-- The backup must be an active user who holds disclosures:approve. That is the only approval authority the system defines.
+- Escalation: only the person who prepared the version may open it (NOT_PREPARER). That person may not name themselves as
+  the backup, and the primary approver (the one who approved the version) may not be the backup. The backup must be
+  in the case's backup pool, an active user who holds disclosures:approve. That is the only approval authority the
+  system defines.
+- Recipient and package review: the reviewer may not have prepared the version. A recipient review needs an approval of
+  the version, and it must name the approved recipient reference.
 - Free text (authority basis, missing facts, next update) is kept in the rows and is never written to the audit log: the
   audit log keeps lengths only. Every record writes one audit row in the same transaction.
 - Records are insert-only (migration 0053). No record is ever deleted or edited; a corrected fact is a new record.
@@ -28,14 +34,15 @@ from enum import Enum
 from typing import Any
 
 from safe_kit import audit, auth, cases, disclosure
+from safe_kit import external_notice_backup as backup
 from safe_kit.cases import CaseScope
 from safe_kit.db import connect
+from safe_kit.external_notice_backup import BACKUP_PERMISSION
 from safe_kit.idempotency import KeyReused, KeyScope, Replayed, check, remember
 
 ESCALATION_REASONS = ("unreachable", "conflict_of_interest")
 REVIEW_KINDS = ("recipient", "package")
 TEXT_LIMIT = 500
-BACKUP_PERMISSION = "disclosures:approve"
 
 
 class Outcome(Enum):
@@ -46,13 +53,23 @@ class Outcome(Enum):
     NOT_FOUND = "not_found"
     VERSION_NOT_FOUND = "version_not_found"
     CLOSED = "closed"
+    # Only the person who prepared the version may open an escalation of it (owner decision 2026-11-03).
+    NOT_PREPARER = "not_preparer"
     # The backup named for an escalation prepared the version.
     PREPARER_IS_BACKUP = "preparer_cannot_be_backup"
+    # The backup is the primary approver, who approved the version and cannot send it as the backup.
+    PRIMARY_APPROVER_IS_BACKUP = "primary_approver_cannot_be_backup"
     BACKUP_NOT_FOUND = "backup_not_found"
     # The backup does not hold disclosures:approve.
     BACKUP_NOT_APPROVER = "backup_not_approver"
+    # The backup is not in the case's backup pool (owner assignment, safe_kit.external_notice_backup).
+    BACKUP_NOT_IN_POOL = "backup_not_in_pool"
     # The reviewer prepared the version.
     PREPARER_IS_REVIEWER = "preparer_cannot_review"
+    # A recipient review needs an approval of the version.
+    NOT_APPROVED = "version_not_approved"
+    # A recipient review names a recipient other than the one the approval confirmed (or the approval has none).
+    RECIPIENT_MISMATCH = "recipient_mismatch"
 
 
 @dataclass(frozen=True)
@@ -84,6 +101,8 @@ class Escalation:
     backup_user_id: str
     escalated_by: str
     escalated_at: datetime
+    # The first moment the backup may decide (escalated_at plus the setting backup_wait_hours at the time of opening).
+    backup_may_act_at: datetime
 
 
 @dataclass(frozen=True)
@@ -102,7 +121,7 @@ class Review:
 
 _ESCALATION_COLUMNS = (
     "id::text, case_id::text, package_id::text, version_id::text, reason_code, authority_basis, missing_facts, "
-    "next_update, backup_user_id::text, escalated_by::text, escalated_at"
+    "next_update, backup_user_id::text, escalated_by::text, escalated_at, backup_may_act_at"
 )
 _REVIEW_COLUMNS = (
     "id::text, review_kind, case_id::text, package_id::text, version_id::text, version, digest, recipient_ref, "
@@ -147,8 +166,15 @@ def record_escalation(
             version = disclosure.load_version_on(conn, case_id, version_id)
             if version is None:
                 return Result(Outcome.VERSION_NOT_FOUND)
+            if version.created_by != scope.user_id:
+                return Result(Outcome.NOT_PREPARER)
             if new.backup_user_id == version.created_by:
                 return Result(Outcome.PREPARER_IS_BACKUP)
+            if (
+                version.approval is not None
+                and new.backup_user_id == version.approval.approved_by
+            ):
+                return Result(Outcome.PRIMARY_APPROVER_IS_BACKUP)
             role_row = conn.execute(
                 "SELECT role FROM users WHERE id = %s AND NOT is_deleted",
                 (new.backup_user_id,),
@@ -157,14 +183,18 @@ def record_escalation(
                 return Result(Outcome.BACKUP_NOT_FOUND)
             if BACKUP_PERMISSION not in auth.permissions_for_role(role_row[0]):
                 return Result(Outcome.BACKUP_NOT_APPROVER)
+            if not backup.is_backup(conn, case_id, new.backup_user_id):
+                return Result(Outcome.BACKUP_NOT_IN_POOL)
             escalation_id = str(uuid.uuid4())
+            # The waiting time is copied from the setting now, so a later change does not move this escalation.
+            hours = backup.wait_hours(conn)
             row = conn.execute(
                 f"""
                 INSERT INTO external_notice_escalations (
                     id, case_id, package_id, version_id, reason_code, authority_basis, missing_facts, next_update,
-                    backup_user_id, escalated_by, escalated_at
+                    backup_user_id, escalated_by, escalated_at, backup_may_act_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now() + make_interval(hours => %s))
                 RETURNING {_ESCALATION_COLUMNS}
                 """,
                 (
@@ -178,6 +208,7 @@ def record_escalation(
                     new.next_update,
                     new.backup_user_id,
                     scope.user_id,
+                    hours,
                 ),
             ).fetchone()
             created = _escalation_from_row(row)
@@ -233,6 +264,13 @@ def record_review(
                 return Result(Outcome.VERSION_NOT_FOUND)
             if version.created_by == scope.user_id:
                 return Result(Outcome.PREPARER_IS_REVIEWER)
+            if review_kind == "recipient":
+                # Owner decision 2026-11-03: the reviewed recipient must be the approved recipient. A different one is not
+                # accepted, and the approval must be taken again. Nothing is stored for a refused review.
+                if version.approval is None:
+                    return Result(Outcome.NOT_APPROVED)
+                if version.approval.recipient_ref != recipient_ref:
+                    return Result(Outcome.RECIPIENT_MISMATCH)
             review_id = str(uuid.uuid4())
             row = conn.execute(
                 f"""

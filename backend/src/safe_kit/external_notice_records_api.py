@@ -1,7 +1,7 @@
 """T12-A record endpoints of a disclosure version (F3 A8; safe_kit.external_notice_records; plans/03 T12-A).
 
 Routes (under the case and the version, which must belong to it):
-- POST   .../disclosures/{version_id}/escalations          record an escalation to an independent backup (201)
+- POST   .../disclosures/{version_id}/escalations          record an escalation to a backup of the case pool (201)
 - GET    .../disclosures/{version_id}/escalations          the escalations of the version, newest first
 - POST   .../disclosures/{version_id}/reviews/recipient   record a review of the recipient (201)
 - POST   .../disclosures/{version_id}/reviews/package     record a review of the package (201)
@@ -10,10 +10,14 @@ Routes (under the case and the version, which must belong to it):
 Access rules:
 - Reads need disclosures:read. The case must be visible to the caller (cases.is_visible) and the version must belong to it;
   otherwise the answer is 404, the same as a missing one.
-- An escalation may be recorded by a holder of disclosures:approve or disclosures:prepare. The backup named in it must hold
-  disclosures:approve and must not be the person who prepared the version. A backup who breaks either rule is refused
-  (403 preparer_cannot_be_backup, 422 backup_not_approver or backup_not_found).
-- A review needs disclosures:approve, and the reviewer may not be the person who prepared the version.
+- An escalation needs disclosures:prepare, and only the person who prepared the version may open it (403 not_preparer,
+  owner decision 2026-11-03). The backup named in it must hold disclosures:approve, must be in the case's backup pool
+  (safe_kit.external_notice_backup), must not be the person who prepared the version, and must not be the primary
+  approver. A backup who breaks a rule is refused (403 preparer_cannot_be_backup or primary_approver_cannot_be_backup,
+  422 backup_not_approver, backup_not_found or backup_not_in_pool).
+- A review needs disclosures:approve, and the reviewer may not be the person who prepared the version. A recipient review
+  names the recipient reference of the approval: the version needs an approval (409 version_not_approved), and a
+  different reference, or none, is refused (422 recipient_mismatch) and nothing is stored.
 - Every POST needs an Idempotency-Key. A repeated request with the same key and body returns the first answer and writes
   nothing.
 
@@ -29,7 +33,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from safe_kit import cases, disclosure, external_notice_records as records
-from safe_kit.auth import permissions_of, require_any_permission, require_permission
+from safe_kit.auth import permissions_of, require_permission
 from safe_kit.cases import CaseScope
 from safe_kit.external_notice_records import Escalation, Outcome, Result, Review
 from safe_kit.external_notices import RECIPIENT_REF_PATTERN
@@ -46,8 +50,6 @@ PACKAGE_REVIEW_ROUTE = (
 )
 DEFAULT_PAGE = 50
 MAX_PAGE = 200
-
-ESCALATE_PERMISSIONS = ("disclosures:approve", "disclosures:prepare")
 
 record_router = APIRouter(tags=["disclosure"])
 
@@ -105,6 +107,7 @@ def _escalation_view(escalation: Escalation) -> dict[str, Any]:
         "backup_user_id": escalation.backup_user_id,
         "escalated_by": escalation.escalated_by,
         "escalated_at": _iso(escalation.escalated_at),
+        "backup_may_act_at": _iso(escalation.backup_may_act_at),
     }
 
 
@@ -128,10 +131,18 @@ _REFUSALS: dict[Outcome, tuple[int, dict[str, Any] | str]] = {
     Outcome.NOT_FOUND: (404, "case not found"),
     Outcome.VERSION_NOT_FOUND: (404, "disclosure version not found"),
     Outcome.CLOSED: (409, {"status": "case_closed"}),
+    Outcome.NOT_PREPARER: (403, {"status": "not_preparer"}),
     Outcome.PREPARER_IS_BACKUP: (403, {"status": "preparer_cannot_be_backup"}),
+    Outcome.PRIMARY_APPROVER_IS_BACKUP: (
+        403,
+        {"status": "primary_approver_cannot_be_backup"},
+    ),
     Outcome.BACKUP_NOT_FOUND: (422, {"status": "backup_not_found"}),
     Outcome.BACKUP_NOT_APPROVER: (422, {"status": "backup_not_approver"}),
+    Outcome.BACKUP_NOT_IN_POOL: (422, {"status": "backup_not_in_pool"}),
     Outcome.PREPARER_IS_REVIEWER: (403, {"status": "preparer_cannot_review"}),
+    Outcome.NOT_APPROVED: (409, {"status": "version_not_approved"}),
+    Outcome.RECIPIENT_MISMATCH: (422, {"status": "recipient_mismatch"}),
 }
 
 
@@ -173,7 +184,7 @@ def record_escalation(
     case_id: uuid.UUID,
     version_id: uuid.UUID,
     body: EscalationCreate,
-    actor: User = Depends(require_any_permission(*ESCALATE_PERMISSIONS)),
+    actor: User = Depends(require_permission("disclosures:prepare")),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> Any:
     path = ESCALATIONS_ROUTE.format(case_id=case_id, version_id=version_id)

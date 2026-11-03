@@ -2117,4 +2117,10 @@ from safe_kit.external_notice_records_api import record_router  # noqa: E402
 
 app.include_router(record_router)
 
+# The backup approver of an external notice: the owner's backup pool, the backup's narrow read and decision (see
+# safe_kit.external_notice_backup_api).
+from safe_kit.external_notice_backup_api import backup_router  # noqa: E402
+
+app.include_router(backup_router)
+
 app.include_router(profile_router)

@@ -1,11 +1,13 @@
 """F3 A8 fixture for the T12-A records of an external notice (plans/03 T12-A; plans/02 disclosure flow; plans/01 roles 5).
 
-- Escalation: a reason (unreachable or conflict_of_interest), the authority basis, the missing facts, the next update and an
-  independent backup who holds disclosures:approve. The backup may not be the preparer. The escalation changes no deadline
-  task. Free text is audited by length only.
-- Recipient review and package review: a review bound to the version digest. The reviewer may not have prepared the
-  version, and the review needs disclosures:approve. A recipient review names the recipient by its identifier; a package
-  review names none.
+- Escalation (owner decisions 2026-11-03): only the person who prepared the version opens it. The backup is one of the
+  case's backups (the owner's pool, see test_fixture_a6_backup.py), holds disclosures:approve, is not the preparer and is
+  not the primary approver. The escalation records the reason, the authority basis, the missing facts, the next update,
+  the backup, and the first moment the backup may act (the waiting time). It changes no deadline task. Free text is
+  audited by length only.
+- Recipient review: accepted only for the recipient reference the approval confirmed. A different reference, or an
+  unapproved version, is refused and nothing is stored. The reviewer may not have prepared the version, and the review
+  needs disclosures:approve. A package review names no recipient.
 - Shared: a closed case refuses the records, the rows are insert-only, the database keeps the shape of each row, a repeated
   request with the same key writes nothing, and reads need disclosures:read.
 
@@ -17,6 +19,7 @@ and the SAFE_DB_* settings (scripts/test-backend.sh --db).
 # redefinition. That is the intended use here.
 # ruff: noqa: F401, F811
 import uuid
+from datetime import datetime, timedelta
 
 import psycopg
 import pydantic
@@ -32,18 +35,20 @@ from safe_kit.external_notice_records_api import (
 from test_evidence import db_user, request_as
 from test_evidence_lifecycle import provider, requires_database  # provider: fixture
 from test_fixture_p6_disclosure import (  # dworld: fixture
+    approve,
     case_url,
     dworld,
     first_version,
     grant,
 )
 from test_fixture_t06a_redaction import world  # world: fixture
-from test_fixture_t12_notices import with_independent_triager
+from test_fixture_t12_notices import approved_version, with_independent_triager
 
 TEXT_LIMIT = 500
 AUTHORITY = "Backup approver named in the incident response rota for this case"
 MISSING = "The member's security contact is not yet confirmed by the owner"
 NEXT = "A written update follows by the end of the same working day"
+POOL_ASSIGN = "disclosures:assign_backup"
 
 
 def escalation_values(backup: str, **changes) -> dict:
@@ -66,6 +71,10 @@ def reviews_url(dw, version_id: str, suffix: str = "") -> str:
     return case_url(dw, f"/{version_id}/reviews{suffix}")
 
 
+def pool_url(dw) -> str:
+    return f"/api/v1/cases/{dw['case_id']}/notice-backups"
+
+
 def escalate(dw, who: str, version_id: str, values: dict, key: str | None = None):
     return request_as(
         dw["people"][who],
@@ -84,6 +93,22 @@ def review(dw, who: str, version_id: str, kind: str, values: dict | None = None)
         json={} if values is None else values,
         headers={"Idempotency-Key": uuid.uuid4().hex},
     )
+
+
+def with_pool(dw, monkeypatch, members: list[str] | None = None) -> dict:
+    """The owner (the triager, for this test only) sets a pool of two disclosure approvers for the case, unless members
+    are given. Returns the world with the pool under people["backup_a"] and people["backup_b"], or the given members."""
+    grant(monkeypatch, "triager", POOL_ASSIGN)
+    if members is None:
+        members = [db_user("disclosure_approver"), db_user("disclosure_approver")]
+    response = request_as(
+        dw["people"]["triager"],
+        "put",
+        pool_url(dw),
+        json={"backup_user_ids": members},
+    )
+    assert response.status_code == 200, response.text
+    return {**dw, "backups": list(members)}
 
 
 def count_rows(table: str, version_id: str) -> int:
@@ -119,6 +144,21 @@ def close_case(dw) -> None:
         conn.execute(
             "UPDATE cases SET status = 'closed', closed_at = now(), closed_by = %s, close_reason = 'done' WHERE id = %s",
             (dw["people"]["triager"], dw["case_id"]),
+        )
+
+
+def waiting_hours() -> int:
+    with connect() as conn:
+        return conn.execute(
+            "SELECT value FROM external_notice_settings WHERE key = 'backup_wait_hours' AND NOT is_deleted"
+        ).fetchone()[0]
+
+
+def set_waiting_hours(hours: int) -> None:
+    with connect() as conn:
+        conn.execute(
+            "UPDATE external_notice_settings SET value = %s WHERE key = 'backup_wait_hours'",
+            (hours,),
         )
 
 
@@ -177,12 +217,12 @@ def test_a_package_review_names_no_recipient():
 
 @requires_database
 def test_an_escalation_names_the_reason_the_authority_the_missing_facts_the_next_update_and_the_backup(
-    dworld,
+    dworld, monkeypatch
 ):
-    dw = with_independent_triager(dworld)
+    dw = with_pool(dworld, monkeypatch)
     version, _ = first_version(dw)
-    backup = db_user("disclosure_approver")
-    response = escalate(dw, "independent", version["id"], escalation_values(backup))
+    backup = dw["backups"][0]
+    response = escalate(dw, "triager", version["id"], escalation_values(backup))
     assert response.status_code == 201, response.text
     created = response.json()
     assert created["reason_code"] == "unreachable"
@@ -190,7 +230,7 @@ def test_an_escalation_names_the_reason_the_authority_the_missing_facts_the_next
     assert created["missing_facts"] == MISSING
     assert created["next_update"] == NEXT
     assert created["backup_user_id"] == backup
-    assert created["escalated_by"] == dw["people"]["independent"]
+    assert created["escalated_by"] == dw["people"]["triager"]
     assert created["case_id"] == dw["case_id"]
     assert created["version_id"] == version["id"]
 
@@ -202,30 +242,78 @@ def test_an_escalation_names_the_reason_the_authority_the_missing_facts_the_next
 
 
 @requires_database
-def test_an_escalation_changes_no_deadline_task(dworld):
-    dw = with_independent_triager(dworld)
+def test_an_escalation_stores_the_waiting_time_from_the_setting(dworld, monkeypatch):
+    dw = with_pool(dworld, monkeypatch)
+    version, _ = first_version(dw)
+    default = escalate(
+        dw, "triager", version["id"], escalation_values(dw["backups"][0])
+    )
+    assert default.status_code == 201, default.text
+    opened = datetime.fromisoformat(default.json()["escalated_at"])
+    may_act = datetime.fromisoformat(default.json()["backup_may_act_at"])
+    assert may_act - opened == timedelta(hours=4)
+
+    # A later change of the setting does not move an escalation that is already open; a new one takes the new value.
+    try:
+        set_waiting_hours(2)
+        newer = escalate(
+            dw, "triager", version["id"], escalation_values(dw["backups"][1])
+        )
+        assert newer.status_code == 201, newer.text
+        later_open = datetime.fromisoformat(newer.json()["escalated_at"])
+        later_may_act = datetime.fromisoformat(newer.json()["backup_may_act_at"])
+        assert later_may_act - later_open == timedelta(hours=2)
+    finally:
+        set_waiting_hours(4)
+    assert waiting_hours() == 4
+
+
+@requires_database
+def test_an_escalation_changes_no_deadline_task(dworld, monkeypatch):
+    dw = with_pool(dworld, monkeypatch)
     version, _ = first_version(dw)
     before = deadline_snapshot(dw["case_id"])
     response = escalate(
         dw,
-        "independent",
+        "triager",
         version["id"],
-        escalation_values(
-            db_user("disclosure_approver"), reason_code="conflict_of_interest"
-        ),
+        escalation_values(dw["backups"][0], reason_code="conflict_of_interest"),
     )
     assert response.status_code == 201, response.text
     assert deadline_snapshot(dw["case_id"]) == before
 
 
 @requires_database
-def test_the_person_who_prepared_the_version_cannot_name_themselves_as_backup(dworld):
-    version, _ = first_version(dworld)
+def test_only_the_person_who_prepared_the_version_may_open_an_escalation(
+    dworld, monkeypatch
+):
+    dw = with_pool(with_independent_triager(dworld), monkeypatch)
+    version, _ = first_version(dw)
+    # Another triager who did not prepare the version holds disclosures:prepare but is not the preparer.
+    other = escalate(
+        dw, "independent", version["id"], escalation_values(dw["backups"][0])
+    )
+    assert other.status_code == 403, other.text
+    assert other.json()["detail"] == {"status": "not_preparer"}
+    # An approver (no disclosures:prepare) is refused by the route itself.
+    approver = escalate(
+        dw, "approver", version["id"], escalation_values(dw["backups"][0])
+    )
+    assert approver.status_code == 403, approver.text
+    assert count_rows("external_notice_escalations", version["id"]) == 0
+
+
+@requires_database
+def test_the_person_who_prepared_the_version_cannot_name_themselves_as_backup(
+    dworld, monkeypatch
+):
+    dw = with_pool(dworld, monkeypatch)
+    version, _ = first_version(dw)
     response = escalate(
-        dworld,
+        dw,
         "triager",
         version["id"],
-        escalation_values(dworld["people"]["triager"]),
+        escalation_values(dw["people"]["triager"]),
     )
     assert response.status_code == 403, response.text
     assert response.json()["detail"] == {"status": "preparer_cannot_be_backup"}
@@ -233,16 +321,46 @@ def test_the_person_who_prepared_the_version_cannot_name_themselves_as_backup(dw
 
 
 @requires_database
-def test_the_backup_must_hold_disclosures_approve_and_must_exist(dworld):
-    dw = with_independent_triager(dworld)
+def test_the_primary_approver_of_the_version_cannot_be_the_backup(dworld, monkeypatch):
+    approved, _ = approved_version(dworld)
+    dw = with_pool(
+        dworld,
+        monkeypatch,
+        members=[dworld["people"]["approver"], db_user("disclosure_approver")],
+    )
+    response = escalate(
+        dw,
+        "triager",
+        approved["id"],
+        escalation_values(dw["people"]["approver"]),
+    )
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"] == {"status": "primary_approver_cannot_be_backup"}
+    assert count_rows("external_notice_escalations", approved["id"]) == 0
+
+
+@requires_database
+def test_the_backup_must_be_in_the_case_pool(dworld, monkeypatch):
+    dw = with_pool(dworld, monkeypatch)
+    version, _ = first_version(dw)
+    outside = db_user("disclosure_approver")
+    response = escalate(dw, "triager", version["id"], escalation_values(outside))
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == {"status": "backup_not_in_pool"}
+    assert count_rows("external_notice_escalations", version["id"]) == 0
+
+
+@requires_database
+def test_the_backup_must_hold_disclosures_approve_and_must_exist(dworld, monkeypatch):
+    dw = with_pool(dworld, monkeypatch)
     version, _ = first_version(dw)
     no_approve = escalate(
-        dw, "independent", version["id"], escalation_values(db_user("investigator"))
+        dw, "triager", version["id"], escalation_values(db_user("investigator"))
     )
     assert no_approve.status_code == 422, no_approve.text
     assert no_approve.json()["detail"] == {"status": "backup_not_approver"}
     missing = escalate(
-        dw, "independent", version["id"], escalation_values(str(uuid.uuid4()))
+        dw, "triager", version["id"], escalation_values(str(uuid.uuid4()))
     )
     assert missing.status_code == 422, missing.text
     assert missing.json()["detail"] == {"status": "backup_not_found"}
@@ -264,15 +382,15 @@ def test_roles_without_prepare_or_approve_cannot_escalate(dworld):
 
 
 @requires_database
-def test_a_closed_case_refuses_escalations_and_reviews(dworld):
-    dw = with_independent_triager(dworld)
+def test_a_closed_case_refuses_escalations_and_reviews(dworld, monkeypatch):
+    dw = with_pool(dworld, monkeypatch)
     version, _ = first_version(dw)
     close_case(dw)
     escalation = escalate(
         dw,
-        "independent",
+        "triager",
         version["id"],
-        escalation_values(db_user("disclosure_approver")),
+        escalation_values(dw["backups"][0]),
     )
     assert escalation.status_code == 409
     assert escalation.json()["detail"] == {"status": "case_closed"}
@@ -298,14 +416,16 @@ def test_an_unknown_version_is_missing_for_an_escalation(dworld):
 
 
 @requires_database
-def test_an_escalation_is_audited_with_identifiers_and_lengths_but_no_free_text(dworld):
-    dw = with_independent_triager(dworld)
+def test_an_escalation_is_audited_with_identifiers_and_lengths_but_no_free_text(
+    dworld, monkeypatch
+):
+    dw = with_pool(dworld, monkeypatch)
     version, _ = first_version(dw)
     response = escalate(
         dw,
-        "independent",
+        "triager",
         version["id"],
-        escalation_values(db_user("disclosure_approver")),
+        escalation_values(dw["backups"][0]),
     )
     assert response.status_code == 201, response.text
     rows = audit_rows("disclosure_escalation", response.json()["id"])
@@ -318,14 +438,14 @@ def test_an_escalation_is_audited_with_identifiers_and_lengths_but_no_free_text(
 
 
 @requires_database
-def test_an_escalation_row_is_insert_only(dworld):
-    dw = with_independent_triager(dworld)
+def test_an_escalation_row_is_insert_only(dworld, monkeypatch):
+    dw = with_pool(dworld, monkeypatch)
     version, _ = first_version(dw)
     response = escalate(
         dw,
-        "independent",
+        "triager",
         version["id"],
-        escalation_values(db_user("disclosure_approver")),
+        escalation_values(dw["backups"][0]),
     )
     assert response.status_code == 201, response.text
     with pytest.raises(psycopg.Error):
@@ -339,21 +459,21 @@ def test_an_escalation_row_is_insert_only(dworld):
 
 @requires_database
 def test_a_repeated_escalation_with_the_same_key_returns_the_first_answer_and_writes_nothing(
-    dworld,
+    dworld, monkeypatch
 ):
-    dw = with_independent_triager(dworld)
+    dw = with_pool(dworld, monkeypatch)
     version, _ = first_version(dw)
-    values = escalation_values(db_user("disclosure_approver"))
+    values = escalation_values(dw["backups"][0])
     key = uuid.uuid4().hex
-    first = escalate(dw, "independent", version["id"], values, key=key)
-    again = escalate(dw, "independent", version["id"], values, key=key)
+    first = escalate(dw, "triager", version["id"], values, key=key)
+    again = escalate(dw, "triager", version["id"], values, key=key)
     assert first.status_code == 201, first.text
     assert again.status_code == 201
     assert again.json() == first.json()
     assert count_rows("external_notice_escalations", version["id"]) == 1
     other = escalate(
         dw,
-        "independent",
+        "triager",
         version["id"],
         escalation_values(values["backup_user_id"], reason_code="conflict_of_interest"),
         key=key,
@@ -377,10 +497,10 @@ def test_the_escalation_read_needs_disclosures_read(dworld):
 
 
 @requires_database
-def test_a_recipient_review_binds_the_recipient_reference_and_the_version_digest(
+def test_a_recipient_review_binds_the_approved_recipient_reference_and_the_version_digest(
     dworld,
 ):
-    version, _ = first_version(dworld)
+    version, _ = approved_version(dworld)
     response = review(
         dworld, "approver", version["id"], "recipient", {"recipient_ref": "cert-07"}
     )
@@ -391,6 +511,30 @@ def test_a_recipient_review_binds_the_recipient_reference_and_the_version_digest
     assert created["digest"] == version["digest"]
     assert created["version"] == version["version"]
     assert created["reviewed_by"] == dworld["people"]["approver"]
+
+
+@requires_database
+def test_a_recipient_review_of_another_recipient_is_not_accepted_and_stores_nothing(
+    dworld,
+):
+    version, _ = approved_version(dworld)
+    response = review(
+        dworld, "approver", version["id"], "recipient", {"recipient_ref": "cert-08"}
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == {"status": "recipient_mismatch"}
+    assert count_rows("external_notice_reviews", version["id"]) == 0
+
+
+@requires_database
+def test_a_recipient_review_needs_an_approval_of_the_version(dworld):
+    version, _ = first_version(dworld)
+    response = review(
+        dworld, "approver", version["id"], "recipient", {"recipient_ref": "cert-07"}
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == {"status": "version_not_approved"}
+    assert count_rows("external_notice_reviews", version["id"]) == 0
 
 
 @requires_database
@@ -439,7 +583,7 @@ def test_roles_without_approve_cannot_review_and_without_read_cannot_list(dworld
 
 @requires_database
 def test_the_reviews_are_listed_newest_first_and_can_be_filtered_by_kind(dworld):
-    version, _ = first_version(dworld)
+    version, _ = approved_version(dworld)
     recipient = review(
         dworld, "approver", version["id"], "recipient", {"recipient_ref": "cert-07"}
     )
@@ -489,7 +633,7 @@ def test_a_review_row_is_insert_only_and_the_database_keeps_the_recipient_rule(d
 
 @requires_database
 def test_a_review_is_audited_with_identifiers_and_the_digest_only(dworld):
-    version, _ = first_version(dworld)
+    version, _ = approved_version(dworld)
     response = review(
         dworld, "approver", version["id"], "recipient", {"recipient_ref": "cert-07"}
     )
