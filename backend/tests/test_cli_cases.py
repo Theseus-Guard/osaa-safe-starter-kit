@@ -25,6 +25,7 @@ CASE_BODY = {
     "status": "open",
     "calendar_version": "2026.1",
     "created_at": "2026-10-31T10:00:00Z",
+    "revision": 3,
     "deadlines": [
         {
             "kind": "initial_notice",
@@ -3361,3 +3362,196 @@ def test_catalog_export_to_an_unwritable_path_is_a_usage_error(api, capsys, tmp_
 
     assert code == 2
     assert "cannot write" in err
+
+
+# --- title update ---
+
+TITLE_PATH = f"/api/v1/cases/{CASE_ID}"
+
+
+def title_update_without_revision(*extra: str) -> tuple[str, ...]:
+    return (
+        "case",
+        "title",
+        "update",
+        CASE_ID,
+        "--username",
+        "alice",
+        *extra,
+    )
+
+
+def test_title_update_without_a_revision_reads_the_current_one_and_sends_it(
+    api, capsys
+):
+    api.route("GET", TITLE_PATH, body=CASE_BODY)
+    api.route("PATCH", TITLE_PATH, body={**CASE_BODY, "title": "New title"})
+    code, out, err = run(
+        capsys, *title_update_without_revision("--title", "  New title  ")
+    )
+    assert code == 0, err
+    assert out.startswith("Case title updated.")
+    assert "New title" in out
+    assert api.paths() == [
+        ("POST", "/api/v1/auth/token"),
+        ("GET", TITLE_PATH),
+        ("PATCH", TITLE_PATH),
+        ("POST", "/api/v1/auth/logout"),
+    ]
+    # The title is sent trimmed, as case create sends it.
+    assert api.calls[2]["json"] == {"title": "New title"}
+    # The revision the case show response carries (3) travels as If-Match.
+    sent = {name.lower(): value for name, value in api.calls[2]["headers"].items()}
+    assert sent["if-match"] == '"3"'
+
+
+def test_title_update_with_a_revision_sends_it_without_reading_the_case(api, capsys):
+    api.route("PATCH", TITLE_PATH, body={**CASE_BODY, "title": "New title"})
+    code, out, err = run(
+        capsys,
+        "case",
+        "title",
+        "update",
+        CASE_ID,
+        "--title",
+        "New title",
+        "--revision",
+        "7",
+        "--username",
+        "alice",
+    )
+    assert code == 0, err
+    assert api.paths() == [
+        ("POST", "/api/v1/auth/token"),
+        ("PATCH", TITLE_PATH),
+        ("POST", "/api/v1/auth/logout"),
+    ]
+    sent = {name.lower(): value for name, value in api.calls[1]["headers"].items()}
+    assert sent["if-match"] == '"7"'
+
+
+def test_title_update_without_a_revision_that_changes_meanwhile_says_so(api, capsys):
+    api.route("GET", TITLE_PATH, body=CASE_BODY)
+    api.route(
+        "PATCH",
+        TITLE_PATH,
+        status=412,
+        body={"detail": {"status": "precondition_failed", "current_revision": 5}},
+    )
+    code, out, err = run(capsys, *title_update_without_revision("--title", "New"))
+    assert code == 1
+    assert out == ""
+    assert "changed after this command read it, so nothing was saved" in err
+    assert f"case show {CASE_ID}" in err
+    # No number is offered, because the command read the revision itself.
+    assert "--revision" not in err
+    assert "current revision" not in err
+
+
+def test_title_update_with_a_stale_revision_names_the_current_one(api, capsys):
+    api.route(
+        "PATCH",
+        TITLE_PATH,
+        status=412,
+        body={"detail": {"status": "precondition_failed", "current_revision": 5}},
+    )
+    code, out, err = run(
+        capsys,
+        "case",
+        "title",
+        "update",
+        CASE_ID,
+        "--title",
+        "New",
+        "--revision",
+        "3",
+        "--username",
+        "alice",
+    )
+    assert code == 1
+    assert out == ""
+    assert "current revision is 5" in err
+    assert "--revision 5" in err
+    assert f"case show {CASE_ID}" in err
+
+
+def test_title_update_rejects_a_blank_title_without_a_request(api, capsys):
+    code, out, err = run(
+        capsys, *title_update_without_revision("--title", "   ")
+    )
+    assert code == 2
+    assert api.calls == []
+    assert "the title must be 1 to 200 characters and not only spaces" in err
+
+
+def test_title_update_rejects_a_title_over_200_characters_without_a_request(api, capsys):
+    code, out, err = run(
+        capsys, *title_update_without_revision("--title", "x" * 201)
+    )
+    assert code == 2
+    assert api.calls == []
+    assert "1 to 200 characters" in err
+
+
+def test_title_update_rejects_a_revision_below_one_without_a_request(api, capsys):
+    code, out, err = run(
+        capsys,
+        "case",
+        "title",
+        "update",
+        CASE_ID,
+        "--title",
+        "New",
+        "--revision",
+        "0",
+        "--username",
+        "alice",
+    )
+    assert code == 2
+    assert api.calls == []
+    assert "--revision must be 1 or more" in err
+
+
+def test_title_update_case_id_must_be_a_uuid_before_any_request(api, capsys):
+    code, out, err = run(
+        capsys,
+        "case",
+        "title",
+        "update",
+        "not-a-case",
+        "--title",
+        "New",
+        "--username",
+        "alice",
+    )
+    assert code == 2
+    assert api.calls == []
+    assert "CASE_ID must be the case ID" in err
+
+
+def test_title_update_of_a_case_not_available_sends_no_write(api, capsys):
+    api.route("GET", TITLE_PATH, status=404, body={"detail": "case not found"})
+    code, out, err = run(capsys, *title_update_without_revision("--title", "New"))
+    assert code == 1
+    assert out == ""
+    assert "case not found" in err
+    assert not any(call["method"] == "PATCH" for call in api.calls)
+
+
+def test_title_update_forbidden_names_the_triager_permission(api, capsys):
+    api.route("PATCH", TITLE_PATH, status=403, body={"detail": "forbidden"})
+    code, out, err = run(
+        capsys,
+        "case",
+        "title",
+        "update",
+        CASE_ID,
+        "--title",
+        "New",
+        "--revision",
+        "3",
+        "--username",
+        "alice",
+    )
+    assert code == 1
+    assert "only a triager can change the case title" in err

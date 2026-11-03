@@ -437,6 +437,8 @@ export interface CaseDetail extends RiskFields {
   close_reason: string | null;
   // Reason of the latest reopen. Null or absent when the case has never been reopened.
   reopen_reason?: string | null;
+  // Sent as If-Match when the title is changed (updateCaseTitle). The ETag of the case.
+  revision: number;
   deadlines: DeadlineTask[];
 }
 
@@ -470,6 +472,16 @@ export function listCases(limit: number, cursor?: string, q?: string, status?: C
 
 export function getCase(caseId: string): Promise<CaseDetail> {
   return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}`);
+}
+
+// Changes the case title only. revision is the case revision the caller read (CaseDetail.revision), sent as If-Match.
+// A stale revision answers 412 with ApiError.currentRevision and changes nothing. Needs cases:triage.
+export function updateCaseTitle(caseId: string, title: string, revision: number): Promise<CaseDetail> {
+  return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}`, {
+    method: "PATCH",
+    json: { title },
+    headers: { ...idempotencyHeaders(), "If-Match": `"${revision}"` },
+  });
 }
 
 // Every state-changing request sends a new Idempotency-Key, so a repeated submit returns the first answer.

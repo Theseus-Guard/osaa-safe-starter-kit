@@ -18,6 +18,7 @@ import { CasePreliminaryReport } from "./CasePreliminaryReport";
 import { CaseReporterContact } from "./CaseReporterContact";
 import { CaseReview } from "./CaseReview";
 import { CaseRiskScore } from "./CaseRiskScore";
+import { CaseTitleEdit } from "./CaseTitleEdit";
 import { Tabs, type TabDefinition } from "@/components/tabs";
 import { Timestamp } from "@/components/timestamp";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -63,6 +64,13 @@ export function CaseDetailPage({ caseId, permissions, role }: Props) {
   function applyChange(updated: CaseDetail) {
     setDetail(updated);
     setHistoryRevision((value) => value + 1);
+  }
+
+  // Loads the case again, for example after a save was refused because the case changed on the server.
+  function reloadCase() {
+    getCase(caseId)
+      .then(setDetail)
+      .catch((caught: unknown) => setError(describeError(caught)));
   }
 
   // A change to the case record is audited, so the history reloads, and the preliminary report reloads with it.
@@ -269,6 +277,16 @@ export function CaseDetailPage({ caseId, permissions, role }: Props) {
                 <div className="flex flex-wrap items-center gap-3">
                   <h2 className="text-xl font-semibold tracking-tight break-words">{detail.title}</h2>
                   <Badge variant="secondary">{humanize(detail.status)}</Badge>
+                  {/* The title needs cases:triage, the permission the other case record edits use. Closed cases are read-only. */}
+                  <CaseTitleEdit
+                    caseId={detail.id}
+                    title={detail.title}
+                    revision={detail.revision}
+                    closed={closed}
+                    canWrite={abilities.canWriteRecords}
+                    onSaved={applyChange}
+                    onReload={reloadCase}
+                  />
                 </div>
               </div>
               <CaseRiskScore
