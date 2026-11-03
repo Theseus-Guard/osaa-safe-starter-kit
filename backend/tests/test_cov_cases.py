@@ -178,11 +178,11 @@ def test_history_and_assignments_are_hidden_from_a_caller_who_cannot_see_the_cas
     case = cases.create_case("Hidden history", a_while_ago(), created_by=owner)
 
     assert (
-        cases.case_history(case.id, CaseScope(stranger, read_own=True), 10, 0) is None
+        cases.case_history(case.id, CaseScope(stranger, read_own=True), 10) is None
     )
     assert cases.list_assignments(case.id, CaseScope(stranger, read_own=True)) is None
     assert (
-        cases.case_history(case.id, CaseScope(owner, read_own=True), 10, 0) is not None
+        cases.case_history(case.id, CaseScope(owner, read_own=True), 10) is not None
     )
     assert cases.list_assignments(case.id, CaseScope(owner, read_own=True)) == []
 

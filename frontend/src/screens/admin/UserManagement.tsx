@@ -28,7 +28,10 @@ interface Props {
 }
 
 export function UserManagement({ currentUserId, revision, onChanged }: Props) {
-  const [offset, setOffset] = useState(0);
+  // Cursors of the pages already passed, oldest first. The current page is fetched with the last one.
+  // The first page has no cursor, so the stack is empty there.
+  const [cursors, setCursors] = useState<string[]>([]);
+  const cursor = cursors.length > 0 ? cursors[cursors.length - 1] : undefined;
   const [page, setPage] = useState<UserPage | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -40,7 +43,7 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
   useEffect(() => {
     let stale = false;
     setLoading(true);
-    listUsers(PAGE_SIZE, offset)
+    listUsers(PAGE_SIZE, cursor)
       .then((result) => {
         if (stale) return;
         setPage(result);
@@ -55,10 +58,10 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
     return () => {
       stale = true;
     };
-  }, [offset, revision]);
+  }, [cursor, revision]);
 
-  function changePage(nextOffset: number) {
-    setOffset(nextOffset);
+  function changePage(nextCursors: string[]) {
+    setCursors(nextCursors);
     setResettingId(null);
     setActionError(null);
   }
@@ -88,8 +91,8 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
     try {
       await deleteUser(user.id);
       // Deleting the last row of a page (not the first page) would leave an empty page, so step back one page.
-      const isLastRowOnPage = page !== null && page.items.length === 1 && offset > 0;
-      if (isLastRowOnPage) setOffset(Math.max(0, offset - PAGE_SIZE));
+      const isLastRowOnPage = page !== null && page.items.length === 1 && cursors.length > 0;
+      if (isLastRowOnPage) setCursors(cursors.slice(0, -1));
       toast.success(`${user.username} has been deleted.`);
       onChanged();
     } catch (caught) {
@@ -108,9 +111,7 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
     onChanged();
   }
 
-  const total = page?.total ?? 0;
-  const shownFrom = page && page.items.length > 0 ? page.offset + 1 : 0;
-  const shownTo = page ? page.offset + page.items.length : 0;
+  const nextCursor = page?.next_cursor ?? null;
 
   return (
     <Card>
@@ -260,22 +261,24 @@ export function UserManagement({ currentUserId, revision, onChanged }: Props) {
         {page && page.items.length === 0 && <p className="text-sm text-muted-foreground">No users found on this page.</p>}
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm text-muted-foreground" aria-live="polite">
-            {loading ? "Loading…" : `Showing ${shownFrom}–${shownTo} of ${total}`}
+            {loading ? "Loading…" : `Page ${cursors.length + 1}`}
           </p>
           <div className="flex gap-2">
             <Button
               variant="outline"
               size="sm"
-              disabled={loading || !page || page.offset === 0}
-              onClick={() => changePage(Math.max(0, offset - PAGE_SIZE))}
+              disabled={loading || cursors.length === 0}
+              onClick={() => changePage(cursors.slice(0, -1))}
             >
               Previous
             </Button>
             <Button
               variant="outline"
               size="sm"
-              disabled={loading || !page || page.offset + page.limit >= page.total}
-              onClick={() => changePage(offset + PAGE_SIZE)}
+              disabled={loading || nextCursor === null}
+              onClick={() => {
+                if (nextCursor !== null) changePage([...cursors, nextCursor]);
+              }}
             >
               Next
             </Button>

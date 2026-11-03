@@ -50,22 +50,25 @@ def users(monkeypatch):
         TARGET_ID: make_user(TARGET_ID, "alice", "triager"),
         ADMIN_ID: make_user(ADMIN_ID, "osaa-safe-admin", "admin"),
     }
-    monkeypatch.setattr(
-        api,
-        "list_users",
-        lambda limit, offset: list(store.values())[offset : offset + limit],
-    )
-    monkeypatch.setattr(api, "count_users", lambda: len(store))
+    def fake_list_users(limit, after=None):
+        rows = sorted(store.values(), key=lambda user: (user.username, user.id))
+        if after is not None:
+            rows = [user for user in rows if (user.username, user.id) > after]
+        return rows[:limit]
+
+    monkeypatch.setattr(api, "list_users", fake_list_users)
     monkeypatch.setattr(api, "find_user_by_id", lambda user_id: store.get(user_id))
     return store
 
 
 def test_admin_lists_users_with_pagination(client, users):
-    response = client.get("/api/v1/users?limit=1&offset=0")
+    response = client.get("/api/v1/users?limit=1")
     assert response.status_code == 200
     body = response.json()
-    assert body["total"] == 2
+    assert set(body) == {"items", "next_cursor"}
     assert len(body["items"]) == 1
+    # The first page is not the last, so it carries a cursor for the next one.
+    assert body["next_cursor"] is not None
     assert set(body["items"][0]) == {
         "id",
         "username",
@@ -83,11 +86,39 @@ def test_admin_lists_users_with_pagination(client, users):
     # Each user carries its own revision, to be sent back in If-Match.
     assert body["items"][0]["revision"] == 1
 
+    second = client.get(f"/api/v1/users?limit=1&cursor={body['next_cursor']}")
+    assert second.status_code == 200
+    last = second.json()
+    assert len(last["items"]) == 1
+    assert last["items"][0]["id"] != body["items"][0]["id"]
+    # The last page has no next cursor.
+    assert last["next_cursor"] is None
+
+
+def test_admin_list_sees_each_user_once_across_pages(client, users):
+    seen = []
+    cursor = None
+    while True:
+        query = "limit=1" if cursor is None else f"limit=1&cursor={cursor}"
+        body = client.get(f"/api/v1/users?{query}").json()
+        seen.extend(item["id"] for item in body["items"])
+        cursor = body["next_cursor"]
+        if cursor is None:
+            break
+    assert sorted(seen) == sorted(users)
+    assert len(seen) == len(set(seen))
+
+
+def test_admin_list_refuses_an_invalid_cursor(client, users):
+    response = client.get("/api/v1/users?cursor=not-a-cursor")
+    assert response.status_code == 400
+    assert response.json()["detail"] == {"status": "invalid_cursor"}
+
 
 def test_list_rejects_out_of_range_paging(client, users):
     assert client.get("/api/v1/users?limit=0").status_code == 400
     assert client.get("/api/v1/users?limit=201").status_code == 400
-    assert client.get("/api/v1/users?offset=-1").status_code == 400
+    assert client.get("/api/v1/users?cursor=not-a-cursor").status_code == 400
 
 
 def test_non_admin_cannot_list_users(client, actor, users):

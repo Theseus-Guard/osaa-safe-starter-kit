@@ -50,7 +50,7 @@ const ITEM: EvidenceItem = {
 };
 
 function evidencePage(items: EvidenceItem[]): EvidencePage {
-  return { items, total: items.length, limit: 20, offset: 0 };
+  return { items, next_cursor: null };
 }
 
 beforeEach(() => {
@@ -79,6 +79,27 @@ describe("CaseEvidence", () => {
     expect(within(row).getByText("2.0 KB")).toBeInTheDocument();
     expect(within(row).getByText("Available")).toBeInTheDocument();
     expect(within(row).getByText("0123456789ab…")).toBeInTheDocument();
+  });
+
+  it("follows next_cursor forward and back, and stops at the last page", async () => {
+    list
+      .mockResolvedValueOnce({ items: [ITEM], next_cursor: "cursor-2" })
+      .mockResolvedValueOnce({ items: [{ ...ITEM, id: "evidence-2", original_filename: "second.txt" }], next_cursor: null })
+      .mockResolvedValueOnce({ items: [ITEM], next_cursor: "cursor-2" });
+    const user = userEvent.setup();
+    render(<CaseEvidence caseId="case-1" canRead canWrite={false} />);
+
+    await screen.findByText("notes.txt");
+    expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Next" }));
+
+    await waitFor(() => expect(list).toHaveBeenLastCalledWith("case-1", 20, "cursor-2"));
+    expect(await screen.findByText("second.txt")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Previous" }));
+    await waitFor(() => expect(list).toHaveBeenLastCalledWith("case-1", 20, undefined));
+    expect(await screen.findByText("notes.txt")).toBeInTheDocument();
   });
 
   it("keeps the upload button disabled until a file is chosen", async () => {

@@ -69,7 +69,7 @@ def test_an_empty_case_is_listed_as_no_evidence_and_never_as_a_result(
     # The CLI asks for its own default page size, so the page size is compared by its content, not the whole body.
     cli_body = json.loads(as_json[1])
     assert api_list.json()["items"] == cli_body["items"] == []
-    assert api_list.json()["total"] == cli_body["total"] == 0
+    assert api_list.json()["next_cursor"] is None and cli_body["next_cursor"] is None
     assert as_text[0] == 0 and as_text[2] == ""
     assert "No evidence for this case" in as_text[1]
     assert CLEAN_RESULT_WORDS.search(as_text[1]) is None

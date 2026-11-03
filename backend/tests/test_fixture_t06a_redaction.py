@@ -427,12 +427,12 @@ def test_the_sql_audience_matches_the_pure_rule_for_every_label_and_caller(world
     recipient = tlp.Recipient(
         world["people"]["triager"], organisation=True, external=False
     )
-    listed, total = evidence.list_evidence(world["case_id"], 50, 0, recipient)
+    listed, next_cursor = evidence.list_evidence(world["case_id"], 50, None, recipient)
     visible = {item.id for item in listed}
     assert derived["RED"] not in visible
     assert derived["CLEAR"] not in visible
     assert derived["AMBER"] in visible
-    assert total == len(listed)
+    assert next_cursor is None
 
 
 # --- idempotency -------------------------------------------------------------------------------------------------------

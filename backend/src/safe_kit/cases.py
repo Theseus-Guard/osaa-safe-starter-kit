@@ -18,6 +18,7 @@ from safe_kit import audit
 from safe_kit import system_timezone
 from safe_kit.db import connect
 from safe_kit.idempotency import KeyScope, check, remember
+from safe_kit.pagination import encode_cursor
 from safe_kit.deadlines import (
     BusinessCalendar,
     deadline_start,
@@ -1254,12 +1255,14 @@ def case_history(
     case_id: str,
     scope: CaseScope,
     limit: int,
-    offset: int,
+    after: tuple[datetime, str] | None = None,
     *,
     include_evidence: bool = False,
-) -> tuple[list[HistoryEntry], int] | None:
-    """Audit rows of the case, newest first, or None when the scope may not see the case.
+) -> tuple[list[HistoryEntry], str | None] | None:
+    """One page of audit rows of the case, newest first, or None when the scope may not see the case.
 
+    after is the (created_at, id) position of the last row of the previous page. The second item of the result is
+    the cursor of the next page, or None on the last page.
     A closure or reopening gets its reason from case_status_changes, under the key "reason" in details.
     Evidence actions are left out unless include_evidence is set (the caller holds evidence:read).
     Details are not redacted here: the endpoint decides who sees them.
@@ -1280,29 +1283,33 @@ def case_history(
             AND (%s OR ae.action <> ALL(%s::text[]))
     """
     evidence_filter = (include_evidence, sorted(audit.EVIDENCE_AUDIT_ACTIONS))
+    # Matches the ORDER BY: created_at descending, then id descending.
+    if after is None:
+        keyset, keyset_params = "TRUE", ()
+    else:
+        created_at, row_id = after
+        keyset = "(ae.created_at < %s OR (ae.created_at = %s AND ae.id < %s::uuid))"
+        keyset_params = (created_at, created_at, row_id)
     with connect() as conn:
         if not is_visible_on(conn, case_id, scope):
             return None
+        # One extra row tells whether another page exists; it is not returned.
         rows = conn.execute(
             f"SELECT ae.id::text, ae.action, ae.created_at, ae.actor_id::text, ae.details, csc.reason {history_join}"
-            " ORDER BY ae.created_at DESC, ae.id DESC LIMIT %s OFFSET %s",
+            f" AND {keyset} ORDER BY ae.created_at DESC, ae.id DESC LIMIT %s",
             (
                 audit.CASE_CLOSE,
                 audit.CASE_REOPEN,
                 case_id,
                 case_id,
                 *evidence_filter,
-                limit,
-                offset,
+                *keyset_params,
+                limit + 1,
             ),
         ).fetchall()
-        total = conn.execute(
-            "SELECT count(*) FROM audit_events ae "
-            "WHERE ((ae.target_type = 'case' AND ae.target_id = %s)"
-            " OR (ae.target_type = 'evidence' AND ae.details->>'case_id' = %s))"
-            " AND NOT ae.is_deleted AND (%s OR ae.action <> ALL(%s::text[]))",
-            (case_id, case_id, *evidence_filter),
-        ).fetchone()[0]
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    next_cursor = encode_cursor(rows[-1][2], rows[-1][0]) if has_more else None
     entries = []
     for row in rows:
         details = row[4]
@@ -1317,4 +1324,4 @@ def case_history(
                 details=details,
             )
         )
-    return entries, total
+    return entries, next_cursor
