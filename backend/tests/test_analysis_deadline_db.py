@@ -202,7 +202,9 @@ def test_the_database_refuses_a_second_task_of_the_same_kind_and_an_unknown_kind
 
 def test_the_migration_backfill_adds_the_task_once_to_a_case_written_before_it():
     # A case written before migration 0051 has no analysis task. t0 is the earliest of the awareness time and the
-    # operator events, so a later operator event does not move the due time.
+    # operator events, so a later operator event does not move the due time. The case is recent, so its 30 days
+    # have not run out when the backfill runs.
+    recent = datetime.now(UTC).replace(microsecond=0) - timedelta(days=2)
     reporter_id = new_user("reporter")
     with connect() as conn:
         seq = conn.execute("SELECT nextval('case_reference_seq')").fetchone()[0]
@@ -212,12 +214,12 @@ def test_the_migration_backfill_adds_the_task_once_to_a_case_written_before_it()
             VALUES (%s, 'Written before 0051', %s, %s, 'open', 'provisional-1', 'Europe/Istanbul')
             RETURNING id::text
             """,
-            (f"SAFE-2026-{seq:06d}", T0, reporter_id),
+            (f"SAFE-2026-{seq:06d}", recent, reporter_id),
         ).fetchone()[0]
         conn.execute(
             "INSERT INTO awareness_events (case_id, awareness_kind, event_kind, occurred_at, basis, recorded_by) "
             "VALUES (%s, 'operator', 'incident', %s, 'test: later operator event', %s)",
-            (case_id, T0 + timedelta(days=1), reporter_id),
+            (case_id, recent + timedelta(days=1), reporter_id),
         )
     statement = backfill_statement()
     for _ in range(2):
@@ -226,8 +228,45 @@ def test_the_migration_backfill_adds_the_task_once_to_a_case_written_before_it()
 
     rows = stored_rows(case_id)
     assert len(rows) == 1
-    assert rows[0][1] == DUE
+    assert rows[0][1] == recent + timedelta(days=30)
     assert rows[0][2] == "open"
+
+
+def test_the_backfill_skips_a_closed_case_and_an_open_case_already_past_its_due_time():
+    # Owner decision (2026-11-03): no automatic task for a closed case, nor for an open case whose 30 days have run out.
+    reporter_id = new_user("reporter")
+    old = datetime.now(UTC).replace(microsecond=0) - timedelta(days=40)
+    statement = backfill_statement()
+    case_ids = []
+    with connect() as conn:
+        for title, closed in (("Closed before 0051", True), ("Overdue before 0051", False)):
+            seq = conn.execute("SELECT nextval('case_reference_seq')").fetchone()[0]
+            case_ids.append(
+                conn.execute(
+                    """
+                    INSERT INTO cases (reference, title, awareness_time, created_by, status, calendar_version,
+                                       calendar_timezone, closed_at, closed_by, close_reason)
+                    VALUES (%s, %s, %s, %s, %s, 'provisional-1', 'Europe/Istanbul', %s, %s, %s)
+                    RETURNING id::text
+                    """,
+                    (
+                        f"SAFE-2026-{seq:06d}",
+                        title,
+                        old,
+                        reporter_id,
+                        "closed" if closed else "open",
+                        old if closed else None,
+                        reporter_id if closed else None,
+                        "Closed before the migration" if closed else None,
+                    ),
+                ).fetchone()[0]
+            )
+    for case_id in case_ids:
+        with connect() as conn:
+            conn.execute(statement, (case_id,))
+
+    for case_id in case_ids:
+        assert stored_rows(case_id) == []
 
 
 def test_the_assigned_investigator_completes_the_task_and_only_then_the_closure_blocker_clears():
