@@ -1211,6 +1211,62 @@ def closure_blockers_on(conn, case_id: str) -> list[str]:
     return closure_blockers(review_count, tasks, unknown_notices)
 
 
+def link_closure_blockers_on(conn, case_id: str) -> list[str]:
+    """Why a duplicate case cannot be closed through a link yet. An empty list means it may be closed.
+
+    The closure blockers of closure_blockers_on (open deadline tasks included) plus the open review and external notice
+    records of the case. Read only; the caller holds the case row lock. Nothing is moved or deleted: the blockers are
+    cleared by the records themselves (a layer set, a notice closed or cancelled, a notice recorded for the version).
+    """
+    blockers = closure_blockers_on(conn, case_id)
+    # A review round is open while one of its layers is not set (rounds never close by themselves).
+    open_layers = conn.execute(
+        """
+        SELECT count(*) FROM review_layers rl
+        JOIN review_rounds rr ON rr.id = rl.round_id
+        WHERE rr.case_id = %s AND NOT rr.is_deleted AND NOT rl.is_deleted AND rl.outcome IS NULL
+        """,
+        (case_id,),
+    ).fetchone()[0]
+    if open_layers:
+        blockers.append(f"{open_layers} review layer(s) are not set")
+    # A notice is open while its latest state is sent (no receipt answer yet) or follow_up_required. A receipt_unknown
+    # notice without a follow-up is already counted by closure_blockers_on.
+    open_notices = conn.execute(
+        """
+        SELECT count(*) FROM (
+            SELECT DISTINCT ON (notice_id) state
+            FROM external_notices
+            WHERE case_id = %s AND NOT is_deleted
+            ORDER BY notice_id, revision DESC
+        ) latest
+        WHERE latest.state IN ('sent', 'follow_up_required')
+        """,
+        (case_id,),
+    ).fetchone()[0]
+    if open_notices:
+        blockers.append(f"{open_notices} external notice(s) are open")
+    # An escalation, or a recipient or package review, is open until a notice is recorded for its version.
+    for table, label in (
+        ("external_notice_escalations", "escalation(s)"),
+        ("external_notice_reviews", "notice review(s)"),
+    ):
+        pending = conn.execute(
+            f"""
+            SELECT count(*) FROM {table} r
+            WHERE r.case_id = %s AND NOT r.is_deleted
+              AND NOT EXISTS (
+                  SELECT 1 FROM external_notices n
+                  WHERE n.version_id = r.version_id AND NOT n.is_deleted
+              )
+            """,
+            (case_id,),
+        ).fetchone()[0]
+        if pending:
+            blockers.append(f"{pending} {label} have no notice recorded yet")
+    return blockers
+
+
 def close_locked(conn, case_id: str, reason: str, actor_id: str) -> None:
     """Set the case closed, with its history and audit row. The caller holds the row lock and has checked the blockers."""
     closed_at = conn.execute(

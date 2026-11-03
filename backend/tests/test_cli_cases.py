@@ -2088,15 +2088,17 @@ LINK_BODY = {
     "reason": "Same incident",
     "share_visibility": False,
     "primary_side": None,
+    "primary_case_id": None,
     "created_at": "2026-11-01T09:00:00Z",
 }
 HIDDEN_LINK_BODY = {
     "linked_case_id": None,
     "linked_case_title": None,
     "link_type": "related",
-    "reason": "Same incident",
+    "reason": None,
     "share_visibility": False,
     "primary_side": None,
+    "primary_case_id": None,
     "created_at": "2026-11-01T09:00:00Z",
 }
 
@@ -2164,7 +2166,9 @@ def test_link_add_sends_the_main_case_and_the_visibility_checkbox(api, capsys):
 
 
 def test_link_add_duplicate_reports_that_the_duplicate_is_closed(api, capsys):
-    duplicate_body = dict(LINK_BODY, link_type="duplicate", primary_side="linked")
+    duplicate_body = dict(
+        LINK_BODY, link_type="duplicate", primary_side="linked", primary_case_id=LINKED_ID
+    )
     api.route("POST", LINKS_PATH, status=201, body=duplicate_body)
     code, out, err = run(
         capsys,
@@ -2185,6 +2189,7 @@ def test_link_add_duplicate_reports_that_the_duplicate_is_closed(api, capsys):
     assert code == 0
     assert out.startswith("Duplicate linked. The duplicate case is now closed.")
     assert "Main or root:     the linked case" in out
+    assert f"Main or root ID:  {LINKED_ID}" in out
 
 
 def test_link_add_type_is_required_and_checked_by_the_parser(api, capsys):
@@ -2324,6 +2329,23 @@ def test_link_list_prints_the_links_and_marks_a_hidden_case(api, capsys):
     assert api.calls[1]["method"] == "GET"
     assert LINKED_ID in out and "Related case" in out
     assert "(not available to your account)" in out
+    # The hidden link has no reason to show, so the hidden text is printed for it.
+    assert "Reason:           Same incident" in out
+    assert out.count("Reason:           (not available to your account)") == 1
+
+
+def test_link_list_shows_the_main_case_id_only_when_given(api, capsys):
+    main_link = dict(
+        LINK_BODY, link_type="root_sub", primary_side="linked", primary_case_id=LINKED_ID
+    )
+    hidden_main = dict(
+        HIDDEN_LINK_BODY, link_type="root_sub", primary_side="linked", primary_case_id=None
+    )
+    api.route("GET", LINKS_PATH, body=[main_link, hidden_main])
+    code, out, err = run(capsys, "case", "link", "list", CASE_ID, "--username", "alice")
+    assert code == 0
+    assert f"Main or root ID:  {LINKED_ID}" in out
+    assert "Main or root ID:  (not available to your account)" in out
 
 
 def test_link_list_empty_says_so(api, capsys):

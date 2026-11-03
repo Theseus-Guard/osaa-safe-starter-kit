@@ -1337,15 +1337,17 @@ LINK_MAIN_CASE_TEXT = {
 
 
 def _print_link(link: dict) -> None:
-    # The other case is shown only when the API gives its ID, which it does only for a case the caller can see.
-    print(
-        f"  Linked case ID:   {link['linked_case_id'] or '(not available to your account)'}"
-    )
+    # The other case is shown only when the API gives its ID, which it does only for a case the caller can see. The
+    # reason is given only when the other case is visible too, so a missing reason is shown the same way.
+    hidden = "(not available to your account)"
+    print(f"  Linked case ID:   {link['linked_case_id'] or hidden}")
     print(f"  Title:            {link['linked_case_title'] or '-'}")
     print(f"  Link type:        {link['link_type']}")
-    print(f"  Reason:           {link['reason'] or '-'}")
+    reason = link["reason"] or (hidden if link["linked_case_id"] is None else "-")
+    print(f"  Reason:           {reason}")
     if link["primary_side"] is not None:
         print(f"  Main or root:     {LINK_MAIN_CASE_TEXT[link['primary_side']]}")
+        print(f"  Main or root ID:  {link['primary_case_id'] or hidden}")
     print(f"  Visible to both:  {'yes' if link['share_visibility'] else 'no'}")
     print(f"  Linked (UTC):     {link['created_at']}")
 

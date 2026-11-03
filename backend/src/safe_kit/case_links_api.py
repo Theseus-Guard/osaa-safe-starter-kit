@@ -8,8 +8,9 @@ Access rules, from CaseScope (cases.py):
 - writes need cases:triage, and both cases must be visible for a change (own rights only) and open.
 A missing permission answers 403. A case the caller may not see answers 404, the same as a missing one, so a link
 never reveals a case the caller cannot see: for such a case the response has no ID and no title.
-The reason is free text of at most 500 characters. It is returned to the users who can read the case the link is
-listed on. No reporter field is returned.
+The reason is free text of at most 500 characters. It is returned only to a user who can read the other case of the
+link (reason and linked case are null otherwise). The main or root case ID is returned under the same rule. No reporter
+field is returned.
 """
 
 import uuid
@@ -50,7 +51,7 @@ class CaseLinkRequest(BaseModel):
 
 
 class CaseLinkResponse(BaseModel):
-    # linked_case_id and linked_case_title are null when the caller cannot see the linked case.
+    # linked_case_id, linked_case_title and reason are null when the caller cannot see the linked case.
     linked_case_id: str | None
     linked_case_title: str | None
     link_type: str
@@ -58,6 +59,8 @@ class CaseLinkResponse(BaseModel):
     share_visibility: bool
     # "this" or "linked": which case is the main or root case. Null for a related link.
     primary_side: Literal["this", "linked"] | None
+    # The main or root case itself (its ID). Null for a related link, and null when the caller cannot see that case.
+    primary_case_id: str | None
     created_at: datetime
 
 
@@ -73,6 +76,7 @@ def _link_response(link: CaseLink) -> CaseLinkResponse:
         reason=link.reason,
         share_visibility=link.share_visibility,
         primary_side=link.primary_side,
+        primary_case_id=link.primary_case_id,
         created_at=link.created_at,
     )
 

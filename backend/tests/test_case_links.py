@@ -178,6 +178,7 @@ def link(**overrides) -> CaseLink:
         "reason": "Same incident",
         "share_visibility": False,
         "primary_side": None,
+        "primary_case_id": None,
     }
     values.update(overrides)
     return CaseLink(**values)
@@ -270,6 +271,7 @@ def test_add_success_is_201_with_the_full_link(client, caller, monkeypatch):
         "reason": "Same incident",
         "share_visibility": False,
         "primary_side": None,
+        "primary_case_id": None,
         "created_at": NOW.isoformat().replace("+00:00", "Z"),
     }
 
@@ -441,10 +443,13 @@ def test_a_link_to_a_case_the_caller_cannot_see_carries_no_id_and_no_title(
     client, caller, monkeypatch
 ):
     as_role(caller, REPORTER_ID, "reporter")
+    # The service gives no reason and no primary ID for a link to a case the caller cannot see.
     hidden = link(
         linked_case_id=None,
         linked_case_title=None,
+        reason=None,
         primary_side="linked",
+        primary_case_id=None,
         link_type="root_sub",
     )
     monkeypatch.setattr(case_links_api, "list_links", lambda case_id, scope: [hidden])
@@ -456,9 +461,10 @@ def test_a_link_to_a_case_the_caller_cannot_see_carries_no_id_and_no_title(
             "linked_case_id": None,
             "linked_case_title": None,
             "link_type": "root_sub",
-            "reason": "Same incident",
+            "reason": None,
             "share_visibility": False,
             "primary_side": "linked",
+            "primary_case_id": None,
             "created_at": NOW.isoformat().replace("+00:00", "Z"),
         }
     ]
@@ -470,5 +476,22 @@ def test_a_link_to_a_case_the_caller_cannot_see_carries_no_id_and_no_title(
         "reason",
         "share_visibility",
         "primary_side",
+        "primary_case_id",
         "created_at",
     }
+
+
+def test_a_visible_main_case_is_named_by_its_id_in_the_response(
+    client, caller, monkeypatch
+):
+    as_role(caller, REPORTER_ID, "reporter")
+    root = link(
+        primary_side="linked",
+        primary_case_id=OTHER_ID,
+        link_type="root_sub",
+    )
+    monkeypatch.setattr(case_links_api, "list_links", lambda case_id, scope: [root])
+    response = client.get(f"/api/v1/cases/{CASE_ID}/links")
+    assert response.status_code == 200
+    assert response.json()[0]["primary_case_id"] == OTHER_ID
+    assert response.json()[0]["primary_side"] == "linked"

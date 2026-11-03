@@ -215,11 +215,18 @@ export function CaseLinks({ caseId, closed, canWrite }: Props) {
                     <TableCell className="font-mono text-xs">{item.linked_case_id ?? "-"}</TableCell>
                     <TableCell>
                       {typeSummary(item)}
+                      {item.primary_side !== null && (
+                        <span className="block font-mono text-xs text-muted-foreground">
+                          Main or root case ID: {item.primary_case_id ?? "not available to your account"}
+                        </span>
+                      )}
                       {item.share_visibility && (
                         <span className="block text-xs text-muted-foreground">Users of either case see both</span>
                       )}
                     </TableCell>
-                    <TableCell>{item.reason ?? "-"}</TableCell>
+                    <TableCell>
+                      {item.reason ?? (item.linked_case_id === null ? "Not available to your account" : "-")}
+                    </TableCell>
                     <TableCell>
                       <Timestamp value={item.created_at} />
                     </TableCell>

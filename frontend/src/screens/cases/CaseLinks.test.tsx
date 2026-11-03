@@ -35,6 +35,7 @@ const LINK: CaseLink = {
   reason: "Same exposure reported twice",
   share_visibility: false,
   primary_side: null,
+  primary_case_id: null,
   created_at: "2026-11-01T06:00:00Z",
 };
 
@@ -46,6 +47,7 @@ const HIDDEN: CaseLink = {
   reason: null,
   share_visibility: false,
   primary_side: null,
+  primary_case_id: null,
   created_at: "2026-11-01T07:00:00Z",
 };
 
@@ -91,23 +93,44 @@ describe("CaseLinks", () => {
 
   it("names the main case of a duplicate and says when the link is shared", async () => {
     list.mockResolvedValue([
-      { ...LINK, link_type: "duplicate", primary_side: "linked", share_visibility: true },
-      { ...LINK, linked_case_id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", linked_case_title: "Root", link_type: "root_sub", primary_side: "this" },
+      { ...LINK, link_type: "duplicate", primary_side: "linked", primary_case_id: OTHER_ID, share_visibility: true },
+      {
+        ...LINK,
+        linked_case_id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+        linked_case_title: "Root",
+        link_type: "root_sub",
+        primary_side: "this",
+        primary_case_id: CASE_ID,
+      },
     ]);
     render(<CaseLinks caseId={CASE_ID} closed={false} canWrite />);
 
     const duplicateRow = (await screen.findByText("Ministry portal exposure")).closest("tr") as HTMLElement;
     expect(within(duplicateRow).getByText(/Duplicate, main case: linked case/)).toBeInTheDocument();
+    expect(within(duplicateRow).getByText(`Main or root case ID: ${OTHER_ID}`)).toBeInTheDocument();
     expect(within(duplicateRow).getByText("Users of either case see both")).toBeInTheDocument();
     const rootRow = screen.getByText("Root").closest("tr") as HTMLElement;
     expect(within(rootRow).getByText(/Root and sub-case, root: this case/)).toBeInTheDocument();
+    expect(within(rootRow).getByText(`Main or root case ID: ${CASE_ID}`)).toBeInTheDocument();
+  });
+
+  it("says the main case ID is not available when the caller cannot see that case", async () => {
+    list.mockResolvedValue([{ ...HIDDEN, link_type: "root_sub", primary_side: "linked", primary_case_id: null }]);
+    render(<CaseLinks caseId={CASE_ID} closed={false} canWrite />);
+
+    const [cell] = await screen.findAllByText("Not available to your account");
+    const row = cell.closest("tr") as HTMLElement;
+    expect(within(row).getByText("Main or root case ID: not available to your account")).toBeInTheDocument();
   });
 
   it("shows a link to a case the caller cannot see without an ID, a title or a remove button", async () => {
     list.mockResolvedValue([HIDDEN]);
     render(<CaseLinks caseId={CASE_ID} closed={false} canWrite />);
 
-    const row = (await screen.findByText("Not available to your account")).closest("tr") as HTMLElement;
+    // The title cell and the reason cell both say the case is not available.
+    const [cell] = await screen.findAllByText("Not available to your account");
+    const row = cell.closest("tr") as HTMLElement;
+    expect(within(row).getAllByText("Not available to your account")).toHaveLength(2);
     expect(within(row).queryByRole("button", { name: /^Remove/ })).not.toBeInTheDocument();
     expect(within(row).getAllByText("-").length).toBeGreaterThan(0);
   });

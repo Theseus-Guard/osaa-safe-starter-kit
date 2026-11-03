@@ -1,16 +1,21 @@
 """Case links: a typed record that two cases concern the same incident (F1; types, reason and visibility F3 A9).
 
 Every link has a type and a reason:
-- duplicate: the duplicate case is closed when the link is made, and it points to its main case. The closure uses the
-  same rules as closing a case (cases.closure_blockers_on), so it is refused while the duplicate has an open deadline
-  task. Tasks are not moved to the main case, and evidence and records are kept.
+- duplicate: the duplicate case is closed when the link is made, and it points to its main case. The closure is refused
+  while the duplicate has an open deadline task, an open review layer or an open external notice record (see
+  cases.link_closure_blockers_on). Tasks are not moved to the main case, and evidence and records are kept.
 - related: visibility and reference only. Neither case's status, tasks or deadlines change.
 - root_sub: a user who can read the sub-case may read its root case through the link. Read only (CaseScope).
 
 A link made with share_visibility (default off) lets the users who can see one case see the other case as well.
 
-Visibility is decided only by CaseScope.visibility_sql. Reads use the link extensions there. The changes in this module
-lock both cases with the write rule (writing=True), so a case seen only through a link cannot be changed through it.
+Visibility is decided only by CaseScope.visibility_sql. Reads use the link extensions there, and each extension is one
+step: the other case is checked by the caller's own rights, never by another link. The changes in this module lock both
+cases with the write rule (writing=True), so a case seen only through a link cannot be changed through it.
+
+Reading a link: the other case's ID and title, and the reason, are returned only when the caller can read the other case.
+The main or root case ID (primary_case_id) follows the same rule, except that the case the list is read from is always
+visible to its own reader. A related link has no primary case.
 
 Rules:
 - Both cases must be visible for a change. A case the caller may not change is reported as not found, so a link never
@@ -18,7 +23,8 @@ Rules:
 - A case cannot be linked to itself.
 - A closed case, on either side, refuses the change.
 - A pair is linked at most once, in either order. The unique index on the unordered pair backs up the check.
-- A duplicate or root_sub link names its main or root case (primary); a related link names none.
+- A duplicate or root_sub link names its main or root case (primary); a related link names none. The primary is stored
+  in case_links.primary_case_id.
 - Removing a link is a soft delete. Each add and remove writes one audit row in the same transaction. The reason is
   kept as text in case_links; the audit row keeps only its length.
 
@@ -58,10 +64,14 @@ class LinkOutcome(Enum):
 
 @dataclass(frozen=True)
 class CaseLink:
-    """One link as seen from case_id. linked_case_id and linked_case_title are None when the caller cannot see the other case.
+    """One link as seen from case_id.
+
+    linked_case_id, linked_case_title and reason are None when the caller cannot see the other case. The reason is free
+    text, so it is given only to a caller who can read the other case.
 
     primary_side says which case is the main case of a duplicate or the root case of a root_sub link: "this" for case_id,
-    "linked" for the other case (named even when the caller cannot see it), None for a related link.
+    "linked" for the other case (named even when the caller cannot see it), None for a related link. primary_case_id is
+    that case's ID, given when the caller can see it (the case itself, or the other case when it is visible).
     """
 
     case_id: str
@@ -72,6 +82,7 @@ class CaseLink:
     reason: str | None = None
     share_visibility: bool = False
     primary_side: str | None = None
+    primary_case_id: str | None = None
 
 
 def request_error(
@@ -179,7 +190,7 @@ def add_link(
         closing: str | None = None
         if link_type == DUPLICATE:
             closing = linked_case_id if primary_case_id == case_id else case_id
-            blockers = cases.closure_blockers_on(conn, closing)
+            blockers = cases.link_closure_blockers_on(conn, closing)
             if blockers:
                 return LinkOutcome.BLOCKED, None, blockers
         row = conn.execute(
@@ -227,6 +238,7 @@ def add_link(
             reason=text,
             share_visibility=share_visibility,
             primary_side=_primary_side(case_id, primary_case_id),
+            primary_case_id=primary_case_id,
         )
         if idempotency is not None:
             assert render is not None
@@ -264,8 +276,9 @@ def remove_link(
 def list_links(case_id: str, scope: CaseScope) -> list[CaseLink] | None:
     """Active links of the case, in the order they were made, or None when the scope may not see the case.
 
-    A link is listed from either side of the pair. The other case's ID and title are given only when the scope may see it.
-    Read-only: it writes no audit row.
+    A link is listed from either side of the pair. The other case's ID and title, the reason and the primary case ID are
+    given only when the scope may see the other case (the primary case ID also when it is case_id itself). Read-only:
+    it writes no audit row.
     """
     with connect() as conn:
         if not cases.is_visible_on(conn, case_id, scope):
@@ -300,6 +313,8 @@ def list_links(case_id: str, scope: CaseScope) -> list[CaseLink] | None:
     for source, linked, created_at, link_type, reason, shared, primary in rows:
         other = linked if source == case_id else source
         visible = other in titles
+        # The primary is either this case (always visible here) or the other case.
+        primary_visible = primary is not None and (primary == case_id or primary in titles)
         links.append(
             CaseLink(
                 case_id=case_id,
@@ -307,9 +322,10 @@ def list_links(case_id: str, scope: CaseScope) -> list[CaseLink] | None:
                 linked_case_title=titles.get(other),
                 created_at=created_at,
                 link_type=link_type,
-                reason=reason,
+                reason=reason if visible else None,
                 share_visibility=shared,
                 primary_side=_primary_side(case_id, primary),
+                primary_case_id=primary if primary_visible else None,
             )
         )
     return links
