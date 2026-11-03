@@ -1,13 +1,15 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { CaseLink, addCaseLink, listCaseLinks, removeCaseLink } from "../../api";
+import { AddCaseLinkRequest, CaseLink, CaseLinkType, addCaseLink, listCaseLinks, removeCaseLink } from "../../api";
 import { describeError } from "../../messages";
 import { DisabledHint } from "@/components/disabled-hint";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Timestamp } from "@/components/timestamp";
 
@@ -19,6 +21,40 @@ interface Props {
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const REASON_MAX_LENGTH = 500;
+
+const LINK_TYPES: Record<CaseLinkType, { label: string; help: string }> = {
+  related: {
+    label: "Related",
+    help: "Reference only. Neither case's status, tasks or deadlines change.",
+  },
+  duplicate: {
+    label: "Duplicate",
+    help: "The duplicate case is closed when you link. It must have no open deadline task, and its tasks are not moved to the main case.",
+  },
+  root_sub: {
+    label: "Root and sub-case",
+    help: "A user who can read the sub-case can read the root case through this link. Read only: no write access to the root.",
+  },
+};
+
+// Which case is the main case of a duplicate, or the root case of a root and sub-case link.
+type MainChoice = "this" | "linked";
+
+type FormField = "linked" | "main" | "reason";
+
+interface FormError {
+  field: FormField;
+  message: string;
+}
+
+// The summary of one link as a table cell. primary_side names the main or root case.
+function typeSummary(item: CaseLink): string {
+  const type = LINK_TYPES[item.link_type].label;
+  if (item.primary_side === null) return type;
+  const main = item.primary_side === "this" ? "this case" : "linked case";
+  return item.link_type === "duplicate" ? `${type}, main case: ${main}` : `${type}, root: ${main}`;
+}
 
 export function CaseLinks({ caseId, closed, canWrite }: Props) {
   const [items, setItems] = useState<CaseLink[] | null>(null);
@@ -26,11 +62,16 @@ export function CaseLinks({ caseId, closed, canWrite }: Props) {
   // Bumped after an add or a removal so the list reloads from the server.
   const [version, setVersion] = useState(0);
   const [linkedCaseId, setLinkedCaseId] = useState("");
-  const [inputError, setInputError] = useState<string | null>(null);
+  const [linkType, setLinkType] = useState<CaseLinkType>("related");
+  const [mainChoice, setMainChoice] = useState<MainChoice | "">("");
+  const [reason, setReason] = useState("");
+  const [shareVisibility, setShareVisibility] = useState(false);
+  const [formError, setFormError] = useState<FormError | null>(null);
   const [linking, setLinking] = useState(false);
   const [busyLinkedCaseId, setBusyLinkedCaseId] = useState<string | null>(null);
   // The add form and the remove buttons are offered only to a caller with cases:triage on an open case.
   const offerForm = canWrite && !closed;
+  const needsMain = linkType !== "related";
 
   useEffect(() => {
     let stale = false;
@@ -47,18 +88,65 @@ export function CaseLinks({ caseId, closed, canWrite }: Props) {
     };
   }, [caseId, version]);
 
-  async function link() {
+  function validate(): { request: AddCaseLinkRequest } | { error: FormError } {
     const value = linkedCaseId.trim();
     if (!UUID_PATTERN.test(value)) {
-      setInputError("Enter the case ID as a UUID, for example 3f2a9c1e-4b7d-4e8a-9c2f-1a2b3c4d5e6f.");
+      return {
+        error: {
+          field: "linked",
+          message: "Enter the case ID as a UUID, for example 3f2a9c1e-4b7d-4e8a-9c2f-1a2b3c4d5e6f.",
+        },
+      };
+    }
+    const text = reason.trim();
+    if (text === "") {
+      return { error: { field: "reason", message: "Enter a short reason for the link." } };
+    }
+    if (text.length > REASON_MAX_LENGTH) {
+      return { error: { field: "reason", message: `The reason can be at most ${REASON_MAX_LENGTH} characters.` } };
+    }
+    const request: AddCaseLinkRequest = {
+      linked_case_id: value,
+      link_type: linkType,
+      reason: text,
+      share_visibility: shareVisibility,
+    };
+    if (needsMain) {
+      if (mainChoice === "") {
+        return {
+          error: {
+            field: "main",
+            message:
+              linkType === "duplicate"
+                ? "Choose which case is the main case. The other case is closed."
+                : "Choose which case is the root case.",
+          },
+        };
+      }
+      request.primary_case_id = mainChoice === "this" ? caseId : value;
+    }
+    return { request };
+  }
+
+  async function link() {
+    const checked = validate();
+    if ("error" in checked) {
+      setFormError(checked.error);
       return;
     }
-    setInputError(null);
+    setFormError(null);
     setLinking(true);
     try {
-      await addCaseLink(caseId, value);
-      toast.success("Cases linked. Linking changes no task, deadline or status.");
+      await addCaseLink(caseId, checked.request);
+      toast.success(
+        linkType === "duplicate"
+          ? "Duplicate linked. The duplicate case is now closed. No task was moved to the main case."
+          : "Cases linked. Linking changes no task, deadline or status.",
+      );
       setLinkedCaseId("");
+      setReason("");
+      setShareVisibility(false);
+      setMainChoice("");
       setVersion((count) => count + 1);
     } catch (caught) {
       toast.error(describeError(caught));
@@ -82,13 +170,17 @@ export function CaseLinks({ caseId, closed, canWrite }: Props) {
     }
   }
 
+  const errorId = formError ? `link-form-error-${formError.field}` : undefined;
+  const invalid = (field: FormField) => (formError?.field === field ? true : undefined);
+  const describedBy = (field: FormField) => (formError?.field === field ? errorId : undefined);
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>Linked cases</CardTitle>
         <CardDescription>
-          Other cases that concern the same incident. A link records the relation only; it changes no task, deadline or
-          status.
+          Other cases that concern the same incident. A link records the relation and its type; a duplicate link also closes
+          the duplicate case.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
@@ -108,6 +200,8 @@ export function CaseLinks({ caseId, closed, canWrite }: Props) {
                 <TableRow>
                   <TableHead>Case</TableHead>
                   <TableHead>Case ID</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Reason</TableHead>
                   <TableHead>Linked</TableHead>
                   <TableHead>Actions</TableHead>
                 </TableRow>
@@ -119,6 +213,13 @@ export function CaseLinks({ caseId, closed, canWrite }: Props) {
                       {item.linked_case_id === null ? "Not available to your account" : item.linked_case_title}
                     </TableCell>
                     <TableCell className="font-mono text-xs">{item.linked_case_id ?? "-"}</TableCell>
+                    <TableCell>
+                      {typeSummary(item)}
+                      {item.share_visibility && (
+                        <span className="block text-xs text-muted-foreground">Users of either case see both</span>
+                      )}
+                    </TableCell>
+                    <TableCell>{item.reason ?? "-"}</TableCell>
                     <TableCell>
                       <Timestamp value={item.created_at} />
                     </TableCell>
@@ -154,24 +255,98 @@ export function CaseLinks({ caseId, closed, canWrite }: Props) {
               <FieldLabel htmlFor="link-case-id">
                 Case ID to link <span className="font-normal text-muted-foreground">(required)</span>
               </FieldLabel>
-              <div className="flex flex-wrap items-start gap-2">
-                <Input
-                  id="link-case-id"
-                  className="min-w-64 flex-1 font-mono"
-                  placeholder="Case ID (UUID)"
-                  value={linkedCaseId}
-                  aria-invalid={inputError !== null}
-                  aria-describedby={inputError !== null ? "link-case-id-error" : undefined}
-                  onChange={(event) => setLinkedCaseId(event.target.value)}
-                />
-                <Button type="submit" disabled={linking}>
-                  Link case
-                </Button>
-              </div>
+              <Input
+                id="link-case-id"
+                className="min-w-64 flex-1 font-mono"
+                placeholder="Case ID (UUID)"
+                value={linkedCaseId}
+                aria-invalid={invalid("linked")}
+                aria-describedby={describedBy("linked")}
+                onChange={(event) => setLinkedCaseId(event.target.value)}
+              />
             </Field>
-            {inputError && (
-              <Alert variant="destructive" id="link-case-id-error">
-                <AlertDescription>{inputError}</AlertDescription>
+            <Field>
+              <FieldLabel htmlFor="link-type">
+                Link type <span className="font-normal text-muted-foreground">(required)</span>
+              </FieldLabel>
+              <Select
+                value={linkType}
+                onValueChange={(value) => {
+                  if (value) setLinkType(value as CaseLinkType);
+                }}
+              >
+                <SelectTrigger id="link-type" className="w-full">
+                  <SelectValue>{(value: string | null) => LINK_TYPES[(value ?? "related") as CaseLinkType].label}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {(Object.keys(LINK_TYPES) as CaseLinkType[]).map((type) => (
+                    <SelectItem key={type} value={type}>
+                      {LINK_TYPES[type].label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p id="link-type-help" className="text-xs text-muted-foreground">
+                {LINK_TYPES[linkType].help}
+              </p>
+            </Field>
+            {needsMain && (
+              <Field>
+                <FieldLabel htmlFor="link-main">
+                  {linkType === "duplicate" ? "Main case" : "Root case"}{" "}
+                  <span className="font-normal text-muted-foreground">(required)</span>
+                </FieldLabel>
+                <Select
+                  value={mainChoice}
+                  onValueChange={(value) => {
+                    if (value === "this" || value === "linked") setMainChoice(value);
+                  }}
+                >
+                  <SelectTrigger id="link-main" className="w-full" aria-invalid={invalid("main")}>
+                    <SelectValue>
+                      {(value: string | null) =>
+                        value === "this" ? "This case" : value === "linked" ? "The case ID above" : "Choose a case"
+                      }
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="this">This case</SelectItem>
+                    <SelectItem value="linked">The case ID above</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+            )}
+            <Field>
+              <FieldLabel htmlFor="link-reason">
+                Link reason <span className="font-normal text-muted-foreground">(required)</span>
+              </FieldLabel>
+              <Input
+                id="link-reason"
+                placeholder="Why these cases are linked"
+                value={reason}
+                aria-invalid={invalid("reason")}
+                aria-describedby={describedBy("reason")}
+                onChange={(event) => setReason(event.target.value)}
+              />
+            </Field>
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="link-share"
+                checked={shareVisibility}
+                onCheckedChange={(checked) => setShareVisibility(checked === true)}
+              />
+              <FieldLabel htmlFor="link-share">
+                Users who can see one of the two cases can see the other case too
+              </FieldLabel>
+            </div>
+            <div>
+              <Button type="submit" disabled={linking}>
+                Link case
+              </Button>
+            </div>
+            {formError && (
+              <Alert variant="destructive" id={errorId}>
+                <AlertDescription>{formError.message}</AlertDescription>
               </Alert>
             )}
           </form>

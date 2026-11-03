@@ -97,7 +97,11 @@ Shows the review rounds of the case. A round has eleven layers, and each layer h
 
 Shows **Linked cases**, the **Reporter contact** and the **Preliminary report**.
 
-- **Link case**: links this case to another case by its ID. Needs `cases:triage`.
+- **Link case**: links this case to another case by its ID. Needs `cases:triage`. Choose the link type and give a short reason:
+  - **Related**: reference only. Neither case's status, tasks or deadlines change.
+  - **Duplicate**: the duplicate case is closed when you link. Choose the main case. Linking is refused while the duplicate has an open deadline task; complete or mark each open task not applicable first. The tasks are not moved to the main case, and the evidence and records are kept.
+  - **Root and sub-case**: a user who can read the sub-case can read the root case through the link, for analysis. It is read only.
+  - The checkbox **Users who can see one of the two cases can see the other case too** is off by default. When it is on, the users of either case see both cases.
 - **Show reporter contact** (reporting owner only): shows the follow-up contact the reporter gave. It is read only when the user clicks the button. The contact can be read while the case is open, and for 72 hours after it was closed. Every read is audited.
 - **Preliminary report** (roles that can read the full case): the awareness, classification, impact, legal duty, deadline and missing-field sections of the case.
 - Audited: `case.link_added`, `case.link_removed`, `reporter_contact.read`.

@@ -151,7 +151,7 @@ def client(monkeypatch, provider):
         "permissions_for_role",
         lambda role: frozenset({"evidence:read", "evidence:write"}),
     )
-    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope: True)
+    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope, **kwargs: True)
     monkeypatch.setattr(evidence_api, "_PROVIDER", provider)
     monkeypatch.setenv("SAFE_EVIDENCE_MAX_BYTES", "1000")
     return TestClient(app)
@@ -660,7 +660,7 @@ def test_upload_is_refused_when_no_key_is_configured(client, monkeypatch):
 
 
 def test_upload_to_a_case_the_caller_cannot_see_is_404(client, monkeypatch):
-    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope: False)
+    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope, **kwargs: False)
     body, content_type = multipart("scan.pdf", "application/pdf", PDF[:100])
     response = client.post(
         f"/api/v1/cases/{uuid.uuid4()}/evidence",
@@ -718,7 +718,7 @@ def test_reading_evidence_is_404_when_the_case_is_not_visible(
     monkeypatch.setattr(
         auth, "permissions_for_role", lambda role: frozenset({"evidence:read"})
     )
-    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope: False)
+    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope, **kwargs: False)
     monkeypatch.setattr(evidence, "find_stored", lambda evidence_id, scope: None)
     assert client.get(url_template.format(uuid.uuid4())).status_code == 404
 

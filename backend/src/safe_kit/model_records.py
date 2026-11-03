@@ -137,7 +137,7 @@ def _lock_case(conn, case_id: str, scope: CaseScope) -> str | None:
         "SELECT status FROM cases WHERE id = %s AND NOT is_deleted FOR UPDATE",
         (case_id,),
     ).fetchone()
-    if row is None or not cases.is_visible_on(conn, case_id, scope):
+    if row is None or not cases.is_visible_on(conn, case_id, scope, writing=True):
         return None
     return row[0]
 

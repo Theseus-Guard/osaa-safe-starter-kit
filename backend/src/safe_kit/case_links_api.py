@@ -1,23 +1,33 @@
-"""Case link endpoints: a record that two cases concern the same incident (see case_links.py).
+"""Case link endpoints: a typed record that two cases concern the same incident (see case_links.py).
 
 Mounted into the main app with app.include_router(case_links_router), as the case record endpoints are.
 
 Access rules, from CaseScope (cases.py):
-- reads need one of the case read permissions, and the case must be visible to the caller;
-- writes need cases:triage, and both cases must be visible and open.
+- reads need one of the case read permissions, and the case must be visible to the caller (a read may also see the
+  other case through a link: see CaseScope.visibility_sql);
+- writes need cases:triage, and both cases must be visible for a change (own rights only) and open.
 A missing permission answers 403. A case the caller may not see answers 404, the same as a missing one, so a link
 never reveals a case the caller cannot see: for such a case the response has no ID and no title.
-No free text is accepted or returned, and no reporter field is returned.
+The reason is free text of at most 500 characters. It is returned to the users who can read the case the link is
+listed on. No reporter field is returned.
 """
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from safe_kit.auth import permissions_of, require_any_permission, require_permission
-from safe_kit.case_links import CaseLink, LinkOutcome, add_link, list_links, remove_link
+from safe_kit.case_links import (
+    CaseLink,
+    LinkOutcome,
+    add_link,
+    list_links,
+    remove_link,
+    request_error,
+)
 from safe_kit.case_records_api import CASE_READ_PERMISSIONS_FOR_RECORDS
 from safe_kit.cases import CaseScope
 from safe_kit.idempotency import checked_key, key_scope
@@ -31,12 +41,23 @@ case_links_router = APIRouter(tags=["case links"])
 
 class CaseLinkRequest(BaseModel):
     linked_case_id: uuid.UUID
+    link_type: Literal["duplicate", "related", "root_sub"]
+    reason: str
+    # The checkbox "users of the linked case can see all cases": off by default.
+    share_visibility: bool = False
+    # The main case of a duplicate or the root case of a root_sub link (one of the two cases). Not for a related link.
+    primary_case_id: uuid.UUID | None = None
 
 
 class CaseLinkResponse(BaseModel):
-    # Both are null when the caller cannot see the linked case.
+    # linked_case_id and linked_case_title are null when the caller cannot see the linked case.
     linked_case_id: str | None
     linked_case_title: str | None
+    link_type: str
+    reason: str | None
+    share_visibility: bool
+    # "this" or "linked": which case is the main or root case. Null for a related link.
+    primary_side: Literal["this", "linked"] | None
     created_at: datetime
 
 
@@ -48,6 +69,10 @@ def _link_response(link: CaseLink) -> CaseLinkResponse:
     return CaseLinkResponse(
         linked_case_id=link.linked_case_id,
         linked_case_title=link.linked_case_title,
+        link_type=link.link_type,
+        reason=link.reason,
+        share_visibility=link.share_visibility,
+        primary_side=link.primary_side,
         created_at=link.created_at,
     )
 
@@ -88,6 +113,12 @@ def add_case_link(
     actor: User = Depends(require_permission("cases:triage")),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> CaseLinkResponse:
+    primary = str(body.primary_case_id) if body.primary_case_id else None
+    error = request_error(
+        str(case_id), str(body.linked_case_id), body.link_type, body.reason, primary
+    )
+    if error is not None:
+        raise HTTPException(status_code=422, detail=error)
     key = checked_key(idempotency_key)
     scope_key = key_scope(
         actor.id,
@@ -97,14 +128,23 @@ def add_case_link(
         request.url.path,
         body.model_dump(mode="json"),
     )
-    outcome, link = add_link(
+    outcome, link, blockers = add_link(
         str(case_id),
         str(body.linked_case_id),
         actor.id,
         _scope(actor),
+        link_type=body.link_type,
+        reason=body.reason,
+        primary_case_id=primary,
+        share_visibility=body.share_visibility,
         idempotency=scope_key,
         render=lambda created: _link_response(created).model_dump(mode="json"),
     )
+    if outcome is LinkOutcome.BLOCKED:
+        raise HTTPException(
+            status_code=409,
+            detail="duplicate case cannot be closed: " + "; ".join(blockers),
+        )
     _raise_for(outcome)
     assert link is not None
     return _link_response(link)

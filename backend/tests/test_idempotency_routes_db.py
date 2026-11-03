@@ -251,8 +251,16 @@ def scenario_link(world: World) -> Scenario:
         "POST",
         f"/api/v1/cases/{first['id']}/links",
         201,
-        body={"linked_case_id": second["id"]},
-        other_body={"linked_case_id": third["id"]},
+        body={
+            "linked_case_id": second["id"],
+            "link_type": "related",
+            "reason": "Same incident",
+        },
+        other_body={
+            "linked_case_id": third["id"],
+            "link_type": "related",
+            "reason": "Same incident",
+        },
     )
 
 

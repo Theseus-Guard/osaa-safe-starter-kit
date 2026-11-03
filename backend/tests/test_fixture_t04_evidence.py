@@ -273,7 +273,7 @@ def evidence_app(monkeypatch):
         "permissions_for_role",
         lambda role: frozenset({"evidence:read", "evidence:write"}),
     )
-    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope: True)
+    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope, **kwargs: True)
     return TestClient(app)
 
 

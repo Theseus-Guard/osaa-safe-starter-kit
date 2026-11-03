@@ -17,6 +17,7 @@ from a wrapped receive channel that stops at the limit, so a request with no Con
 import os
 import uuid
 from datetime import datetime
+from functools import partial
 from typing import Any, Literal
 from urllib.parse import quote
 
@@ -241,7 +242,9 @@ async def upload_evidence(
     same key with the same file gets the first answer, and the same key with another file is refused with 409.
     """
     provider = _key_provider()
-    if not await run_in_threadpool(is_visible, str(case_id), _scope(actor)):
+    if not await run_in_threadpool(
+        partial(is_visible, writing=True), str(case_id), _scope(actor)
+    ):
         raise HTTPException(status_code=404, detail="case not found")
     key = checked_key(idempotency_key)
     filename, content_type, data = await _read_file_field(

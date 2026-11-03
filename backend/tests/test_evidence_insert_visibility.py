@@ -204,7 +204,7 @@ def upload_client(monkeypatch, provider, db):
     storage = StorageSpy()
     monkeypatch.setattr(evidence_api, "storage_from_env", lambda: storage)
     # The API check (before the body is read) says visible; the insert-time check in the database says not.
-    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope: True)
+    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope, **kwargs: True)
     db.visible = False
     client = TestClient(app, raise_server_exceptions=False)
     yield client, storage

@@ -374,7 +374,7 @@ def digest_of_version(version: Version) -> str:
 
 def _lock_case(conn, case_id: str, scope: CaseScope) -> str | None:
     """Lock the case row, then check the caller's visibility. Returns the case status, or None when not visible."""
-    visibility, params = scope.visibility_sql()
+    visibility, params = scope.visibility_sql(writing=True)
     row = conn.execute(
         f"SELECT status FROM cases WHERE id = %s AND NOT is_deleted AND {visibility} FOR UPDATE",
         (case_id, *params),
