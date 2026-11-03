@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from safe_kit import cases, disclosure, tlp
+from safe_kit import disclosure, tlp
 from safe_kit.auth import permissions_of, require_permission
 from safe_kit.cases import CaseScope
 from safe_kit.disclosure import Outcome, Result, Version
@@ -282,7 +282,8 @@ def get_disclosure_version(
     actor: User = Depends(require_permission("disclosures:read")),
 ) -> dict[str, Any]:
     scope = _scope(actor)
-    if not cases.is_visible(str(case_id), scope):
+    # The case rule, or for an approver the packet rule on this version (safe_kit.disclosure, access_for).
+    if disclosure.access_for(str(case_id), str(version_id), scope) is None:
         raise HTTPException(status_code=404, detail="case not found")
     version = disclosure.get_version(str(case_id), str(version_id), scope)
     if version is None:
@@ -297,7 +298,8 @@ def preview_disclosure_version(
     actor: User = Depends(require_permission("disclosures:read")),
 ) -> dict[str, Any]:
     scope = _scope(actor)
-    if not cases.is_visible(str(case_id), scope):
+    # The case rule, or for an approver the packet rule on this version (safe_kit.disclosure, access_for).
+    if disclosure.access_for(str(case_id), str(version_id), scope) is None:
         raise HTTPException(status_code=404, detail="case not found")
     version = disclosure.get_version(str(case_id), str(version_id), scope)
     if version is None:

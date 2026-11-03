@@ -111,6 +111,7 @@ from safe_kit.rate_limit import hit as hit_rate_limit
 from safe_kit.privacy import CSV_COLUMNS, inventory, inventory_csv_rows
 from safe_kit.rbac import (
     DISCLOSURE_APPROVER_ROLE,
+    INSTITUTION_OWNER_ROLE,
     RoleOutcome,
     list_catalog,
     list_role_permissions,
@@ -876,11 +877,23 @@ def admin_list_users(
     )
 
 
+def _refuse_owner_change(*roles: str | None) -> None:
+    """The one check for the institution_owner role in the user administration: no request creates an account with it,
+    gives it, takes it away, or changes or removes an account that holds it. The role is set outside the application by a
+    database administrator, as the first administrator is. Otherwise the administrator, who holds the user rights, could
+    make an account that holds the owner rights (the administrator may not hold them, migration 0055)."""
+    if INSTITUTION_OWNER_ROLE in roles:
+        raise HTTPException(
+            status_code=403, detail={"status": "institution_owner_not_assignable"}
+        )
+
+
 @app.post("/api/v1/users", status_code=201, response_model=UserCreatedResponse)
 def admin_create_user(
     body: UserCreateRequest,
     actor: User = Depends(require_permission("users:manage")),
 ) -> UserCreatedResponse:
+    _refuse_owner_change(body.role)
     try:
         user_id = create_user_with_profile(
             body.username,
@@ -926,6 +939,8 @@ def admin_update_user(
         raise HTTPException(
             status_code=409, detail="cannot change your own role or status"
         )
+    target = find_user_by_id(str(user_id))
+    _refuse_owner_change(body.role, target.role if target is not None else None)
     outcome = update_user(
         str(user_id),
         role=body.role,
@@ -970,6 +985,8 @@ def admin_delete_user(
         raise HTTPException(
             status_code=409, detail="cannot change your own role or status"
         )
+    target = find_user_by_id(str(user_id))
+    _refuse_owner_change(target.role if target is not None else None)
     outcome = soft_delete_user(str(user_id), actor_id=actor.id)
     if outcome is UpdateOutcome.NOT_FOUND:
         raise HTTPException(status_code=404, detail="user not found")
@@ -1047,6 +1064,15 @@ def admin_set_role_permissions(
     if outcome is RoleOutcome.REPORTER_CONTACT_NOT_GRANTABLE:
         raise HTTPException(
             status_code=409, detail={"status": "reporter_contact_not_grantable"}
+        )
+    if outcome is RoleOutcome.OWNER_PERMISSION_NOT_GRANTABLE:
+        raise HTTPException(
+            status_code=409, detail={"status": "owner_permission_not_grantable"}
+        )
+    if outcome is RoleOutcome.OWNER_GUARD:
+        raise HTTPException(
+            status_code=409,
+            detail="the institution_owner role must keep disclosures:assign_backup and disclosures:set_backup_wait",
         )
     return RoleSummary(role=role, permissions=list_role_permissions()[role])
 

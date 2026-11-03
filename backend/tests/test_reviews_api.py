@@ -127,8 +127,8 @@ def test_the_template_has_the_eleven_plan_layers_in_order():
 def test_the_disclosure_approver_reads_rounds_but_may_not_open_or_record_one(
     client, caller, monkeypatch
 ):
-    # cases:read_all lets the approver read the case, so its review rounds; opening a round or recording a layer needs
-    # reviews:write, which the approver does not hold.
+    # The approver holds no case read (migration 0056), so it reads no review rounds; opening a round or recording a
+    # layer needs reviews:write, which the approver does not hold.
     monkeypatch.setattr(reviews_api, "list_rounds", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         reviews_api,
@@ -136,7 +136,7 @@ def test_the_disclosure_approver_reads_rounds_but_may_not_open_or_record_one(
         lambda *args, **kwargs: pytest.fail("must not reach the service"),
     )
     as_role(caller, ADMIN_ID, "disclosure_approver")
-    assert client.get("/api/v1/reviews", params={"case_id": CASE_ID}).status_code == 200
+    assert client.get("/api/v1/reviews", params={"case_id": CASE_ID}).status_code == 403
     assert (
         client.post(
             "/api/v1/reviews", headers=idem(), json={"case_id": CASE_ID}

@@ -6,8 +6,9 @@
 - Waiting time: the backup may decide only from backup_may_act_at (four hours by default, from the setting). Before it, the
   decision is refused with 409 backup_wait_not_over.
 - Decision: approve, reject (a reason is required) or emergency_manual_notice. Recorded once, after the waiting time, by the
-  named backup only, and only while the backup is still in the pool. The decision sends nothing, changes no deadline, and
-  creates no approval.
+  named backup only, and only while the backup is still in the pool. The decision sends nothing and changes no deadline.
+  An approve also writes the approval record of the version (owner decision 2026-11-03, product manager recommendation);
+  reject and emergency_manual_notice write no approval.
 - Narrow read: the named backup reads only the packet to send and the missing facts. Not the authority basis, not the next
   update, not the case title, and only while the escalation is undecided.
 
@@ -56,6 +57,24 @@ from test_fixture_t12_notices import with_independent_triager
 REASON = (
     "Member security contact changed; the named approver cannot confirm the new contact"
 )
+
+
+def approve_body(version_id: str, recipient_ref: str = "cert-07") -> dict:
+    """An approve decision with the approval values the backup confirms, read from the stored version."""
+    with connect() as conn:
+        recipient, purpose, digest = conn.execute(
+            "SELECT recipient, purpose, digest FROM disclosure_versions WHERE id = %s",
+            (version_id,),
+        ).fetchone()
+    return {
+        "decision": "approve",
+        "approval": {
+            "recipient": recipient,
+            "purpose": purpose,
+            "digest": digest,
+            "recipient_ref": recipient_ref,
+        },
+    }
 
 
 def decision_url(dw, version_id: str, escalation_id: str) -> str:
@@ -142,11 +161,35 @@ def audit_for(action: str, case_id: str) -> list[dict]:
 # --- request bodies (no database) -------------------------------------------------------------------------------------
 
 
+APPROVAL_VALUES = {
+    "recipient": "Member security contact",
+    "purpose": "Notify the member of the incident",
+    "digest": "a" * 64,
+    "recipient_ref": "cert-07",
+}
+
+
 def test_a_decision_is_one_of_the_three_documented_ones():
-    for decision in ("approve", "emergency_manual_notice"):
-        assert BackupDecisionCreate(decision=decision).reason is None
+    assert BackupDecisionCreate(decision="emergency_manual_notice").reason is None
+    assert BackupDecisionCreate(decision="approve", approval=APPROVAL_VALUES).approval
     with pytest.raises(pydantic.ValidationError):
         BackupDecisionCreate(decision="wait")
+
+
+def test_an_approve_carries_the_approval_values_and_the_other_decisions_do_not():
+    # An approve writes the approval record of the version, so the values it confirms are required (migration 0055 keeps none).
+    with pytest.raises(pydantic.ValidationError):
+        BackupDecisionCreate(decision="approve")
+    with pytest.raises(pydantic.ValidationError):
+        BackupDecisionCreate(decision="reject", reason=REASON, approval=APPROVAL_VALUES)
+    with pytest.raises(pydantic.ValidationError):
+        BackupDecisionCreate(
+            decision="emergency_manual_notice", approval=APPROVAL_VALUES
+        )
+    with pytest.raises(pydantic.ValidationError):
+        BackupDecisionCreate(
+            decision="approve", approval={**APPROVAL_VALUES, "digest": "not-a-digest"}
+        )
 
 
 def test_a_reject_needs_a_reason():
@@ -159,9 +202,11 @@ def test_a_reject_needs_a_reason():
 
 def test_a_reason_is_bounded_and_a_decision_refuses_unknown_fields():
     with pytest.raises(pydantic.ValidationError):
-        BackupDecisionCreate(decision="approve", reason="x" * (backup.REASON_LIMIT + 1))
+        BackupDecisionCreate(
+            decision="emergency_manual_notice", reason="x" * (backup.REASON_LIMIT + 1)
+        )
     with pytest.raises(pydantic.ValidationError):
-        BackupDecisionCreate(decision="approve", wait_longer=True)
+        BackupDecisionCreate(decision="emergency_manual_notice", wait_longer=True)
 
 
 def test_a_pool_is_a_list_of_user_identifiers_of_bounded_size():
@@ -328,7 +373,11 @@ def test_the_pool_read_needs_disclosures_read(dworld):
 def test_the_backup_cannot_act_before_the_waiting_time_is_over(dworld, monkeypatch):
     dw, version, escalation = open_escalation(dworld, monkeypatch)
     response = decide(
-        dw, dw["backups"][0], version["id"], escalation["id"], {"decision": "approve"}
+        dw,
+        dw["backups"][0],
+        version["id"],
+        escalation["id"],
+        approve_body(version["id"]),
     )
     assert response.status_code == 409, response.text
     assert response.json()["detail"]["status"] == "backup_wait_not_over"
@@ -343,7 +392,11 @@ def test_the_backup_decides_after_the_waiting_time_and_the_decision_is_audited(
     dw, version, escalation = open_escalation(dworld, monkeypatch)
     after_the_waiting_time(monkeypatch, escalation)
     response = decide(
-        dw, dw["backups"][0], version["id"], escalation["id"], {"decision": "approve"}
+        dw,
+        dw["backups"][0],
+        version["id"],
+        escalation["id"],
+        approve_body(version["id"]),
     )
     assert response.status_code == 201, response.text
     created = response.json()
@@ -428,7 +481,11 @@ def test_a_decision_is_recorded_once(dworld, monkeypatch):
     dw, version, escalation = open_escalation(dworld, monkeypatch)
     after_the_waiting_time(monkeypatch, escalation)
     first = decide(
-        dw, dw["backups"][0], version["id"], escalation["id"], {"decision": "approve"}
+        dw,
+        dw["backups"][0],
+        version["id"],
+        escalation["id"],
+        approve_body(version["id"]),
     )
     assert first.status_code == 201, first.text
     again = decide(
@@ -448,7 +505,11 @@ def test_only_the_named_backup_decides(dworld, monkeypatch):
     dw, version, escalation = open_escalation(dworld, monkeypatch)
     after_the_waiting_time(monkeypatch, escalation)
     other = decide(
-        dw, dw["backups"][1], version["id"], escalation["id"], {"decision": "approve"}
+        dw,
+        dw["backups"][1],
+        version["id"],
+        escalation["id"],
+        approve_body(version["id"]),
     )
     assert other.status_code == 403, other.text
     assert other.json()["detail"] == {"status": "not_the_backup"}
@@ -457,7 +518,7 @@ def test_only_the_named_backup_decides(dworld, monkeypatch):
         dw["people"]["triager"],
         version["id"],
         escalation["id"],
-        {"decision": "approve"},
+        approve_body(version["id"]),
     )
     assert triager.status_code == 403, triager.text
     assert decisions_of(escalation["id"]) == []
@@ -470,7 +531,11 @@ def test_a_backup_removed_from_the_pool_cannot_decide(dworld, monkeypatch):
     replacement = db_user("disclosure_approver")
     assert pool_put(dw, "triager", [dw["backups"][1], replacement]).status_code == 200
     response = decide(
-        dw, dw["backups"][0], version["id"], escalation["id"], {"decision": "approve"}
+        dw,
+        dw["backups"][0],
+        version["id"],
+        escalation["id"],
+        approve_body(version["id"]),
     )
     assert response.status_code == 409, response.text
     assert response.json()["detail"] == {"status": "backup_not_in_pool"}
@@ -483,7 +548,11 @@ def test_a_closed_case_refuses_the_decision(dworld, monkeypatch):
     after_the_waiting_time(monkeypatch, escalation)
     close_case(dw)
     response = decide(
-        dw, dw["backups"][0], version["id"], escalation["id"], {"decision": "approve"}
+        dw,
+        dw["backups"][0],
+        version["id"],
+        escalation["id"],
+        approve_body(version["id"]),
     )
     assert response.status_code == 409, response.text
     assert response.json()["detail"] == {"status": "case_closed"}
@@ -500,7 +569,7 @@ def test_a_decision_needs_a_key_and_a_repeat_with_the_same_key_returns_the_first
         dw["backups"][0],
         "post",
         decision_url(dw, version["id"], escalation["id"]),
-        json={"decision": "approve"},
+        json=approve_body(version["id"]),
     )
     assert no_key.status_code == 400, no_key.text
     key = uuid.uuid4().hex
@@ -509,7 +578,7 @@ def test_a_decision_needs_a_key_and_a_repeat_with_the_same_key_returns_the_first
         dw["backups"][0],
         version["id"],
         escalation["id"],
-        {"decision": "approve"},
+        approve_body(version["id"]),
         key=key,
     )
     again = decide(
@@ -517,7 +586,7 @@ def test_a_decision_needs_a_key_and_a_repeat_with_the_same_key_returns_the_first
         dw["backups"][0],
         version["id"],
         escalation["id"],
-        {"decision": "approve"},
+        approve_body(version["id"]),
         key=key,
     )
     assert first.status_code == 201, first.text
@@ -531,7 +600,11 @@ def test_an_unknown_escalation_is_missing_for_the_decision(dworld, monkeypatch):
     dw, version, escalation = open_escalation(dworld, monkeypatch)
     after_the_waiting_time(monkeypatch, escalation)
     response = decide(
-        dw, dw["backups"][0], version["id"], str(uuid.uuid4()), {"decision": "approve"}
+        dw,
+        dw["backups"][0],
+        version["id"],
+        str(uuid.uuid4()),
+        approve_body(version["id"]),
     )
     assert response.status_code == 404, response.text
     assert response.json()["detail"] == "escalation not found"
@@ -592,7 +665,7 @@ def test_the_packet_is_closed_once_the_backup_has_decided(dworld, monkeypatch):
             dw["backups"][0],
             version["id"],
             escalation["id"],
-            {"decision": "approve"},
+            approve_body(version["id"]),
         ).status_code
         == 201
     )

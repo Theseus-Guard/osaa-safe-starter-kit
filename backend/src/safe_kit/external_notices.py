@@ -50,7 +50,7 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
-from safe_kit import audit, cases, disclosure
+from safe_kit import audit, disclosure
 from safe_kit.cases import CaseScope
 from safe_kit.db import connect
 from safe_kit.idempotency import KeyReused, KeyScope, Replayed, check, remember
@@ -219,15 +219,13 @@ def _time_allowed(moment: datetime, not_before: datetime) -> bool:
     return not_before <= moment <= datetime.now(UTC) + CLOCK_ALLOWANCE
 
 
-def _lock_case(conn, case_id: str, scope: CaseScope) -> str | None:
-    """Lock the case row, then check the caller's visibility. Returns the case status, or None when not visible."""
-    row = conn.execute(
-        "SELECT status FROM cases WHERE id = %s AND NOT is_deleted FOR UPDATE",
-        (case_id,),
-    ).fetchone()
-    if row is None or not cases.is_visible_on(conn, case_id, scope, writing=True):
-        return None
-    return row[0]
+def _lock_case(conn, case_id: str, scope: CaseScope, version_id: str) -> str | None:
+    """Lock the case row, then check the caller's write visibility. Returns the case status, or None when not visible.
+
+    The version is named because an approver writes a notice through the packet rule (safe_kit.disclosure); every other
+    caller is checked by the case rule alone, as before.
+    """
+    return disclosure.lock_case_for_version(conn, case_id, scope, version_id)
 
 
 def _latest(
@@ -380,7 +378,7 @@ def record_notice(
     try:
         with connect() as conn:
             check(conn, idempotency)
-            status = _lock_case(conn, case_id, scope)
+            status = _lock_case(conn, case_id, scope, version_id)
             if status is None:
                 return Result(Outcome.NOT_FOUND)
             if status == "closed":
@@ -524,7 +522,7 @@ def _change(
     try:
         with connect() as conn:
             check(conn, idempotency)
-            status = _lock_case(conn, case_id, scope)
+            status = _lock_case(conn, case_id, scope, version_id)
             if status is None:
                 return Result(Outcome.NOT_FOUND)
             if status == "closed":

@@ -119,6 +119,9 @@ DISCLOSURE_REVIEW = "disclosure.notice_reviewed"
 DISCLOSURE_BACKUP_ASSIGNED = "disclosure.backup_assigned"
 DISCLOSURE_BACKUP_REVOKED = "disclosure.backup_revoked"
 DISCLOSURE_BACKUP_DECISION = "disclosure.backup_decided"
+# The institution owner changes the waiting time of a backup (migration 0057). Details hold the old and new value and
+# the length of the reason; the reason itself is kept in external_notice_setting_changes only.
+DISCLOSURE_BACKUP_WAIT_CHANGED = "disclosure.backup_wait_changed"
 SYSTEM_TIMEZONE_SET = "system.timezone_set"
 SYSTEM_TIMEZONE_CHANGED = "system.timezone_changed"
 

@@ -30,6 +30,7 @@ ROLES = frozenset(
         "auditor",
         "admin",
         "reporting_owner",
+        "institution_owner",
     }
 )
 

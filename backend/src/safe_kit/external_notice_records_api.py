@@ -8,7 +8,9 @@ Routes (under the case and the version, which must belong to it):
 - GET    .../disclosures/{version_id}/reviews             the reviews of the version, newest first; ?kind=recipient|package
 
 Access rules:
-- Reads need disclosures:read. The case must be visible to the caller (cases.is_visible) and the version must belong to it;
+- Reads need disclosures:read. The case must be visible to the caller (cases.is_visible), or the caller is a disclosure
+  approver and the version is the packet it may read (safe_kit.disclosure.access_for; an approver then gets the missing
+  facts only); the version must belong to the case;
   otherwise the answer is 404, the same as a missing one.
 - An escalation needs disclosures:prepare, and only the person who prepared the version may open it (403 not_preparer,
   owner decision 2026-11-03). The backup named in it must hold disclosures:approve, must be in the case's backup pool
@@ -32,7 +34,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-from safe_kit import cases, disclosure, external_notice_records as records
+from safe_kit import disclosure, external_notice_records as records
 from safe_kit.auth import permissions_of, require_permission
 from safe_kit.cases import CaseScope
 from safe_kit.external_notice_records import Escalation, Outcome, Result, Review
@@ -166,14 +168,26 @@ def _settle(result: Result, view: Any) -> Any:
     return view(result.value)
 
 
-def _visible_version(
-    case_id: uuid.UUID, version_id: uuid.UUID, scope: CaseScope
-) -> None:
-    """Read checks: the case must be visible, and the version must belong to it. Both answer 404 when they fail."""
-    if not cases.is_visible(str(case_id), scope):
+def _read_access(case_id: uuid.UUID, version_id: uuid.UUID, scope: CaseScope) -> str:
+    """Read checks: the caller must reach the case, or the one packet the approver may read, and the version must belong
+    to the case. Returns "case" or "packet" (safe_kit.disclosure.access_for). Both answer 404 when the checks fail."""
+    access = disclosure.access_for(str(case_id), str(version_id), scope)
+    if access is None:
         raise HTTPException(status_code=404, detail="case not found")
     if disclosure.get_version(str(case_id), str(version_id), scope) is None:
         raise HTTPException(status_code=404, detail="disclosure version not found")
+    return access
+
+
+def _escalation_packet_view(escalation: Escalation) -> dict[str, Any]:
+    """What an approver who reads only the packet sees of an escalation: the missing facts, and no backup identity,
+    authority basis or next update."""
+    return {
+        "id": escalation.id,
+        "version_id": escalation.version_id,
+        "missing_facts": escalation.missing_facts,
+        "escalated_at": _iso(escalation.escalated_at),
+    }
 
 
 # --- routes ---------------------------------------------------------------------------------------------------------
@@ -221,8 +235,11 @@ def list_escalations(
     limit: int = Query(default=DEFAULT_PAGE, ge=1, le=MAX_PAGE),
     actor: User = Depends(require_permission("disclosures:read")),
 ) -> dict[str, Any]:
-    _visible_version(case_id, version_id, _scope(actor))
+    access = _read_access(case_id, version_id, _scope(actor))
     escalations = records.list_escalations(str(case_id), str(version_id), limit)
+    # An approver who reads only its packet gets the missing facts and nothing else of the escalation.
+    if access == "packet":
+        return {"items": [_escalation_packet_view(item) for item in escalations]}
     return {"items": [_escalation_view(item) for item in escalations]}
 
 
@@ -292,6 +309,8 @@ def list_reviews(
     limit: int = Query(default=DEFAULT_PAGE, ge=1, le=MAX_PAGE),
     actor: User = Depends(require_permission("disclosures:read")),
 ) -> dict[str, Any]:
-    _visible_version(case_id, version_id, _scope(actor))
+    # The reviews are the case's own record: only a caller who reaches the case reads them, not the packet approver.
+    if _read_access(case_id, version_id, _scope(actor)) != "case":
+        raise HTTPException(status_code=404, detail="case not found")
     reviews = records.list_reviews(str(case_id), str(version_id), kind, limit)
     return {"items": [_review_view(item) for item in reviews]}

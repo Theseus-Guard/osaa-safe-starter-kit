@@ -1808,10 +1808,10 @@ def test_unassigned_reporter_case_stays_hidden_from_the_other_roles(db_client, p
         for url in ("", "/history", "/assignments"):
             response = db_client(actor).get(f"/api/v1/cases/{case_id}{url}")
             assert response.status_code == 404, (actor, url, response.text)
-    # The disclosure approver holds cases:read_all without cases:assign, so the reporter-channel rule still applies.
+    # The disclosure approver holds no case read (migration 0056): the case list and the case read are refused by role.
     approver = new_user("disclosure_approver")
-    assert case_id not in listed_ids(db_client, approver)
-    assert get_case(db_client, approver, case_id).status_code == 404
+    assert db_client(approver).get("/api/v1/cases").status_code == 403
+    assert get_case(db_client, approver, case_id).status_code == 403
     # The reporter sees its own case, and the other reporter does not.
     assert case_id in listed_ids(db_client, people["reporter"])
     assert get_case(db_client, people["reporter"], case_id).status_code == 200
