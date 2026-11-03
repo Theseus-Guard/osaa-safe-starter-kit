@@ -91,6 +91,9 @@ class CaseScope:
     hidden from it: the contact needs reporter_contact:read.
     reporter_contact: the caller holds reporter_contact:read. With read_all, such a caller sees every case in the same
     way, so the reporting owner can assign reporter-channel cases too.
+    approver: the caller holds disclosures:approve. It does not change the case rule above (visibility_sql ignores it):
+    a case is never opened to an approver by its case rule. The disclosure read path (safe_kit.disclosure) reads it to
+    show the one packet the approver may approve, and nothing else of the case.
     """
 
     user_id: str
@@ -99,6 +102,7 @@ class CaseScope:
     read_assigned: bool = False
     can_assign: bool = False
     reporter_contact: bool = False
+    approver: bool = False
 
     @classmethod
     def from_permissions(cls, user_id: str, permissions: frozenset[str]) -> "CaseScope":
@@ -109,6 +113,7 @@ class CaseScope:
             read_assigned="cases:read_assigned" in permissions,
             can_assign="cases:assign" in permissions,
             reporter_contact="reporter_contact:read" in permissions,
+            approver="disclosures:approve" in permissions,
         )
 
     def _own_rights_sql(self, alias: str) -> tuple[str, tuple[Any, ...]]:
@@ -116,7 +121,10 @@ class CaseScope:
         if self.read_all:
             if self.reporter_contact or self.can_assign:
                 return "TRUE", ()
-            return f"(NOT {_reporter_case_sql(alias)} OR {_assigned_case_sql(alias)})", ()
+            return (
+                f"(NOT {_reporter_case_sql(alias)} OR {_assigned_case_sql(alias)})",
+                (),
+            )
         clauses: list[str] = []
         params: list[Any] = []
         if self.read_own:

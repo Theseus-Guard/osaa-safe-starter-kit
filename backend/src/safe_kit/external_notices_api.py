@@ -40,7 +40,7 @@ from pydantic import (
     model_validator,
 )
 
-from safe_kit import cases, disclosure, external_notices
+from safe_kit import disclosure, external_notices
 from safe_kit.auth import permissions_of, require_any_permission, require_permission
 from safe_kit.cases import CaseScope
 from safe_kit.external_notices import Notice, Outcome, Result
@@ -249,8 +249,9 @@ def _settle(result: Result) -> Any:
 def _visible_version(
     case_id: uuid.UUID, version_id: uuid.UUID, scope: CaseScope
 ) -> None:
-    """Read checks: the case must be visible, and the version must belong to it. Both answer 404 when they fail."""
-    if not cases.is_visible(str(case_id), scope):
+    """Read checks: the case must be visible (or, for an approver, the version is its packet, safe_kit.disclosure.access_for),
+    and the version must belong to it. Both answer 404 when they fail."""
+    if disclosure.access_for(str(case_id), str(version_id), scope) is None:
         raise HTTPException(status_code=404, detail="case not found")
     if disclosure.get_version(str(case_id), str(version_id), scope) is None:
         raise HTTPException(status_code=404, detail="disclosure version not found")

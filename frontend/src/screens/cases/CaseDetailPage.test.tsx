@@ -13,9 +13,11 @@ import {
   getReporterContact,
   listAssignments,
   listAwarenessEvents,
+  listDisclosures,
   listEvidence,
   listImpacts,
   listLegalDuties,
+  listNotices,
   listReviewRounds,
   openReviewRound,
 } from "../../api";
@@ -38,6 +40,8 @@ vi.mock("../../api", async (importOriginal) => {
     getClassification: vi.fn(),
     getPreliminaryReport: vi.fn(),
     getReporterContact: vi.fn(),
+    listDisclosures: vi.fn(),
+    listNotices: vi.fn(),
   };
 });
 
@@ -60,6 +64,8 @@ const legalDuties = vi.mocked(listLegalDuties);
 const classification = vi.mocked(getClassification);
 const report = vi.mocked(getPreliminaryReport);
 const read = vi.mocked(getReporterContact);
+const list = vi.mocked(listDisclosures);
+const notices = vi.mocked(listNotices);
 
 // Selects one of the case tabs, as a user would before reading or pressing anything inside it.
 async function openTab(name: string) {
@@ -221,6 +227,25 @@ describe("CaseDetailPage", () => {
 
     expect(await screen.findByLabelText(/Upload evidence/)).toBeInTheDocument();
     expect(evidence).not.toHaveBeenCalled();
+  });
+
+  it("shows only the packet to a disclosure approver without a case read, and does not load the case", async () => {
+    // The permissions are the ones /auth/me returns for the seeded approver (migration 0056): no case read.
+    list.mockResolvedValue({ items: [] });
+    notices.mockResolvedValue({ items: [] });
+    render(
+      <CaseDetailPage
+        caseId="case-1"
+        permissions={["disclosures:read", "disclosures:approve"]}
+        role="disclosure_approver"
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Disclosure packet" })).toBeInTheDocument();
+    expect(await screen.findByText("Disclosure packages")).toBeInTheDocument();
+    expect(list).toHaveBeenCalled();
+    expect(get).not.toHaveBeenCalled();
+    expect(screen.queryByRole("tab", { name: "Overview" })).not.toBeInTheDocument();
   });
 
   it("locks the close form for a reporter and offers no reopen", async () => {

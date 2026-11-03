@@ -861,7 +861,8 @@ EXPECTED_CASE_VIEW = {
     "demo-triager": set(SEEDED_CASES),
     "demo-investigator": set(SEEDED_CASES),
     "demo-reviewer": {demo_seed.CASE_ONE, demo_seed.CASE_THREE},
-    "demo-approver": set(SEEDED_CASES),
+    # The disclosure approver holds no case read (migration 0056): the case list and the case read are refused by role.
+    "demo-approver": None,
     "demo-auditor": None,
 }
 

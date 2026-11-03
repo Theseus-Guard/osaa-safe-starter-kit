@@ -33,7 +33,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from safe_kit import audit, auth, cases, disclosure
+from safe_kit import audit, auth, disclosure
 from safe_kit import external_notice_backup as backup
 from safe_kit.cases import CaseScope
 from safe_kit.db import connect
@@ -137,12 +137,16 @@ def _review_from_row(row: tuple) -> Review:
     return Review(*row)
 
 
-def _lock_open_case(conn, case_id: str, scope: CaseScope) -> Outcome | None:
-    """Lock the case, then check visibility and status. Returns the refusal, or None when the caller may write."""
-    locked = cases.lock_visible_case(conn, case_id, scope)
-    if locked is None:
+def _lock_open_case(
+    conn, case_id: str, scope: CaseScope, version_id: str
+) -> Outcome | None:
+    """Lock the case, then check visibility and status. Returns the refusal, or None when the caller may write.
+
+    The version is named because an approver records a review through the packet rule (safe_kit.disclosure)."""
+    status = disclosure.lock_case_for_version(conn, case_id, scope, version_id)
+    if status is None:
         return Outcome.NOT_FOUND
-    if locked[0] == "closed":
+    if status == "closed":
         return Outcome.CLOSED
     return None
 
@@ -160,7 +164,7 @@ def record_escalation(
     try:
         with connect() as conn:
             check(conn, idempotency)
-            refusal = _lock_open_case(conn, case_id, scope)
+            refusal = _lock_open_case(conn, case_id, scope, version_id)
             if refusal is not None:
                 return Result(refusal)
             version = disclosure.load_version_on(conn, case_id, version_id)
@@ -256,7 +260,7 @@ def record_review(
     try:
         with connect() as conn:
             check(conn, idempotency)
-            refusal = _lock_open_case(conn, case_id, scope)
+            refusal = _lock_open_case(conn, case_id, scope, version_id)
             if refusal is not None:
                 return Result(refusal)
             version = disclosure.load_version_on(conn, case_id, version_id)

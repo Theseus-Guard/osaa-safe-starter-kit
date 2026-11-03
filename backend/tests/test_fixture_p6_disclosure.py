@@ -694,10 +694,10 @@ def test_a_role_without_disclosures_approve_cannot_approve(dworld):
 @requires_database
 def test_a_case_the_caller_cannot_see_answers_as_a_missing_case(dworld, monkeypatch):
     view, _ = first_version(dworld)
-    # The approver reads every case (cases:read_all, migration 0044), so the stranger is a reviewer: it holds only
-    # cases:read_assigned, is not assigned to this case, and is given the disclosure permissions for this test.
+    # The stranger is a reviewer: it holds only cases:read_assigned, is not assigned to this case, and is given
+    # disclosures:read for this test. It does not hold disclosures:approve, so the approver's packet rule does not apply.
     stranger = db_user("reviewer")
-    grant(monkeypatch, "reviewer", "disclosures:read", "disclosures:approve")
+    grant(monkeypatch, "reviewer", "disclosures:read")
     for suffix in ("", f"/{view['id']}", f"/{view['id']}/preview"):
         hidden = request_as(stranger, "get", case_url(dworld, suffix))
         assert hidden.status_code == 404, suffix

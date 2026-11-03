@@ -38,6 +38,8 @@ type CaseTab = "overview" | "deadlines" | "evidence" | "reviews" | "links" | "di
 
 export function CaseDetailPage({ caseId, permissions, role }: Props) {
   const abilities = caseAbilities(permissions, role);
+  // A disclosure approver without a case read (migration 0056) sees only its packet: the case is not loaded at all.
+  const packetOnly = !abilities.canReadRecords && abilities.canReadDisclosures;
   const [detail, setDetail] = useState<CaseDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<CaseTab>("overview");
@@ -45,6 +47,7 @@ export function CaseDetailPage({ caseId, permissions, role }: Props) {
   const [historyRevision, setHistoryRevision] = useState(0);
 
   useEffect(() => {
+    if (packetOnly) return undefined;
     let stale = false;
     setDetail(null);
     setError(null);
@@ -59,7 +62,22 @@ export function CaseDetailPage({ caseId, permissions, role }: Props) {
     return () => {
       stale = true;
     };
-  }, [caseId]);
+  }, [caseId, packetOnly]);
+
+  if (packetOnly) {
+    return (
+      <div className="grid gap-4">
+        <h2 className="text-lg font-semibold">Disclosure packet</h2>
+        <CaseDisclosures
+          key={caseId}
+          caseId={caseId}
+          closed={false}
+          canApprove={abilities.canApproveDisclosures}
+          canRecordNotices={abilities.canRecordNotices}
+        />
+      </div>
+    );
+  }
 
   function applyChange(updated: CaseDetail) {
     setDetail(updated);
