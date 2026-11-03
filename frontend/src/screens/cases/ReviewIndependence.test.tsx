@@ -227,6 +227,9 @@ describe("ReviewIndependence", () => {
     expect(within(form).queryByLabelText("Independent reviewer ID")).not.toBeInTheDocument();
     await user.click(within(form).getByRole("button", { name: "File appeal" }));
     expect(await within(form).findByRole("alert")).toHaveTextContent("Give the grounds of the appeal.");
+    const grounds = within(form).getByLabelText("Appeal grounds");
+    expect(grounds).toBeInvalid();
+    expect(grounds).toHaveAccessibleDescription("Give the grounds of the appeal.");
     expect(appeal).not.toHaveBeenCalled();
   });
 

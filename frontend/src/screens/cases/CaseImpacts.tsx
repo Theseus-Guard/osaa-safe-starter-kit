@@ -99,7 +99,13 @@ export function CaseImpacts({ caseId, closed, canWrite, canReadFullView, onRecor
                     </TableCell>
                     {canAssess && (
                       <TableCell>
-                        <Button size="sm" variant="outline" onClick={() => setEditing(impact)}>
+                        {/* Several rows share the visible action text, so the name also says which impact it is for. */}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          aria-label={`${impact.assessed ? "Update" : "Assess"}: ${humanize(impact.area)}`}
+                          onClick={() => setEditing(impact)}
+                        >
                           {impact.assessed ? "Update" : "Assess"}
                         </Button>
                       </TableCell>

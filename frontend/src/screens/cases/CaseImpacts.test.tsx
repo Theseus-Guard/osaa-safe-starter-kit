@@ -87,7 +87,7 @@ describe("CaseImpacts", () => {
     render(<CaseImpacts {...BASE_PROPS} onRecorded={onRecorded} />);
 
     expect(await screen.findByText("Affected people groups")).toBeInTheDocument();
-    await user.click(within(rowOf("Duration")).getByRole("button", { name: "Assess" }));
+    await user.click(within(rowOf("Duration")).getByRole("button", { name: /^Assess/ }));
     const dialog = await screen.findByRole("dialog");
     await user.click(within(dialog).getByLabelText(/^Severity/));
     await user.click(await screen.findByRole("option", { name: "Medium" }));
@@ -107,7 +107,7 @@ describe("CaseImpacts", () => {
     render(<CaseImpacts {...BASE_PROPS} />);
 
     expect(await screen.findByText("Affected people groups")).toBeInTheDocument();
-    await user.click(within(rowOf("Duration")).getByRole("button", { name: "Assess" }));
+    await user.click(within(rowOf("Duration")).getByRole("button", { name: /^Assess/ }));
     const dialog = await screen.findByRole("dialog");
     await user.type(within(dialog).getByLabelText(/^Scope/), "Two days");
     await user.click(within(dialog).getByRole("button", { name: "Save assessment" }));

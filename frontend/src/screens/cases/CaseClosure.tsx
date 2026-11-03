@@ -114,7 +114,8 @@ export function CaseClosure({ caseId, status, closedAt, closeReason, reopenReaso
       <CardContent className="flex flex-col gap-4">
         {reopenNote}
         {canClose && (
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          // noValidate: the empty reason is reported by handleSubmit, where the message is announced and linked to the field.
+          <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
             <FieldGroup>
               <Field>
                 <FieldLabel htmlFor="close-reason">

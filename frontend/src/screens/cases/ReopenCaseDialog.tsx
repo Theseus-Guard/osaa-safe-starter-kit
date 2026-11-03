@@ -68,7 +68,8 @@ function ReopenCaseForm({ caseId, onReopened }: { caseId: string; onReopened: (d
         <DialogTitle>Reopen case</DialogTitle>
         <DialogDescription>Reopening unlocks the deadlines and assignments. The reason is stored with the case.</DialogDescription>
       </DialogHeader>
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+      {/* noValidate: the empty reason is reported by handleSubmit, where the message is announced and linked to the field. */}
+      <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
         <FieldGroup>
           <Field>
             <FieldLabel htmlFor="reopen-reason">

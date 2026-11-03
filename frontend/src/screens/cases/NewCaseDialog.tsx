@@ -106,7 +106,8 @@ function NewCaseForm({ onCreated }: { onCreated: (created: CaseDetail) => void }
         <DialogTitle>New case</DialogTitle>
         <DialogDescription>Record when you became aware of the incident. Deadlines are calculated from this time.</DialogDescription>
       </DialogHeader>
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+      {/* noValidate: the browser's own required-field bubble is not announced reliably, so the checks below report every empty field. */}
+      <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
         <FieldGroup>
           <Field>
             <FieldLabel htmlFor="case-title">
