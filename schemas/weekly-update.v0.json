@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:safe-starter-kit:schema:weekly-update:0.1.0",
+  "$comment": "Project-defined draft (weekly_update_schema_version 0.1.0) of the SAFE-Starter-Kit weekly machine-readable update. This is NOT an official SAFE schema: SAFE v1.0 adopts no weekly update schema. Fields and enums are provisional until the F0 decision log is signed off.",
+  "title": "SAFE-Starter-Kit weekly machine-readable update (draft 0.1.0)",
+  "description": "Internal weekly status record for a case that has at least one open significant risk. It needs no approval and is sent to no external recipient. It holds no free text: impact scope text, deadline reasons and other notes stay in the case. Timestamps are UTC (RFC 3339 with Z).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "weekly_update_schema_version",
+    "weekly_update_id",
+    "case_id",
+    "case_reference",
+    "sequence",
+    "generated_at",
+    "next_update_due_at",
+    "significant_risks",
+    "deadline_tasks"
+  ],
+  "properties": {
+    "weekly_update_schema_version": {
+      "const": "0.1.0",
+      "description": "Version of this schema. Changes to the fields or enums change it."
+    },
+    "weekly_update_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Stable ID of this update. It does not change when the update is read again."
+    },
+    "case_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "case_reference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "description": "The human-readable case reference, as shown in the case list."
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "1 for the first update of the case, then 2, 3 and so on. Numbers are never reused."
+    },
+    "generated_at": {
+      "$ref": "#/$defs/timestamp",
+      "description": "When the update was generated, in UTC."
+    },
+    "next_update_due_at": {
+      "$ref": "#/$defs/timestamp",
+      "description": "When the next update is due: 7 elapsed days after generated_at, while the risk is still open."
+    },
+    "significant_risks": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/significant_risk" },
+      "description": "The impact areas of the case whose severity is high or critical at generation. An update exists only while at least one is listed."
+    },
+    "deadline_tasks": {
+      "type": "array",
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/deadline_task" },
+      "description": "The five SAFE deadline tasks of the case at generation, in due-date order. Legal duties are separate records and are not listed."
+    }
+  },
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "significant_risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["area", "severity"],
+      "properties": {
+        "area": {
+          "enum": [
+            "affected_people_groups",
+            "severity",
+            "scale",
+            "duration",
+            "reversibility",
+            "disproportionate_effect"
+          ]
+        },
+        "severity": {
+          "enum": ["high", "critical"]
+        }
+      }
+    },
+    "deadline_task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "due_at", "status"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "affected_customers",
+            "preliminary_safe_report",
+            "broader_advisory",
+            "preliminary_public_report",
+            "remediation_status"
+          ]
+        },
+        "due_at": { "$ref": "#/$defs/timestamp" },
+        "status": {
+          "enum": ["open", "done", "not_applicable"]
+        }
+      }
+    }
+  }
+}

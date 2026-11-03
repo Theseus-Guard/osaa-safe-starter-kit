@@ -29,12 +29,13 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from safe_kit import audit
+from safe_kit import audit, tlp
 from safe_kit.cases import CaseScope, is_visible_on
 from safe_kit.db import connect
 from safe_kit.evidence_crypto import IntegrityError, open_sealed, seal, sha256_hex
 from safe_kit.evidence_keys import KeyProvider, KeyProviderError
 from safe_kit.evidence_storage import EvidenceStorage, ObjectNotFound, StorageError
+from safe_kit.idempotency import KeyReused, KeyScope, Replayed, check, remember
 
 DEFAULT_MAX_BYTES = 50 * 1024 * 1024
 MAX_FILENAME_LENGTH = 255
@@ -51,6 +52,8 @@ UPLOADED = "uploaded"
 DOWNLOADED = "downloaded"
 VERIFIED = "verified"
 FAILED_EVENT = "failed"
+# Written on the original of a redaction; the derived item gets its own uploaded event.
+REDACTED = "redacted"
 
 EVIDENCE_UPLOADED = audit.EVIDENCE_UPLOADED
 EVIDENCE_DOWNLOADED = audit.EVIDENCE_DOWNLOADED
@@ -94,7 +97,12 @@ class StoreVerificationFailed(StorageError):
 # Verification reasons that mean the stored object is not what was written. An item with one of these moves to failed.
 # storage_read_failed and key_unavailable are availability problems: they are recorded in custody only.
 INTEGRITY_FAILURE_REASONS = frozenset(
-    {"object_missing", "decryption_failed", "ciphertext_checksum_mismatch", "plaintext_checksum_mismatch"}
+    {
+        "object_missing",
+        "decryption_failed",
+        "ciphertext_checksum_mismatch",
+        "plaintext_checksum_mismatch",
+    }
 )
 
 
@@ -174,7 +182,9 @@ def check_media_type(declared: str | None, data: bytes) -> str:
     media_type = declared.split(";", 1)[0].strip().lower()
     checker = ALLOWED_MEDIA_TYPES.get(media_type)
     if checker is None or not checker(data):
-        raise UnsupportedMediaType("media type is not allowed or does not match the content")
+        raise UnsupportedMediaType(
+            "media type is not allowed or does not match the content"
+        )
     return media_type
 
 
@@ -189,6 +199,8 @@ class EvidenceItem:
     sha256_plaintext: str | None
     status: str
     created_at: datetime
+    # Null for an uploaded original. A derived item from a redaction has one of the TLP labels (safe_kit.tlp).
+    tlp_label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -204,6 +216,7 @@ class StoredEvidence:
     wrapped_data_key: bytes
     nonce: bytes
     status: str
+    tlp_label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -218,7 +231,7 @@ class CustodyEvent:
 
 _ITEM_COLUMNS = (
     "id::text, case_id::text, uploaded_by::text, original_filename, media_type, size_bytes, "
-    "sha256_plaintext, status, created_at"
+    "sha256_plaintext, status, created_at, tlp_label"
 )
 
 
@@ -233,10 +246,13 @@ def _to_item(row: tuple) -> EvidenceItem:
         sha256_plaintext=row[6],
         status=row[7],
         created_at=row[8],
+        tlp_label=row[9],
     )
 
 
-def _custody(conn, evidence_id: str, actor_id: str | None, action: str, details: dict[str, Any]) -> None:
+def _custody(
+    conn, evidence_id: str, actor_id: str | None, action: str, details: dict[str, Any]
+) -> None:
     conn.execute(
         "INSERT INTO custody_events (evidence_id, actor_id, action, details) VALUES (%s, %s, %s, %s)",
         (evidence_id, actor_id, action, Jsonb(details)),
@@ -252,11 +268,16 @@ def create_evidence(
     storage: EvidenceStorage,
     provider: KeyProvider,
     scope: CaseScope,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[EvidenceItem], Any] | None = None,
 ) -> EvidenceItem:
     """Encrypt, store, verify, and record one evidence object. The caller has already checked size and media type.
 
     The case must be visible to scope when the pending row is inserted; otherwise CaseNotVisible is raised before
-    anything is stored.
+    anything is stored. With an idempotency scope, a replay raises Replayed before anything is stored, and the response
+    is stored with the item becoming available. A concurrent request with the same key that finishes first makes this
+    one raise Replayed at that point too; its pending row is then marked failed and its stored object is not used.
     The object is read back and checked with the same rules as a download before the row becomes available.
     Raises StorageError (StoreVerificationFailed when the read-back does not match) or KeyProviderError when the
     object cannot be stored or verified. The row is then marked failed. Raises UploadExpired when reconciliation
@@ -266,8 +287,17 @@ def create_evidence(
     storage_key = str(uuid.uuid4())
     sealed = seal(data, storage_key, provider)
     evidence_id = _insert_pending(
-        case_id, uploader_id, name, media_type, len(data), storage_key, sealed.key_id,
-        sealed.wrapped_data_key, sealed.nonce, scope,
+        case_id,
+        uploader_id,
+        name,
+        media_type,
+        len(data),
+        storage_key,
+        sealed.key_id,
+        sealed.wrapped_data_key,
+        sealed.nonce,
+        scope,
+        idempotency=idempotency,
     )
     try:
         storage.put(storage_key, sealed.ciphertext)
@@ -294,7 +324,18 @@ def create_evidence(
     except VerificationFailed as failure:
         _mark_failed(evidence_id, uploader_id, failure.reason)
         raise StoreVerificationFailed(failure.reason) from None
-    return _mark_available(evidence_id, uploader_id, plaintext_digest, ciphertext_digest)
+    try:
+        return _mark_available(
+            evidence_id,
+            uploader_id,
+            plaintext_digest,
+            ciphertext_digest,
+            idempotency=idempotency,
+            render=render,
+        )
+    except (Replayed, KeyReused):
+        _mark_failed(evidence_id, uploader_id, "duplicate_request")
+        raise
 
 
 def _insert_pending(
@@ -308,8 +349,10 @@ def _insert_pending(
     wrapped_data_key: bytes,
     nonce: bytes,
     scope: CaseScope,
+    idempotency: KeyScope | None = None,
 ) -> str:
     with connect() as conn:
+        check(conn, idempotency)
         # The same visibility rule as the API check, run on this connection so the check and the insert commit or
         # roll back together. A visibility change committed before this statement is seen here.
         if not is_visible_on(conn, case_id, scope):
@@ -322,13 +365,32 @@ def _insert_pending(
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending')
             RETURNING id::text
             """,
-            (case_id, uploader_id, name, media_type, size_bytes, storage_key, key_id, wrapped_data_key, nonce),
+            (
+                case_id,
+                uploader_id,
+                name,
+                media_type,
+                size_bytes,
+                storage_key,
+                key_id,
+                wrapped_data_key,
+                nonce,
+            ),
         ).fetchone()
     return row[0]
 
 
-def _mark_available(evidence_id: str, uploader_id: str, sha_plaintext: str, sha_ciphertext: str) -> EvidenceItem:
+def _mark_available(
+    evidence_id: str,
+    uploader_id: str,
+    sha_plaintext: str,
+    sha_ciphertext: str,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[EvidenceItem], Any] | None = None,
+) -> EvidenceItem:
     with connect() as conn:
+        check(conn, idempotency)
         row = conn.execute(
             f"""
             UPDATE evidence_items
@@ -350,6 +412,9 @@ def _mark_available(evidence_id: str, uploader_id: str, sha_plaintext: str, sha_
             actor_id=uploader_id,
             details={"case_id": item.case_id},
         )
+        if idempotency is not None:
+            assert render is not None
+            remember(conn, idempotency, 201, render(item))
     return item
 
 
@@ -371,7 +436,7 @@ def find_stored(evidence_id: str, scope: CaseScope) -> StoredEvidence | None:
             f"""
             SELECT e.id::text, e.case_id::text, e.original_filename, e.media_type,
                    e.sha256_plaintext, e.sha256_ciphertext, e.storage_key, e.key_id, e.wrapped_data_key,
-                   e.nonce, e.status
+                   e.nonce, e.status, e.tlp_label
             FROM evidence_items e
             JOIN cases ON cases.id = e.case_id AND NOT cases.is_deleted
             WHERE e.id = %s AND NOT e.is_deleted AND {visibility}
@@ -392,10 +457,13 @@ def find_stored(evidence_id: str, scope: CaseScope) -> StoredEvidence | None:
         wrapped_data_key=bytes(row[8]),
         nonce=bytes(row[9]),
         status=row[10],
+        tlp_label=row[11],
     )
 
 
-def read_original(stored: StoredEvidence, storage: EvidenceStorage, provider: KeyProvider) -> bytes:
+def read_original(
+    stored: StoredEvidence, storage: EvidenceStorage, provider: KeyProvider
+) -> bytes:
     """Return the verified plaintext. Raises VerificationFailed with a reason; no partial content is returned."""
     try:
         ciphertext = storage.get(stored.storage_key)
@@ -407,7 +475,12 @@ def read_original(stored: StoredEvidence, storage: EvidenceStorage, provider: Ke
         raise VerificationFailed("ciphertext_checksum_mismatch")
     try:
         plaintext = open_sealed(
-            ciphertext, stored.nonce, stored.wrapped_data_key, stored.key_id, stored.storage_key, provider,
+            ciphertext,
+            stored.nonce,
+            stored.wrapped_data_key,
+            stored.key_id,
+            stored.storage_key,
+            provider,
         )
     except IntegrityError as error:
         raise VerificationFailed(error.reason) from None
@@ -444,22 +517,40 @@ def record_failure(evidence_id: str, actor_id: str | None, reason: str) -> None:
         _custody(conn, evidence_id, actor_id, FAILED_EVENT, {"reason": reason})
 
 
-def list_evidence(case_id: str, limit: int, offset: int) -> tuple[list[EvidenceItem], int]:
+def list_evidence(
+    case_id: str, limit: int, offset: int, recipient: tlp.Recipient | None = None
+) -> tuple[list[EvidenceItem], int]:
+    """A page of the items of a case, and their total. With a recipient, items the TLP rule hides from it are left out
+    of both the page and the total, so the total never counts an item the caller cannot see."""
+    if recipient is None:
+        audience, audience_params = "TRUE", ()
+    else:
+        audience, audience_params = tlp.visibility_sql(recipient)
     with connect() as conn:
         rows = conn.execute(
             f"""
-            SELECT {_ITEM_COLUMNS} FROM evidence_items
-            WHERE case_id = %s AND NOT is_deleted
-            ORDER BY created_at, id
+            SELECT {_ITEM_COLUMNS} FROM evidence_items e
+            WHERE e.case_id = %s AND NOT e.is_deleted AND {audience}
+            ORDER BY e.created_at, e.id
             LIMIT %s OFFSET %s
             """,
-            (case_id, limit, offset),
+            (case_id, *audience_params, limit, offset),
         ).fetchall()
         total = conn.execute(
-            "SELECT count(*) FROM evidence_items WHERE case_id = %s AND NOT is_deleted",
-            (case_id,),
+            f"SELECT count(*) FROM evidence_items e WHERE e.case_id = %s AND NOT e.is_deleted AND {audience}",
+            (case_id, *audience_params),
         ).fetchone()[0]
     return [_to_item(row) for row in rows], total
+
+
+def get_item(evidence_id: str) -> EvidenceItem | None:
+    """The metadata of one item. No access check here: the caller checks the case ACL and the TLP rule first."""
+    with connect() as conn:
+        row = conn.execute(
+            f"SELECT {_ITEM_COLUMNS} FROM evidence_items e WHERE e.id = %s AND NOT e.is_deleted",
+            (evidence_id,),
+        ).fetchone()
+    return None if row is None else _to_item(row)
 
 
 def custody_events(evidence_id: str) -> list[CustodyEvent]:
@@ -475,7 +566,12 @@ def custody_events(evidence_id: str) -> list[CustodyEvent]:
         ).fetchall()
     return [
         CustodyEvent(
-            id=row[0], evidence_id=row[1], actor_id=row[2], action=row[3], details=row[4], created_at=row[5],
+            id=row[0],
+            evidence_id=row[1],
+            actor_id=row[2],
+            action=row[3],
+            details=row[4],
+            created_at=row[5],
         )
         for row in rows
     ]

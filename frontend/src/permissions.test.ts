@@ -47,12 +47,72 @@ describe("permissions", () => {
       canAssign: true,
       canReadEvidence: false,
       canWriteEvidence: false,
+      canRedactEvidence: false,
       canReview: false,
+      canFileAppeal: true,
       canReadRecords: true,
       canWriteRecords: true,
       canReadFullView: true,
       canReadReporterContact: false,
+      canReadDisclosures: false,
+      canApproveDisclosures: false,
+      canRecordNotices: false,
     });
+  });
+
+  it("maps the disclosure permissions: read with disclosures:read, approve with disclosures:approve", () => {
+    const approver = caseAbilities(["disclosures:read", "disclosures:approve", "cases:read_assigned"]);
+    expect(approver.canReadDisclosures).toBe(true);
+    expect(approver.canApproveDisclosures).toBe(true);
+    expect(approver.canRecordNotices).toBe(true);
+
+    const reader = caseAbilities(["disclosures:read"]);
+    expect(reader.canReadDisclosures).toBe(true);
+    expect(reader.canApproveDisclosures).toBe(false);
+    expect(reader.canRecordNotices).toBe(false);
+
+    const auditor = caseAbilities(["cases:read_all"]);
+    expect(auditor.canReadDisclosures).toBe(false);
+    expect(auditor.canApproveDisclosures).toBe(false);
+    expect(auditor.canRecordNotices).toBe(false);
+  });
+
+  it("lets a preparer record a notice on the manual path only", () => {
+    const preparer = caseAbilities(["disclosures:read", "disclosures:prepare"]);
+    expect(preparer.canRecordNotices).toBe(true);
+    expect(preparer.canApproveDisclosures).toBe(false);
+  });
+
+  it("lets the disclosure approver read the case it approves, with no deadline change, appeal or contact", () => {
+    // The approver's permissions after migration 0044. The role is passed, as the case page does, so the controls the
+    // backend refuses to this role are hidden too.
+    const permissions = ["cases:read_all", "disclosures:read", "disclosures:approve"];
+    expect(canReadCases(permissions)).toBe(true);
+
+    const approver = caseAbilities(permissions, "disclosure_approver");
+    expect(approver.canReadRecords).toBe(true);
+    expect(approver.canReadFullView).toBe(true);
+    expect(approver.canReadDisclosures).toBe(true);
+    expect(approver.canApproveDisclosures).toBe(true);
+    expect(approver.canRecordNotices).toBe(true);
+    expect(approver.canUpdateDeadlines).toBe(false);
+    expect(approver.canMarkNotApplicable).toBe(false);
+    expect(approver.canFileAppeal).toBe(false);
+    expect(approver.canWriteRecords).toBe(false);
+    expect(approver.canReview).toBe(false);
+    expect(approver.canAssign).toBe(false);
+    expect(approver.canClose).toBe(false);
+    expect(approver.canReadReporterContact).toBe(false);
+  });
+
+  it("keeps the deadline and appeal controls for the other read_all and read_assigned roles", () => {
+    expect(caseAbilities(["cases:read_all"], "triager").canUpdateDeadlines).toBe(true);
+    expect(caseAbilities(["cases:read_all"], "reporting_owner").canUpdateDeadlines).toBe(true);
+    expect(caseAbilities(["cases:read_assigned", "reviews:write"], "reviewer").canUpdateDeadlines).toBe(true);
+    expect(caseAbilities(["cases:read_assigned", "reviews:write"], "reviewer").canFileAppeal).toBe(true);
+    expect(caseAbilities(["cases:read_own"], "reporter").canFileAppeal).toBe(true);
+    // Without a role the controls follow the permissions alone, as before.
+    expect(caseAbilities(["cases:read_all"]).canUpdateDeadlines).toBe(true);
   });
 
   it("lets only reporter_contact:read open the reporter contact", () => {
@@ -84,5 +144,9 @@ describe("permissions", () => {
   it("keeps evidence read and evidence write apart", () => {
     expect(caseAbilities(["evidence:read"])).toMatchObject({ canReadEvidence: true, canWriteEvidence: false });
     expect(caseAbilities(["evidence:write"])).toMatchObject({ canReadEvidence: false, canWriteEvidence: true });
+    // Redacting needs both: the original is read first, then the copy is written.
+    expect(caseAbilities(["evidence:read", "evidence:write"])).toMatchObject({ canRedactEvidence: true });
+    expect(caseAbilities(["evidence:write"])).toMatchObject({ canRedactEvidence: false });
+    expect(caseAbilities(["evidence:read"])).toMatchObject({ canRedactEvidence: false });
   });
 });

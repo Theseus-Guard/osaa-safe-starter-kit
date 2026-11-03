@@ -12,6 +12,8 @@ import { SettingsPage } from "./admin/SettingsPage";
 import { UsersPage } from "./admin/UsersPage";
 import { CaseDetailPage } from "./cases/CaseDetailPage";
 import { CasesPage } from "./cases/CasesPage";
+import { CatalogEntryPage } from "./catalog/CatalogEntryPage";
+import { CatalogPage } from "./catalog/CatalogPage";
 
 interface Props {
   profile: Me;
@@ -30,12 +32,14 @@ export function Home(props: Props) {
 
 function HomeView({ profile, notice, onLogout, onPasswordChanged }: Props) {
   const isAdmin = profile.role === "admin";
-  const { page, caseId } = useHashRoute(isAdmin);
+  const { page, caseId, entryId } = useHashRoute(isAdmin);
   const { error } = useSystemTimezone();
   const caseDetailHeading =
     page === "cases" && caseId !== null
       ? { title: "Case", description: "Case details. Times are shown in the system timezone." }
-      : undefined;
+      : page === "catalog" && entryId !== null
+        ? { title: "Catalog entry", description: "One catalog entry: its versions, verification history and the forms to change it." }
+        : undefined;
 
   return (
     <AppShell profile={profile} page={page} onLogout={onLogout} heading={caseDetailHeading}>
@@ -49,7 +53,13 @@ function HomeView({ profile, notice, onLogout, onPasswordChanged }: Props) {
         (caseId === null ? (
           <CasesPage permissions={profile.permissions} />
         ) : (
-          <CaseDetailPage caseId={caseId} permissions={profile.permissions} />
+          <CaseDetailPage caseId={caseId} permissions={profile.permissions} role={profile.role} />
+        ))}
+      {page === "catalog" &&
+        (entryId === null ? (
+          <CatalogPage permissions={profile.permissions} />
+        ) : (
+          <CatalogEntryPage entryId={entryId} permissions={profile.permissions} />
         ))}
       {page === "users" && isAdmin && <UsersPage currentUserId={profile.id} />}
       {page === "privacy" && isAdmin && <PrivacyPage />}

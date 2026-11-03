@@ -176,7 +176,6 @@ function ClassificationView({ classification, canReadFullView }: { classificatio
         <Detail label="Event">
           {classification.event_kind === null ? "Not recorded" : humanize(classification.event_kind)}
         </Detail>
-        <Detail label="Internal incident option">{classification.internal_incident_option ? "Yes" : "No"}</Detail>
         <Detail label="Next update due">
           {classification.next_update_due_at === null ? "Not set" : <Timestamp value={classification.next_update_due_at} />}
         </Detail>
@@ -218,7 +217,6 @@ function EditClassificationForm({ caseId, current, zone, onSaved, onConflict }: 
   const [expectedVersion] = useState(current.version);
   const [triggers, setTriggers] = useState<Trigger[]>(current.triggers);
   const [eventKind, setEventKind] = useState<RecordEventKind | null>(current.event_kind);
-  const [internalOption, setInternalOption] = useState(current.internal_incident_option);
   const [texts, setTexts] = useState(() => textsFrom(current));
   const [nextParts, setNextParts] = useState(() =>
     current.next_update_due_at === null
@@ -247,11 +245,6 @@ function EditClassificationForm({ caseId, current, zone, onSaved, onConflict }: 
         return [field, trimmed === "" ? null : trimmed];
       }),
     ) as ClassificationText;
-    // The backend requires a rationale when the internal incident option is chosen.
-    if (internalOption && cleanTexts.classification_rationale === null) {
-      setError("Enter the rationale. It is required when the internal incident option is chosen.");
-      return;
-    }
     let nextUpdateDueAt: string | null = null;
     if (nextParts.date !== "" || nextParts.time !== "") {
       if (nextParts.date === "" || nextParts.time === "") {
@@ -270,7 +263,6 @@ function EditClassificationForm({ caseId, current, zone, onSaved, onConflict }: 
       expected_version: expectedVersion,
       triggers,
       event_kind: eventKind,
-      internal_incident_option: internalOption,
       next_update_due_at: nextUpdateDueAt,
     };
     setBusy(true);
@@ -340,10 +332,6 @@ function EditClassificationForm({ caseId, current, zone, onSaved, onConflict }: 
               </SelectContent>
             </Select>
           </Field>
-          <label className="flex items-center gap-2 text-sm">
-            <Checkbox checked={internalOption} onCheckedChange={(checked) => setInternalOption(checked)} />
-            Internal incident option
-          </label>
           {CLASSIFICATION_TEXT_FIELDS.map((field) => (
             <Field key={field}>
               <FieldLabel htmlFor={`classification-${field}`}>{TEXT_FIELD_LABELS[field]}</FieldLabel>
@@ -354,9 +342,6 @@ function EditClassificationForm({ caseId, current, zone, onSaved, onConflict }: 
                 onChange={(event) => setTexts((previous) => ({ ...previous, [field]: event.target.value }))}
                 rows={2}
               />
-              {field === "classification_rationale" && (
-                <FieldDescription>Required when the internal incident option is chosen.</FieldDescription>
-              )}
             </Field>
           ))}
           <Field>

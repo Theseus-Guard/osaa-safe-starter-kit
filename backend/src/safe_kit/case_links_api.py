@@ -13,16 +13,18 @@ No free text is accepted or returned, and no reporter field is returned.
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from safe_kit.auth import permissions_of, require_any_permission, require_permission
 from safe_kit.case_links import CaseLink, LinkOutcome, add_link, list_links, remove_link
 from safe_kit.case_records_api import CASE_READ_PERMISSIONS_FOR_RECORDS
 from safe_kit.cases import CaseScope
+from safe_kit.idempotency import checked_key, key_scope
 from safe_kit.users import User
 
 CASE_NOT_FOUND = HTTPException(status_code=404, detail="case not found")
+LINKS_ROUTE = "/api/v1/cases/{case_id}/links"
 
 case_links_router = APIRouter(tags=["case links"])
 
@@ -63,7 +65,9 @@ def _raise_for(outcome: LinkOutcome) -> None:
         raise HTTPException(status_code=404, detail="link not found")
 
 
-@case_links_router.get("/api/v1/cases/{case_id}/links", response_model=list[CaseLinkResponse])
+@case_links_router.get(
+    "/api/v1/cases/{case_id}/links", response_model=list[CaseLinkResponse]
+)
 def list_case_links(
     case_id: uuid.UUID,
     actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS_FOR_RECORDS)),
@@ -74,19 +78,41 @@ def list_case_links(
     return [_link_response(link) for link in links]
 
 
-@case_links_router.post("/api/v1/cases/{case_id}/links", status_code=201, response_model=CaseLinkResponse)
+@case_links_router.post(
+    "/api/v1/cases/{case_id}/links", status_code=201, response_model=CaseLinkResponse
+)
 def add_case_link(
     case_id: uuid.UUID,
     body: CaseLinkRequest,
+    request: Request,
     actor: User = Depends(require_permission("cases:triage")),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> CaseLinkResponse:
-    outcome, link = add_link(str(case_id), str(body.linked_case_id), actor.id, _scope(actor))
+    key = checked_key(idempotency_key)
+    scope_key = key_scope(
+        actor.id,
+        "POST",
+        LINKS_ROUTE,
+        key,
+        request.url.path,
+        body.model_dump(mode="json"),
+    )
+    outcome, link = add_link(
+        str(case_id),
+        str(body.linked_case_id),
+        actor.id,
+        _scope(actor),
+        idempotency=scope_key,
+        render=lambda created: _link_response(created).model_dump(mode="json"),
+    )
     _raise_for(outcome)
     assert link is not None
     return _link_response(link)
 
 
-@case_links_router.delete("/api/v1/cases/{case_id}/links/{linked_case_id}", status_code=204)
+@case_links_router.delete(
+    "/api/v1/cases/{case_id}/links/{linked_case_id}", status_code=204
+)
 def remove_case_link(
     case_id: uuid.UUID,
     linked_case_id: uuid.UUID,

@@ -40,6 +40,11 @@ INVESTIGATOR = User(
 )
 
 
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
+
+
 class StorageSpy:
     """Records every object written. A refused upload must leave this empty."""
 
@@ -87,7 +92,11 @@ class FakeDatabase:
         self.connection_of_statement: list[int] = []
 
     def inserts(self) -> list[str]:
-        return [sql for sql in self.statements if sql.startswith("INSERT INTO evidence_items")]
+        return [
+            sql
+            for sql in self.statements
+            if sql.startswith("INSERT INTO evidence_items")
+        ]
 
 
 @pytest.fixture
@@ -113,13 +122,22 @@ def provider(tmp_path) -> LocalFileKeyProvider:
 # --- create_evidence and _insert_pending ----------------------------------------------------------------------------
 
 
-def test_case_no_longer_visible_at_insert_is_refused_with_no_row_and_no_object(db, provider):
+def test_case_no_longer_visible_at_insert_is_refused_with_no_row_and_no_object(
+    db, provider
+):
     storage = StorageSpy()
     db.visible = False  # removed after the API check, before the insert
     scope = CaseScope(user_id=INVESTIGATOR.id, read_own=True)
     with pytest.raises(CaseNotVisible):
         evidence.create_evidence(
-            str(uuid.uuid4()), INVESTIGATOR.id, "scan.pdf", "application/pdf", PDF, storage, provider, scope,
+            str(uuid.uuid4()),
+            INVESTIGATOR.id,
+            "scan.pdf",
+            "application/pdf",
+            PDF,
+            storage,
+            provider,
+            scope,
         )
     assert db.inserts() == []
     assert storage.puts == []
@@ -128,11 +146,23 @@ def test_case_no_longer_visible_at_insert_is_refused_with_no_row_and_no_object(d
 def test_visibility_is_checked_on_the_same_connection_as_the_insert(db):
     scope = CaseScope(user_id=INVESTIGATOR.id, read_all=True)
     evidence._insert_pending(
-        str(uuid.uuid4()), INVESTIGATOR.id, "scan.pdf", "text/plain", 3, str(uuid.uuid4()), "test",
-        b"\x00", b"\x00", scope,
+        str(uuid.uuid4()),
+        INVESTIGATOR.id,
+        "scan.pdf",
+        "text/plain",
+        3,
+        str(uuid.uuid4()),
+        "test",
+        b"\x00",
+        b"\x00",
+        scope,
     )
     assert len(db.inserts()) == 1
-    visibility_checks = [i for i, sql in enumerate(db.statements) if sql.startswith("SELECT 1 FROM cases")]
+    visibility_checks = [
+        i
+        for i, sql in enumerate(db.statements)
+        if sql.startswith("SELECT 1 FROM cases")
+    ]
     insert_at = db.statements.index(db.inserts()[0])
     assert visibility_checks and visibility_checks[-1] < insert_at
     # One connection served the check and the insert, so they share one transaction.
@@ -143,8 +173,16 @@ def test_visible_case_still_gets_its_pending_row(db):
     db.visible = True
     scope = CaseScope(user_id=INVESTIGATOR.id, read_all=True)
     evidence._insert_pending(
-        str(uuid.uuid4()), INVESTIGATOR.id, "scan.pdf", "text/plain", 3, str(uuid.uuid4()), "test",
-        b"\x00", b"\x00", scope,
+        str(uuid.uuid4()),
+        INVESTIGATOR.id,
+        "scan.pdf",
+        "text/plain",
+        3,
+        str(uuid.uuid4()),
+        "test",
+        b"\x00",
+        b"\x00",
+        scope,
     )
     assert len(db.inserts()) == 1
 
@@ -157,7 +195,9 @@ def upload_client(monkeypatch, provider, db):
     app = FastAPI()
     app.include_router(evidence_api.evidence_router)
     app.dependency_overrides[auth.current_user] = lambda: INVESTIGATOR
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"evidence:write"}))
+    monkeypatch.setattr(
+        auth, "permissions_for_role", lambda role: frozenset({"evidence:write"})
+    )
     monkeypatch.setattr(evidence_api, "_PROVIDER", provider)
     storage = StorageSpy()
     monkeypatch.setattr(evidence_api, "storage_from_env", lambda: storage)
@@ -169,15 +209,18 @@ def upload_client(monkeypatch, provider, db):
     app.dependency_overrides.clear()
 
 
-def test_upload_refused_at_insert_time_is_404_like_a_missing_case_and_stores_nothing(upload_client, db):
+def test_upload_refused_at_insert_time_is_404_like_a_missing_case_and_stores_nothing(
+    upload_client, db
+):
     client, storage = upload_client
     case_id = str(uuid.uuid4())
     response = client.post(
         f"/api/v1/cases/{case_id}/evidence",
         files={"file": ("scan.pdf", PDF, "application/pdf")},
+        headers=idem(),
     )
     assert response.status_code == 404
-    assert response.json() == {"detail": "case not found"}
+    assert response.json()["detail"] == "case not found"
     assert db.inserts() == []
     assert storage.puts == []
 
@@ -208,7 +251,16 @@ def test_database_refuses_an_insert_for_a_case_the_scope_cannot_see(provider):
     stranger = CaseScope.from_permissions(other, frozenset({"cases:read_own"}))
     storage = StorageSpy()
     with pytest.raises(CaseNotVisible):
-        evidence.create_evidence(case_id, other, "scan.pdf", "application/pdf", PDF, storage, provider, stranger)
+        evidence.create_evidence(
+            case_id,
+            other,
+            "scan.pdf",
+            "application/pdf",
+            PDF,
+            storage,
+            provider,
+            stranger,
+        )
     assert storage.puts == []
     with connect() as conn:
         count = conn.execute(

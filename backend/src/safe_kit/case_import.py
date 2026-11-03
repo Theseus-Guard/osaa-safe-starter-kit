@@ -14,11 +14,15 @@ Each record is handled on its own, in its own transaction, so a record is either
 
 Only some fields map onto the case row (see prepare_record). The whole record is kept in case_import_records.payload,
 so no field is dropped silently. Evidence items and the other sections wait for the domain tables planned for F1/F2.
+
+preview_records is the dry run: it applies the same validation and the same duplicate and conflict rules as
+import_records, reads only, and writes nothing (no case, registry row, audit row or idempotency record).
 """
 
 import hashlib
 import json
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,6 +35,7 @@ from psycopg.types.json import Jsonb
 from safe_kit import audit, cases, system_timezone
 from safe_kit.cases import CaseScope
 from safe_kit.db import connect
+from safe_kit.idempotency import KeyScope, check, remember
 from safe_kit.system_timezone import TimezoneNotConfigured
 
 IMPORT_FORMAT_VERSION = 1
@@ -43,7 +48,9 @@ MAX_MESSAGE_LENGTH = 300
 TITLE_LIMIT = 200
 ENVELOPE_FIELDS = frozenset({"import_format_version", "records"})
 
-SCHEMA_PATH = Path(__file__).resolve().parent / "schemas" / "case-minimum-record.v0.json"
+SCHEMA_PATH = (
+    Path(__file__).resolve().parent / "schemas" / "case-minimum-record.v0.json"
+)
 _VALIDATOR = Draft202012Validator(json.loads(SCHEMA_PATH.read_text(encoding="utf-8")))
 
 
@@ -91,20 +98,30 @@ def parse_import_file(raw: bytes) -> list[Any]:
     if not isinstance(document, dict):
         raise ImportFileError("the import file must be a JSON object")
     if not set(document) <= ENVELOPE_FIELDS:
-        raise ImportFileError("the import file has a field that this version does not accept")
+        raise ImportFileError(
+            "the import file has a field that this version does not accept"
+        )
     version = document.get("import_format_version")
     if type(version) is not int or version != IMPORT_FORMAT_VERSION:
-        raise ImportFileError(f"unsupported import_format_version; this version reads {IMPORT_FORMAT_VERSION}")
+        raise ImportFileError(
+            f"unsupported import_format_version; this version reads {IMPORT_FORMAT_VERSION}"
+        )
     records = document.get("records")
     if not isinstance(records, list):
         raise ImportFileError("records must be a JSON array")
     if len(records) > MAX_IMPORT_RECORDS:
-        raise ImportFileError(f"an import file may hold at most {MAX_IMPORT_RECORDS} records")
+        raise ImportFileError(
+            f"an import file may hold at most {MAX_IMPORT_RECORDS} records"
+        )
     return records
 
 
 def _clip(text: str) -> str:
-    return text if len(text) <= MAX_MESSAGE_LENGTH else text[: MAX_MESSAGE_LENGTH - 3] + "..."
+    return (
+        text
+        if len(text) <= MAX_MESSAGE_LENGTH
+        else text[: MAX_MESSAGE_LENGTH - 3] + "..."
+    )
 
 
 def _location(path: list[Any]) -> str:
@@ -113,8 +130,14 @@ def _location(path: list[Any]) -> str:
 
 def validate_record(record: Any) -> list[str]:
     """The schema errors of one record, as 'location: message' lines. An empty list means the schema holds."""
-    errors = sorted(_VALIDATOR.iter_errors(record), key=lambda error: [str(part) for part in error.absolute_path])
-    return [_clip(f"{_location(list(error.absolute_path))}: {error.message}") for error in errors[:MAX_ERRORS_PER_RECORD]]
+    errors = sorted(
+        _VALIDATOR.iter_errors(record),
+        key=lambda error: [str(part) for part in error.absolute_path],
+    )
+    return [
+        _clip(f"{_location(list(error.absolute_path))}: {error.message}")
+        for error in errors[:MAX_ERRORS_PER_RECORD]
+    ]
 
 
 def _parse_utc(text: str) -> datetime | None:
@@ -127,7 +150,13 @@ def _parse_utc(text: str) -> datetime | None:
 
 def fingerprint(record: dict[str, Any]) -> str:
     """SHA-256 of the record in canonical JSON. The same content always gives the same fingerprint."""
-    canonical = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    canonical = json.dumps(
+        record,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -162,35 +191,163 @@ def prepare_record(record: Any, now: datetime) -> PreparedRecord:
     )
 
 
-def import_records(records: list[Any], scope: CaseScope) -> list[RecordResult]:
+def import_records(
+    records: list[Any],
+    scope: CaseScope,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[list[RecordResult]], Any] | None = None,
+) -> list[RecordResult]:
     """Import the records one at a time and report each result. The caller becomes the creator of every new case.
 
     A duplicate or conflict names the existing case only when the caller may see it. Otherwise the result carries the
     outcome alone, so an import cannot be used to learn the ids of another reporter's case.
+
+    With an idempotency scope, the key lock and the stored response belong to one transaction that stays open for the
+    whole batch. Each record keeps its own transaction, as before, and a record that is already stored is reported as a
+    duplicate by source case id. So a batch cut short by a crash is safe to send again, although its response is not
+    stored until the batch ends.
+    """
+    with connect() as conn:
+        check(conn, idempotency)
+        if system_timezone.read_current(conn) is None:
+            raise TimezoneNotConfigured()
+        now = datetime.now(UTC)
+        results = [
+            _import_one(index, record, scope, now)
+            for index, record in enumerate(records)
+        ]
+        if idempotency is not None:
+            assert render is not None
+            remember(conn, idempotency, 200, render(results))
+    return results
+
+
+@dataclass(frozen=True)
+class DryRunResult:
+    index: int
+    # would_import: the record would be stored. duplicate and conflict: the source case ID is already stored, or an
+    # earlier record of the same file holds it. rejected: the record fails the schema or a mapping rule.
+    status: str
+    source_case_id: str | None = None
+    case_id: str | None = None
+    reference: str | None = None
+    title: str | None = None
+    awareness_time: datetime | None = None
+    errors: tuple[str, ...] = ()
+
+
+def received_format_version(raw: bytes) -> int | str | None:
+    """The import_format_version that the file declares, for the dry-run report.
+
+    An integer or a string is returned (a string clipped to the message limit). Anything else, and a file that is not a
+    JSON object with that field, gives None, so a bad file cannot make the report carry a large value.
+    """
+    try:
+        document = json.loads(raw, parse_constant=_reject_constant)
+    except ValueError:
+        return None
+    if not isinstance(document, dict):
+        return None
+    value = document.get("import_format_version")
+    if type(value) is int:
+        return value
+    if isinstance(value, str):
+        return _clip(value)
+    return None
+
+
+def preview_records(records: list[Any], scope: CaseScope) -> list[DryRunResult]:
+    """Report what import_records would do with these records, without storing anything.
+
+    Records that would be stored count for the duplicate and conflict rules of the records after them, as they would
+    in a real import, so a file that holds one source case twice is reported the same way the commit would store it.
     """
     with connect() as conn:
         if system_timezone.read_current(conn) is None:
             raise TimezoneNotConfigured()
-    now = datetime.now(UTC)
-    return [_import_one(index, record, scope, now) for index, record in enumerate(records)]
+        now = datetime.now(UTC)
+        would_store: dict[str, str] = {}
+        return [
+            _preview_one(conn, index, record, scope, now, would_store)
+            for index, record in enumerate(records)
+        ]
 
 
-def _import_one(index: int, record: Any, scope: CaseScope, now: datetime) -> RecordResult:
+def _preview_one(
+    conn,
+    index: int,
+    record: Any,
+    scope: CaseScope,
+    now: datetime,
+    would_store: dict[str, str],
+) -> DryRunResult:
     try:
         prepared = prepare_record(record, now)
     except RecordRejected as rejected:
-        return RecordResult(index=index, status="rejected", errors=tuple(rejected.errors))
+        return DryRunResult(
+            index=index, status="rejected", errors=tuple(rejected.errors)
+        )
+    source = prepared.source_case_id
+    if source in would_store:
+        status = (
+            "duplicate" if would_store[source] == prepared.fingerprint else "conflict"
+        )
+        return DryRunResult(index=index, status=status, source_case_id=source)
+    existing = conn.execute(
+        """
+        SELECT r.case_id::text, c.reference, r.content_sha256 FROM case_import_records r
+        JOIN cases c ON c.id = r.case_id
+        WHERE r.source_case_id = %s AND NOT r.is_deleted
+        """,
+        (source,),
+    ).fetchone()
+    if existing is not None:
+        status = "duplicate" if existing[2] == prepared.fingerprint else "conflict"
+        if not cases.is_visible_on(conn, existing[0], scope):
+            return DryRunResult(index=index, status=status, source_case_id=source)
+        return DryRunResult(
+            index=index,
+            status=status,
+            source_case_id=source,
+            case_id=existing[0],
+            reference=existing[1],
+        )
+    would_store[source] = prepared.fingerprint
+    return DryRunResult(
+        index=index,
+        status="would_import",
+        source_case_id=source,
+        title=prepared.title,
+        awareness_time=prepared.awareness_time,
+    )
+
+
+def _import_one(
+    index: int, record: Any, scope: CaseScope, now: datetime
+) -> RecordResult:
+    try:
+        prepared = prepare_record(record, now)
+    except RecordRejected as rejected:
+        return RecordResult(
+            index=index, status="rejected", errors=tuple(rejected.errors)
+        )
     try:
         return _store(index, prepared, scope)
     except psycopg.Error:
         # The transaction was rolled back, so this record left nothing behind. The batch goes on.
-        return RecordResult(index=index, status="failed", source_case_id=prepared.source_case_id)
+        return RecordResult(
+            index=index, status="failed", source_case_id=prepared.source_case_id
+        )
 
 
 def _store(index: int, prepared: PreparedRecord, scope: CaseScope) -> RecordResult:
     with connect() as conn:
         # Serializes imports of the same source case, so two concurrent files cannot both create it.
-        conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (prepared.source_case_id,))
+        conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (prepared.source_case_id,),
+        )
         existing = conn.execute(
             """
             SELECT r.case_id::text, c.reference, r.content_sha256 FROM case_import_records r
@@ -202,7 +359,9 @@ def _store(index: int, prepared: PreparedRecord, scope: CaseScope) -> RecordResu
         if existing is not None:
             status = "duplicate" if existing[2] == prepared.fingerprint else "conflict"
             if not cases.is_visible_on(conn, existing[0], scope):
-                return RecordResult(index=index, status=status, source_case_id=prepared.source_case_id)
+                return RecordResult(
+                    index=index, status=status, source_case_id=prepared.source_case_id
+                )
             return RecordResult(
                 index=index,
                 status=status,
@@ -210,7 +369,9 @@ def _store(index: int, prepared: PreparedRecord, scope: CaseScope) -> RecordResu
                 case_id=existing[0],
                 reference=existing[1],
             )
-        case = cases.insert_case(conn, prepared.title, prepared.awareness_time, scope.user_id)
+        case = cases.insert_case(
+            conn, prepared.title, prepared.awareness_time, scope.user_id
+        )
         registry_id = conn.execute(
             """
             INSERT INTO case_import_records (source_case_id, case_id, record_schema_version, content_sha256, payload, imported_by)

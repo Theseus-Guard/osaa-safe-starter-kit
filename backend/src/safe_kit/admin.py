@@ -37,7 +37,10 @@ def _read_password() -> str:
 def _read_valid_password() -> str | None:
     password = _read_password()
     if len(password) < MIN_PASSWORD_LENGTH:
-        print(f"password must be at least {MIN_PASSWORD_LENGTH} characters", file=sys.stderr)
+        print(
+            f"password must be at least {MIN_PASSWORD_LENGTH} characters",
+            file=sys.stderr,
+        )
         return None
     return password
 
@@ -59,10 +62,16 @@ def _checked_email(value: str) -> str | None:
 
 def _bootstrap(username: str, role: str, email_option: str | None) -> int:
     if role != "admin":
-        print("before the first admin exists, only --role admin can be created", file=sys.stderr)
+        print(
+            "before the first admin exists, only --role admin can be created",
+            file=sys.stderr,
+        )
         return 2
     if admin_exists():
-        print("an admin already exists; create further users through the API", file=sys.stderr)
+        print(
+            "an admin already exists; create further users through the API",
+            file=sys.stderr,
+        )
         return 1
     try:
         validate_username(username)
@@ -85,7 +94,10 @@ def _bootstrap(username: str, role: str, email_option: str | None) -> int:
     try:
         user_id = bootstrap_admin(username, password, email)
     except AdminAlreadyExists:
-        print("an admin already exists; create further users through the API", file=sys.stderr)
+        print(
+            "an admin already exists; create further users through the API",
+            file=sys.stderr,
+        )
         return 1
     except EmailAlreadyInUse:
         print("email already in use", file=sys.stderr)
@@ -93,7 +105,9 @@ def _bootstrap(username: str, role: str, email_option: str | None) -> int:
     except psycopg.errors.UniqueViolation:
         print(f"username already exists: {username}", file=sys.stderr)
         return 1
-    print(f"created first admin {username} id={user_id}; password change required at first login")
+    print(
+        f"created first admin {username} id={user_id}; password change required at first login"
+    )
     return 0
 
 
@@ -144,7 +158,9 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
-    print(f"password reset for {args.username}; all sessions ended; password change required at next login")
+    print(
+        f"password reset for {args.username}; all sessions ended; password change required at next login"
+    )
     return 0
 
 

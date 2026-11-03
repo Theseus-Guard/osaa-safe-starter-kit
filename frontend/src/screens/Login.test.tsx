@@ -1,24 +1,43 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, readiness } from "../api";
+import { ApiError, demoSignIn, demoStatus, DemoStatus, readiness } from "../api";
 import { Login } from "./Login";
 
 vi.mock("../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api")>();
-  return { ...actual, readiness: vi.fn() };
+  return { ...actual, readiness: vi.fn(), demoStatus: vi.fn(), demoSignIn: vi.fn() };
 });
 
 const ready = vi.mocked(readiness);
+const demo = vi.mocked(demoStatus);
 
-function renderLogin(onLogin = vi.fn().mockResolvedValue(undefined), notice: string | null = null) {
-  render(<Login notice={notice} onLogin={onLogin} />);
-  return { onLogin };
+const PRODUCTION: DemoStatus = { demo: false, users: [] };
+const DEMO_ROLES: DemoStatus = {
+  demo: true,
+  users: [
+    { username: "demo-admin", name: "Demo Administrator", role: "admin" },
+    { username: "demo-reporter", name: "Demo Reporter", role: "reporter" },
+    { username: "demo-triager", name: "Demo Triager", role: "triager" },
+  ],
+};
+const EXAMPLE_CREDENTIAL = "example-demo-credential-7f3a";
+
+function renderLogin(
+  onLogin = vi.fn().mockResolvedValue(undefined),
+  notice: string | null = null,
+  onDemoSignIn = vi.fn().mockResolvedValue(undefined),
+) {
+  render(<Login notice={notice} onLogin={onLogin} onDemoSignIn={onDemoSignIn} />);
+  return { onLogin, onDemoSignIn };
 }
 
 beforeEach(() => {
   ready.mockReset();
   ready.mockResolvedValue("ready");
+  demo.mockReset();
+  demo.mockResolvedValue(PRODUCTION);
+  vi.mocked(demoSignIn).mockReset();
 });
 
 describe("Login", () => {
@@ -131,5 +150,83 @@ describe("Login", () => {
     await user.click(screen.getByRole("button", { name: "Show password" }));
     expect(password).toHaveAttribute("type", "text");
     expect(screen.getByRole("button", { name: "Hide password" })).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
+describe("Login in demo mode", () => {
+  it("shows the role picker and the credential field only in demo mode", async () => {
+    demo.mockResolvedValue(DEMO_ROLES);
+    renderLogin();
+
+    const picker = await screen.findByLabelText("Demo role");
+    expect(picker.tagName).toBe("SELECT");
+    expect(screen.getByLabelText("Demo credential")).toHaveAttribute("type", "password");
+    expect(screen.queryByLabelText("Username")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
+  });
+
+  it("does not show the picker outside demo mode", async () => {
+    renderLogin();
+
+    await screen.findByRole("button", { name: "Log in" });
+    await vi.waitFor(() => expect(demo).toHaveBeenCalled());
+    expect(screen.queryByLabelText("Demo role")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Demo credential")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Username")).toBeEnabled();
+    expect(screen.getByLabelText("Password")).toBeEnabled();
+  });
+
+  it("lists the demo roles by name and role, in the server's order", async () => {
+    demo.mockResolvedValue(DEMO_ROLES);
+    renderLogin();
+
+    const options = within(await screen.findByLabelText("Demo role")).getAllByRole("option");
+    expect(options.map((option) => option.textContent)).toEqual([
+      "Demo Administrator (admin)",
+      "Demo Reporter (reporter)",
+      "Demo Triager (triager)",
+    ]);
+    expect(options.map((option) => option.getAttribute("value"))).toEqual(["demo-admin", "demo-reporter", "demo-triager"]);
+  });
+
+  it("signs in the chosen role with the entered credential", async () => {
+    const user = userEvent.setup();
+    demo.mockResolvedValue(DEMO_ROLES);
+    const { onDemoSignIn, onLogin } = renderLogin();
+
+    await user.selectOptions(await screen.findByLabelText("Demo role"), "demo-triager");
+    await user.type(screen.getByLabelText("Demo credential"), EXAMPLE_CREDENTIAL);
+    await user.click(screen.getByRole("button", { name: "Log in" }));
+
+    expect(onDemoSignIn).toHaveBeenCalledWith("demo-triager", EXAMPLE_CREDENTIAL);
+    expect(onLogin).not.toHaveBeenCalled();
+  });
+
+  it("keeps the credential out of the page text", async () => {
+    const user = userEvent.setup();
+    demo.mockResolvedValue(DEMO_ROLES);
+    renderLogin();
+
+    await screen.findByLabelText("Demo role");
+    expect(document.body.innerHTML).not.toContain(EXAMPLE_CREDENTIAL);
+    await user.type(screen.getByLabelText("Demo credential"), EXAMPLE_CREDENTIAL);
+    await user.click(screen.getByRole("button", { name: "Log in" }));
+    await vi.waitFor(() => expect(screen.getByRole("button", { name: "Log in" })).toBeEnabled());
+
+    expect(document.body.textContent).not.toContain(EXAMPLE_CREDENTIAL);
+  });
+
+  it("shows the sign-in failure for a refused demo credential", async () => {
+    const user = userEvent.setup();
+    demo.mockResolvedValue(DEMO_ROLES);
+    renderLogin(undefined, null, vi.fn().mockRejectedValue(new ApiError(401, "invalid credentials")));
+
+    await user.type(await screen.findByLabelText("Demo credential"), EXAMPLE_CREDENTIAL);
+    await user.click(screen.getByRole("button", { name: "Log in" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Sign-in failed");
+    expect(alert).toHaveTextContent("Invalid username or password.");
+    expect(document.body.textContent).not.toContain(EXAMPLE_CREDENTIAL);
   });
 });

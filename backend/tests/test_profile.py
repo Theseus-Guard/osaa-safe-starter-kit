@@ -63,7 +63,12 @@ def make_user(user_id, username, role, email=None, **profile):
 
 @pytest.mark.parametrize(
     "value",
-    ["alice@example.com", "  bob@example.org  ", "Carol.Smith@Example.COM", "user+tag@sub.example.co.uk"],
+    [
+        "alice@example.com",
+        "  bob@example.org  ",
+        "Carol.Smith@Example.COM",
+        "user+tag@sub.example.co.uk",
+    ],
 )
 def test_valid_emails_are_accepted(value):
     assert normalize_email(value) == value.strip()
@@ -73,7 +78,10 @@ def test_email_is_stored_as_entered_apart_from_surrounding_whitespace():
     assert normalize_email("  Carol.Smith@Example.COM ") == "Carol.Smith@Example.COM"
 
 
-@pytest.mark.parametrize("value", ["not-an-email", "a b@example.com", "missing-at.example.com", "x@localhost"])
+@pytest.mark.parametrize(
+    "value",
+    ["not-an-email", "a b@example.com", "missing-at.example.com", "x@localhost"],
+)
 def test_invalid_emails_are_rejected(value):
     with pytest.raises(InvalidEmail, match="^invalid email address$"):
         normalize_email(value)
@@ -142,9 +150,16 @@ class FakeProfiles:
 @pytest.fixture
 def store():
     return {
-        ADMIN_ID: make_user(ADMIN_ID, "osaa-safe-admin", "admin", email="admin@example.com"),
+        ADMIN_ID: make_user(
+            ADMIN_ID, "osaa-safe-admin", "admin", email="admin@example.com"
+        ),
         ALICE_ID: make_user(
-            ALICE_ID, "alice", "triager", email="alice@example.com", first_name="Alice", title="Analyst"
+            ALICE_ID,
+            "alice",
+            "triager",
+            email="alice@example.com",
+            first_name="Alice",
+            title="Analyst",
         ),
         BOB_ID: make_user(BOB_ID, "bob", "reporter", email=None),
     }
@@ -161,7 +176,11 @@ def profiles(store, monkeypatch):
 def signed_in(store, monkeypatch):
     """The caller is injected directly, as in test_user_management_api. Authentication has its own tests."""
     holder = {"id": ADMIN_ID}
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()))
+    monkeypatch.setattr(
+        auth,
+        "permissions_for_role",
+        lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()),
+    )
 
     def current():
         return store[holder["id"]]
@@ -192,18 +211,24 @@ def test_profile_is_readable_before_the_password_change(store, monkeypatch):
 def test_user_updates_own_profile(signed_in, profiles):
     client, holder = signed_in
     holder["id"] = ALICE_ID
-    response = client.patch("/api/v1/auth/profile", json={"last_name": "  Yilmaz ", "title": "Lead analyst"})
+    response = client.patch(
+        "/api/v1/auth/profile", json={"last_name": "  Yilmaz ", "title": "Lead analyst"}
+    )
     assert response.status_code == 200
     assert response.json()["last_name"] == "Yilmaz"
     assert response.json()["title"] == "Lead analyst"
     assert response.json()["first_name"] == "Alice"  # not sent, so unchanged
-    assert profiles.calls == [(ALICE_ID, {"last_name": "Yilmaz", "title": "Lead analyst"}, ALICE_ID)]
+    assert profiles.calls == [
+        (ALICE_ID, {"last_name": "Yilmaz", "title": "Lead analyst"}, ALICE_ID)
+    ]
 
 
 def test_null_or_blank_name_clears_it(signed_in, profiles):
     client, holder = signed_in
     holder["id"] = ALICE_ID
-    response = client.patch("/api/v1/auth/profile", json={"first_name": None, "title": "  "})
+    response = client.patch(
+        "/api/v1/auth/profile", json={"first_name": None, "title": "  "}
+    )
     assert response.status_code == 200
     assert response.json()["first_name"] is None
     assert response.json()["title"] is None
@@ -258,13 +283,22 @@ def test_admin_updates_another_users_profile_with_actor_recorded(signed_in, prof
         json={"email": "bob@example.org", "first_name": "Bob"},
     )
     assert response.status_code == 200
-    assert response.json() == {"first_name": "Bob", "last_name": None, "title": None, "email": "bob@example.org"}
-    assert profiles.calls == [(BOB_ID, {"email": "bob@example.org", "first_name": "Bob"}, ADMIN_ID)]
+    assert response.json() == {
+        "first_name": "Bob",
+        "last_name": None,
+        "title": None,
+        "email": "bob@example.org",
+    }
+    assert profiles.calls == [
+        (BOB_ID, {"email": "bob@example.org", "first_name": "Bob"}, ADMIN_ID)
+    ]
 
 
 def test_admin_cannot_edit_own_profile_through_the_admin_path(signed_in, profiles):
     client, _ = signed_in
-    response = client.patch(f"/api/v1/users/{ADMIN_ID}/profile", json={"title": "Chief"})
+    response = client.patch(
+        f"/api/v1/users/{ADMIN_ID}/profile", json={"title": "Chief"}
+    )
     assert response.status_code == 409
     assert response.json()["detail"] == "use your own profile endpoint"
     assert profiles.calls == []
@@ -273,7 +307,9 @@ def test_admin_cannot_edit_own_profile_through_the_admin_path(signed_in, profile
 def test_admin_profile_edit_of_unknown_user_is_404(signed_in, profiles):
     client, _ = signed_in
     missing = "44444444-4444-4444-4444-444444444444"
-    response = client.patch(f"/api/v1/users/{missing}/profile", json={"title": "Analyst"})
+    response = client.patch(
+        f"/api/v1/users/{missing}/profile", json={"title": "Analyst"}
+    )
     assert response.status_code == 404
     assert response.json()["detail"] == "user not found"
 
@@ -288,14 +324,21 @@ def test_admin_profile_edit_cannot_clear_email(signed_in, profiles):
 def test_non_admin_cannot_edit_another_users_profile(signed_in, profiles, store):
     client, holder = signed_in
     holder["id"] = BOB_ID
-    response = client.patch(f"/api/v1/users/{ALICE_ID}/profile", json={"title": "Chief"})
+    response = client.patch(
+        f"/api/v1/users/{ALICE_ID}/profile", json={"title": "Chief"}
+    )
     assert response.status_code == 403
     assert profiles.calls == []
 
 
 def test_user_summary_helper_returns_the_profile_fields(store):
     fields = profile_api.profile_fields(store[ALICE_ID])
-    assert fields == {"first_name": "Alice", "last_name": None, "title": "Analyst", "email": "alice@example.com"}
+    assert fields == {
+        "first_name": "Alice",
+        "last_name": None,
+        "title": "Analyst",
+        "email": "alice@example.com",
+    }
 
 
 # Audit: field names only, never values
@@ -338,9 +381,21 @@ ROW_BEFORE = ("Alice", None, "Analyst", "alice@example.com")
 def full_row(email: str) -> tuple:
     """A users row as users._COLUMNS selects it, for the connection fake."""
     return (
-        ALICE_ID, "alice", "triager", True, "unused", datetime(1970, 1, 1, tzinfo=UTC), False,
-        datetime(2026, 11, 1, tzinfo=UTC), False, "Alice", None, "Analyst", email,
+        ALICE_ID,
+        "alice",
+        "triager",
+        True,
+        "unused",
+        datetime(1970, 1, 1, tzinfo=UTC),
+        False,
+        datetime(2026, 11, 1, tzinfo=UTC),
+        False,
+        "Alice",
+        None,
+        "Analyst",
+        email,
         datetime.now(UTC),
+        1,
     )
 
 
@@ -348,9 +403,18 @@ def full_row(email: str) -> tuple:
 def audited(monkeypatch):
     recorded = []
 
-    def fake_record(conn, action, target_type, target_id=None, actor_id=None, details=None):
+    def fake_record(
+        conn, action, target_type, target_id=None, actor_id=None, details=None
+    ):
         audit.check_details(details or {}, action)
-        recorded.append({"action": action, "target_id": target_id, "actor_id": actor_id, "details": details})
+        recorded.append(
+            {
+                "action": action,
+                "target_id": target_id,
+                "actor_id": actor_id,
+                "details": details,
+            }
+        )
 
     monkeypatch.setattr(audit, "record", fake_record)
     return recorded
@@ -359,7 +423,9 @@ def audited(monkeypatch):
 def test_profile_audit_row_carries_field_names_only(audited, monkeypatch):
     connection = _FakeConnection(ROW_BEFORE, full_row("new.address@example.org"))
     monkeypatch.setattr(users, "connect", lambda: connection)
-    updated = users.update_profile(ALICE_ID, {"email": "new.address@example.org"}, actor_id=ALICE_ID)
+    updated = users.update_profile(
+        ALICE_ID, {"email": "new.address@example.org"}, actor_id=ALICE_ID
+    )
 
     assert updated.email == "new.address@example.org"
     assert len(audited) == 1
@@ -375,13 +441,21 @@ def test_profile_audit_row_carries_field_names_only(audited, monkeypatch):
 def test_only_changed_fields_are_written_and_named(audited, monkeypatch):
     connection = _FakeConnection(ROW_BEFORE, full_row("new.address@example.org"))
     monkeypatch.setattr(users, "connect", lambda: connection)
-    users.update_profile(ALICE_ID, {"first_name": "Alice", "email": "new.address@example.org"}, actor_id=ADMIN_ID)
+    users.update_profile(
+        ALICE_ID,
+        {"first_name": "Alice", "email": "new.address@example.org"},
+        actor_id=ADMIN_ID,
+    )
 
     # first_name is unchanged, so it is neither written nor audited.
     assert audited[0]["details"] == {"fields": ["email"]}
     statement, params = connection.update_sql[0]
     assert '"first_name"' not in statement
-    assert statement == 'UPDATE users SET "email" = %s WHERE id = %s'
+    # The account revision rises with the change (api-draft 3.5).
+    assert (
+        statement
+        == 'UPDATE users SET "email" = %s, revision = revision + 1 WHERE id = %s'
+    )
     assert params == ["new.address@example.org", ALICE_ID]
 
 
@@ -396,7 +470,9 @@ def test_unchanged_profile_writes_nothing(audited, monkeypatch):
 def test_update_profile_of_missing_user_returns_none(audited, monkeypatch):
     connection = _FakeConnection(None, None)
     monkeypatch.setattr(users, "connect", lambda: connection)
-    assert users.update_profile(ALICE_ID, {"title": "Analyst"}, actor_id=ADMIN_ID) is None
+    assert (
+        users.update_profile(ALICE_ID, {"title": "Analyst"}, actor_id=ADMIN_ID) is None
+    )
     assert audited == []
 
 
@@ -423,17 +499,23 @@ def feed_stdin(monkeypatch, text):
     monkeypatch.setattr(sys, "stdin", io.StringIO(text))
 
 
-def test_bootstrap_prompts_for_the_email_on_the_second_stdin_line(bootstrap, monkeypatch):
+def test_bootstrap_prompts_for_the_email_on_the_second_stdin_line(
+    bootstrap, monkeypatch
+):
     recorded, _ = bootstrap
     feed_stdin(monkeypatch, PASSWORD + "\n" + "  " + EMAIL + "  \n")
     assert admin.main(["create-user", "--username", "root-op", "--role", "admin"]) == 0
     assert recorded["bootstrap"] == [("root-op", PASSWORD, EMAIL)]
 
 
-def test_bootstrap_takes_the_email_from_the_option_without_reading_it(bootstrap, monkeypatch):
+def test_bootstrap_takes_the_email_from_the_option_without_reading_it(
+    bootstrap, monkeypatch
+):
     recorded, _ = bootstrap
     feed_stdin(monkeypatch, PASSWORD + "\n")
-    code = admin.main(["create-user", "--username", "root-op", "--role", "admin", "--email", EMAIL])
+    code = admin.main(
+        ["create-user", "--username", "root-op", "--role", "admin", "--email", EMAIL]
+    )
     assert code == 0
     assert recorded["bootstrap"] == [("root-op", PASSWORD, EMAIL)]
 
@@ -452,17 +534,25 @@ def test_bootstrap_prompts_on_a_terminal(bootstrap, monkeypatch):
     assert recorded["bootstrap"] == [("root-op", PASSWORD, EMAIL)]
 
 
-@pytest.mark.parametrize("email", ["not-an-email", "x@localhost", LONG_LOCAL + "@example.com"])
-def test_invalid_email_option_is_refused_before_anything_is_created(bootstrap, monkeypatch, capsys, email):
+@pytest.mark.parametrize(
+    "email", ["not-an-email", "x@localhost", LONG_LOCAL + "@example.com"]
+)
+def test_invalid_email_option_is_refused_before_anything_is_created(
+    bootstrap, monkeypatch, capsys, email
+):
     recorded, _ = bootstrap
     feed_stdin(monkeypatch, PASSWORD + "\n")
-    code = admin.main(["create-user", "--username", "root-op", "--role", "admin", "--email", email])
+    code = admin.main(
+        ["create-user", "--username", "root-op", "--role", "admin", "--email", email]
+    )
     assert code == 2
     assert recorded["bootstrap"] == []
     assert "invalid email address" in capsys.readouterr().err
 
 
-def test_invalid_email_on_stdin_is_refused_before_anything_is_created(bootstrap, monkeypatch, capsys):
+def test_invalid_email_on_stdin_is_refused_before_anything_is_created(
+    bootstrap, monkeypatch, capsys
+):
     recorded, _ = bootstrap
     feed_stdin(monkeypatch, PASSWORD + "\n" + "not an address\n")
     assert admin.main(["create-user", "--username", "root-op", "--role", "admin"]) == 2
@@ -503,7 +593,10 @@ def _unique_email(prefix: str = "p") -> str:
 
 def _new_user(role: str = "reporter", email: str | None = None) -> str:
     return users.create_user_with_profile(
-        "t-" + uuid.uuid4().hex[:12], PASSWORD, role, email if email is not None else _unique_email()
+        "t-" + uuid.uuid4().hex[:12],
+        PASSWORD,
+        role,
+        email if email is not None else _unique_email(),
     )
 
 
@@ -559,11 +652,16 @@ def test_database_self_update_through_the_api_and_audit_has_no_values():
     client = TestClient(app)
 
     response = client.patch(
-        "/api/v1/auth/profile", json={"first_name": "Ayse", "email": new_email, "title": "Analyst"}
+        "/api/v1/auth/profile",
+        json={"first_name": "Ayse", "email": new_email, "title": "Analyst"},
     )
     assert response.status_code == 200
     stored = users.find_user_by_id(user_id)
-    assert (stored.first_name, stored.email, stored.title) == ("Ayse", new_email, "Analyst")
+    assert (stored.first_name, stored.email, stored.title) == (
+        "Ayse",
+        new_email,
+        "Analyst",
+    )
 
     rows = _audit_rows(user_id, "user.profile_updated")
     assert len(rows) == 1
@@ -575,19 +673,34 @@ def test_database_self_update_through_the_api_and_audit_has_no_values():
 
 @requires_database
 @pytest.mark.usefixtures("migrated_database")
-def test_database_email_cannot_be_cleared_or_duplicated_through_the_admin_path(monkeypatch):
+def test_database_email_cannot_be_cleared_or_duplicated_through_the_admin_path(
+    monkeypatch,
+):
     admin_id = _new_user(role="admin")
     target_email = _unique_email("target")
     target_id = _new_user(email=target_email)
     other_id = _new_user()
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()))
+    monkeypatch.setattr(
+        auth,
+        "permissions_for_role",
+        lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()),
+    )
     app = FastAPI()
     app.include_router(profile_api.router)
-    app.dependency_overrides[auth.current_user] = lambda: users.find_user_by_id(admin_id)
+    app.dependency_overrides[auth.current_user] = lambda: users.find_user_by_id(
+        admin_id
+    )
     client = TestClient(app)
 
-    assert client.patch(f"/api/v1/users/{target_id}/profile", json={"email": None}).status_code == 422
-    duplicate = client.patch(f"/api/v1/users/{other_id}/profile", json={"email": target_email.upper()})
+    assert (
+        client.patch(
+            f"/api/v1/users/{target_id}/profile", json={"email": None}
+        ).status_code
+        == 422
+    )
+    duplicate = client.patch(
+        f"/api/v1/users/{other_id}/profile", json={"email": target_email.upper()}
+    )
     assert duplicate.status_code == 409
     assert duplicate.json()["detail"] == "email already in use"
 

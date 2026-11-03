@@ -20,10 +20,16 @@ const CASE: CaseSummary = {
   awareness_time: "2026-10-30T08:00:00Z",
   status: "open",
   created_at: "2026-10-30T08:05:00Z",
+  next_deadline: null,
+  updated_at: "2026-10-30T08:05:00Z",
+  risk_score: null,
+  impact_c: null,
+  impact_b: null,
+  impact_a: null,
 };
 
 function page(items: CaseSummary[]) {
-  return { items, total: items.length, limit: 8, offset: 0 };
+  return { items, next_cursor: null };
 }
 
 beforeEach(() => {
@@ -38,7 +44,7 @@ describe("CaseSearch", () => {
 
     await user.type(screen.getByRole("searchbox", { name: "Search cases by ID" }), "SAFE-2026");
 
-    await waitFor(() => expect(list).toHaveBeenCalledWith(8, 0, "SAFE-2026"));
+    await waitFor(() => expect(list).toHaveBeenCalledWith(8, undefined, "SAFE-2026"));
     expect(list).toHaveBeenCalledTimes(1);
   });
 

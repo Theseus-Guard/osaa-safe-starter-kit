@@ -21,14 +21,19 @@ def main() -> int:
             "checksum text NOT NULL, "
             "applied_at timestamptz NOT NULL DEFAULT now())"
         )
-        applied = dict(conn.execute("SELECT version, checksum FROM schema_migrations").fetchall())
+        applied = dict(
+            conn.execute("SELECT version, checksum FROM schema_migrations").fetchall()
+        )
         for path in files:
             version = path.stem
             sql = path.read_text(encoding="utf-8")
             checksum = hashlib.sha256(sql.encode("utf-8")).hexdigest()
             if version in applied:
                 if applied[version] != checksum:
-                    print(f"checksum mismatch: applied migration {version} was modified", file=sys.stderr)
+                    print(
+                        f"checksum mismatch: applied migration {version} was modified",
+                        file=sys.stderr,
+                    )
                     return 1
                 continue
             conn.execute(sql)

@@ -1,6 +1,6 @@
 import { FormEvent, useState } from "react";
 import { toast } from "sonner";
-import { CaseDetail, DeadlineStatus, DeadlineTask, updateDeadline } from "../../api";
+import { CaseDetail, DeadlineStatus, DeadlineTask, restoreDeadline, updateDeadline } from "../../api";
 import { describeError } from "../../messages";
 import { humanize } from "./case-format";
 import { Timestamp } from "@/components/timestamp";
@@ -25,7 +25,7 @@ interface Props {
 const CLOSED_REASON = "The case is closed. Deadlines cannot be changed.";
 const NOT_STORED_REASON = "This deadline is not stored yet and cannot be changed.";
 const NO_UPDATE_REASON = "Your account cannot change deadlines.";
-const NOT_TRIAGER_REASON = "Only a triager can mark a deadline not applicable.";
+const NOT_TRIAGER_REASON = "Only a triager can mark a deadline not applicable or restore it.";
 
 export function CaseDeadlines({ caseId, deadlines, closed, canUpdate, canMarkNotApplicable, onChanged }: Props) {
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
@@ -34,13 +34,29 @@ export function CaseDeadlines({ caseId, deadlines, closed, canUpdate, canMarkNot
   const [reason, setReason] = useState("");
 
   async function change(task: DeadlineTask, status: DeadlineStatus, why?: string) {
-    if (task.id === null) return;
+    if (task.id === null || task.revision === null) return;
     setBusyTaskId(task.id);
     try {
-      const updated = await updateDeadline(caseId, task.id, status, why);
+      // The revision is the one this row was read with. A change made by someone else since then answers 412.
+      const updated = await updateDeadline(caseId, task.id, status, why, task.revision);
       setReasonFor(null);
       setReason("");
       toast.success(`${humanize(task.kind)} is now ${humanize(status).toLowerCase()}.`);
+      onChanged(updated);
+    } catch (caught) {
+      toast.error(describeError(caught));
+    } finally {
+      setBusyTaskId(null);
+    }
+  }
+
+  // Turns off the not applicable exception: the task goes back to the status it had before.
+  async function restore(task: DeadlineTask) {
+    if (task.id === null) return;
+    setBusyTaskId(task.id);
+    try {
+      const updated = await restoreDeadline(caseId, task.id);
+      toast.success(`${humanize(task.kind)} is restored to its previous status.`);
       onChanged(updated);
     } catch (caught) {
       toast.error(describeError(caught));
@@ -151,6 +167,15 @@ export function CaseDeadlines({ caseId, deadlines, closed, canUpdate, canMarkNot
                                 }}
                               >
                                 Not applicable
+                              </RowAction>
+                            )}
+                            {task.status === "not_applicable" && (
+                              <RowAction
+                                reason={notApplicableLock}
+                                disabled={busy}
+                                onClick={() => void restore(task)}
+                              >
+                                Restore previous status
                               </RowAction>
                             )}
                           </div>

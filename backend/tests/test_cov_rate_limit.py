@@ -80,7 +80,9 @@ def test_window_resets_once_its_length_has_passed():
 
     assert rate_limit.hit(bucket, WINDOW) == 1
     assert window_is_recent(bucket)
-    assert rows_for(bucket) == [(1, False, False)], "the same row is reused, not duplicated"
+    assert rows_for(bucket) == [(1, False, False)], (
+        "the same row is reused, not duplicated"
+    )
 
 
 def test_cleared_bucket_starts_again_from_one():
@@ -103,12 +105,16 @@ def test_clear_soft_deletes_the_row_and_never_removes_it():
     assert rows_for(bucket) == [(2, True, True)]
 
     with connect() as conn:
-        deleted_at = conn.execute("SELECT deleted_at FROM rate_limits WHERE bucket = %s", (bucket,)).fetchone()[0]
+        deleted_at = conn.execute(
+            "SELECT deleted_at FROM rate_limits WHERE bucket = %s", (bucket,)
+        ).fetchone()[0]
 
     # A second clear changes nothing: the row is already soft-deleted, so its timestamp stays as it was.
     rate_limit.clear(bucket)
     with connect() as conn:
-        again = conn.execute("SELECT deleted_at FROM rate_limits WHERE bucket = %s", (bucket,)).fetchall()
+        again = conn.execute(
+            "SELECT deleted_at FROM rate_limits WHERE bucket = %s", (bucket,)
+        ).fetchall()
     assert again == [(deleted_at,)]
 
 

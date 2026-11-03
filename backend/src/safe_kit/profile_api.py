@@ -65,7 +65,9 @@ def _changes_from(body: ProfileUpdateRequest) -> dict[str, str | None]:
         raise HTTPException(status_code=422, detail=str(error))
 
 
-def _save(user_id: str, changes: dict[str, str | None], actor_id: str) -> ProfileResponse:
+def _save(
+    user_id: str, changes: dict[str, str | None], actor_id: str
+) -> ProfileResponse:
     try:
         updated = update_profile(user_id, changes, actor_id=actor_id)
     except EmailAlreadyInUse:
@@ -76,13 +78,17 @@ def _save(user_id: str, changes: dict[str, str | None], actor_id: str) -> Profil
 
 
 @router.get("/auth/profile", response_model=ProfileResponse)
-def get_own_profile(user: User = Depends(current_user_pending_change)) -> ProfileResponse:
+def get_own_profile(
+    user: User = Depends(current_user_pending_change),
+) -> ProfileResponse:
     # Allowed before the password change, so the change screen can show who is signed in.
     return _profile_response(user)
 
 
 @router.patch("/auth/profile", response_model=ProfileResponse)
-def update_own_profile(body: ProfileUpdateRequest, user: User = Depends(current_user)) -> ProfileResponse:
+def update_own_profile(
+    body: ProfileUpdateRequest, user: User = Depends(current_user)
+) -> ProfileResponse:
     return _save(user.id, _changes_from(body), actor_id=user.id)
 
 

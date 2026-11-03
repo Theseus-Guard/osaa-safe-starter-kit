@@ -17,6 +17,7 @@ from safe_kit.security import (
 from safe_kit.sessions import InvalidRefreshToken
 from safe_kit.system_timezone import TimezoneSetting
 from safe_kit.users import PasswordReused, ReporterAccountResetRefused, User
+from error_body import without_request_id
 
 PASSWORD = "correct horse battery"
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -35,10 +36,21 @@ class FakeStore:
         self.revoked_jtis = set()
         self.buckets = {}
         self.login_failures = []
-        self.timezone = "Europe/Istanbul"  # None means the system timezone is not set yet
+        self.timezone = (
+            "Europe/Istanbul"  # None means the system timezone is not set yet
+        )
         self._counter = 0
 
-    def add_user(self, user_id, username, role, *, password=PASSWORD, active=True, must_change=False):
+    def add_user(
+        self,
+        user_id,
+        username,
+        role,
+        *,
+        password=PASSWORD,
+        active=True,
+        must_change=False,
+    ):
         password_hash = hash_password(password)
         self.users[user_id] = User(
             id=user_id,
@@ -59,17 +71,33 @@ class FakeStore:
     # --- users ---
     def _effective(self, user):
         # Mirrors users._to_user: an expired password counts as a forced change.
-        if user is None or user.must_change_password or not password_expired(user.password_changed_at):
+        if (
+            user is None
+            or user.must_change_password
+            or not password_expired(user.password_changed_at)
+        ):
             return user
         return replace(user, must_change_password=True)
 
     def find_user(self, username):
-        return self._effective(next((u for u in self.users.values() if u.username == username), None))
+        return self._effective(
+            next((u for u in self.users.values() if u.username == username), None)
+        )
 
     def find_user_by_id(self, user_id):
         return self._effective(self.users.get(user_id))
 
-    def create_user_with_profile(self, username, password, role, email=None, first_name=None, last_name=None, title=None, actor_id=None):
+    def create_user_with_profile(
+        self,
+        username,
+        password,
+        role,
+        email=None,
+        first_name=None,
+        last_name=None,
+        title=None,
+        actor_id=None,
+    ):
         if self.find_user(username):
             raise psycopg.errors.UniqueViolation("duplicate username")
         user_id = f"00000000-0000-0000-0000-{len(self.users) + 1:012d}"
@@ -134,7 +162,11 @@ class FakeStore:
     def open_session(self, user_id):
         self._counter += 1
         token = f"refresh-{self._counter}"
-        self.sessions[token] = {"user_id": user_id, "family": self._counter, "revoked": False}
+        self.sessions[token] = {
+            "user_id": user_id,
+            "family": self._counter,
+            "revoked": False,
+        }
         return token
 
     def rotate_session(self, raw_token):
@@ -166,7 +198,9 @@ class FakeStore:
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     key_file = tmp_path / "jwt_signing_key.txt"
-    key_file.write_text("test-signing-key-with-enough-length-1234567890", encoding="utf-8")
+    key_file.write_text(
+        "test-signing-key-with-enough-length-1234567890", encoding="utf-8"
+    )
     monkeypatch.setenv("SAFE_JWT_KEY_FILE", str(key_file))
 
     fake = FakeStore()
@@ -175,7 +209,11 @@ def store(tmp_path, monkeypatch):
     fake.add_user(CAROL, "carol", "admin")
 
     monkeypatch.setattr(api, "admin_exists", lambda: True)
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()))
+    monkeypatch.setattr(
+        auth,
+        "permissions_for_role",
+        lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()),
+    )
     monkeypatch.setattr(api, "current_timezone_name", lambda: fake.timezone)
     monkeypatch.setattr(auth, "current_timezone_name", lambda: fake.timezone)
     monkeypatch.setattr(api, "current_setting", fake.current_setting)
@@ -201,8 +239,17 @@ def client(store):
     return TestClient(api.app)
 
 
+@pytest.fixture
+def gateway_client(store, monkeypatch):
+    """A caller that reaches the API through the gateway: the gateway's address is the trusted proxy."""
+    monkeypatch.setenv("SAFE_TRUSTED_PROXIES", "172.28.0.10")
+    return TestClient(api.app, client=("172.28.0.10", 50000))
+
+
 def login(client, username, password=PASSWORD):
-    return client.post("/api/v1/auth/token", json={"username": username, "password": password})
+    return client.post(
+        "/api/v1/auth/token", json={"username": username, "password": password}
+    )
 
 
 def bearer_header(token):
@@ -227,21 +274,22 @@ def test_login_returns_tokens_and_no_password_change_flag(client):
 def test_wrong_password_is_rejected_with_generic_message(client):
     response = login(client, "alice", "wrong password")
     assert response.status_code == 401
-    assert response.json() == {"detail": "invalid credentials"}
+    assert response.json()["detail"] == "invalid credentials"
 
 
 def test_unknown_user_gets_same_response_as_wrong_password(client):
     unknown = login(client, "nobody", "whatever")
     wrong = login(client, "alice", "wrong password")
     assert unknown.status_code == wrong.status_code == 401
-    assert unknown.json() == wrong.json()
+    # The request ID is different on every request. Everything else must be the same.
+    assert without_request_id(unknown) == without_request_id(wrong)
 
 
 def test_nobody_can_log_in_before_the_first_admin_exists(client, monkeypatch):
     monkeypatch.setattr(api, "admin_exists", lambda: False)
     response = login(client, "alice")
     assert response.status_code == 503
-    assert response.json() == {"detail": {"status": "setup_required"}}
+    assert response.json()["detail"] == {"status": "setup_required"}
 
 
 def test_disabled_user_cannot_log_in(client):
@@ -266,28 +314,58 @@ def test_successful_login_resets_username_counter(client):
 
 def test_refresh_rotates_the_refresh_token(client):
     tokens = login_tokens(client, "alice")
-    response = client.post("/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
+    response = client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    )
     assert response.status_code == 200
     rotated = response.json()
     assert rotated["refresh_token"] != tokens["refresh_token"]
-    assert client.get("/api/v1/auth/me", headers=bearer_header(rotated["access_token"])).status_code == 200
+    assert (
+        client.get(
+            "/api/v1/auth/me", headers=bearer_header(rotated["access_token"])
+        ).status_code
+        == 200
+    )
 
 
 def test_reused_refresh_token_revokes_the_whole_family(client):
     first = login_tokens(client, "alice")["refresh_token"]
-    second = client.post("/api/v1/auth/refresh", json={"refresh_token": first}).json()["refresh_token"]
+    second = client.post("/api/v1/auth/refresh", json={"refresh_token": first}).json()[
+        "refresh_token"
+    ]
 
-    assert client.post("/api/v1/auth/refresh", json={"refresh_token": first}).status_code == 401
+    assert (
+        client.post("/api/v1/auth/refresh", json={"refresh_token": first}).status_code
+        == 401
+    )
     # The newest token in the same family was revoked as well.
-    assert client.post("/api/v1/auth/refresh", json={"refresh_token": second}).status_code == 401
+    assert (
+        client.post("/api/v1/auth/refresh", json={"refresh_token": second}).status_code
+        == 401
+    )
 
 
 def test_logout_revokes_access_token_immediately(client):
     tokens = login_tokens(client, "alice")
-    assert client.get("/api/v1/auth/me", headers=bearer_header(tokens["access_token"])).status_code == 200
+    assert (
+        client.get(
+            "/api/v1/auth/me", headers=bearer_header(tokens["access_token"])
+        ).status_code
+        == 200
+    )
 
-    assert client.post("/api/v1/auth/logout", headers=bearer_header(tokens["access_token"])).status_code == 204
-    assert client.get("/api/v1/auth/me", headers=bearer_header(tokens["access_token"])).status_code == 401
+    assert (
+        client.post(
+            "/api/v1/auth/logout", headers=bearer_header(tokens["access_token"])
+        ).status_code
+        == 204
+    )
+    assert (
+        client.get(
+            "/api/v1/auth/me", headers=bearer_header(tokens["access_token"])
+        ).status_code
+        == 401
+    )
 
 
 def test_logout_with_refresh_token_revokes_refresh_token(client):
@@ -297,7 +375,12 @@ def test_logout_with_refresh_token_revokes_refresh_token(client):
         headers=bearer_header(tokens["access_token"]),
         json={"refresh_token": tokens["refresh_token"]},
     )
-    assert client.post("/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}).status_code == 401
+    assert (
+        client.post(
+            "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+        ).status_code
+        == 401
+    )
 
 
 def test_logout_requires_a_valid_access_token(client):
@@ -324,7 +407,9 @@ def test_me_with_valid_token(client):
 
 def test_me_lists_the_role_permissions_sorted(client):
     token = login_tokens(client, "alice")["access_token"]
-    permissions = client.get("/api/v1/auth/me", headers=bearer_header(token)).json()["permissions"]
+    permissions = client.get("/api/v1/auth/me", headers=bearer_header(token)).json()[
+        "permissions"
+    ]
     assert permissions == sorted(permissions)
     assert {"cases:read_all", "cases:close", "evidence:read"} <= set(permissions)
     assert "evidence:write" not in permissions
@@ -332,13 +417,18 @@ def test_me_lists_the_role_permissions_sorted(client):
 
 def test_me_without_or_with_bad_token_is_rejected(client):
     assert client.get("/api/v1/auth/me").status_code == 401
-    assert client.get("/api/v1/auth/me", headers=bearer_header("not-a-jwt")).status_code == 401
+    assert (
+        client.get("/api/v1/auth/me", headers=bearer_header("not-a-jwt")).status_code
+        == 401
+    )
 
 
 def test_token_stops_working_when_account_is_disabled(client, store):
     token = login_tokens(client, "alice")["access_token"]
     store._replace(ALICE, is_active=False)
-    assert client.get("/api/v1/auth/me", headers=bearer_header(token)).status_code == 401
+    assert (
+        client.get("/api/v1/auth/me", headers=bearer_header(token)).status_code == 401
+    )
 
 
 def test_new_account_must_change_password_before_anything_else(client, store):
@@ -346,22 +436,36 @@ def test_new_account_must_change_password_before_anything_else(client, store):
     created = client.post(
         "/api/v1/users",
         headers=bearer_header(admin_token),
-        json={"username": "dave", "role": "reviewer", "temporary_password": "temporary passphrase"},
+        json={
+            "username": "dave",
+            "role": "reviewer",
+            "temporary_password": "temporary passphrase",
+        },
     )
     assert created.status_code == 201
     assert created.json()["password_change_required"] is True
 
     dave = login_tokens(client, "dave", "temporary passphrase")
     assert dave["password_change_required"] is True
-    assert client.post(
-        "/api/v1/users",
-        headers=bearer_header(dave["access_token"]),
-        json={"username": "erin", "role": "auditor", "temporary_password": "temporary passphrase"},
-    ).status_code == 403
+    assert (
+        client.post(
+            "/api/v1/users",
+            headers=bearer_header(dave["access_token"]),
+            json={
+                "username": "erin",
+                "role": "auditor",
+                "temporary_password": "temporary passphrase",
+            },
+        ).status_code
+        == 403
+    )
     # Identity and logout stay available so the client can show the change screen.
-    assert client.get("/api/v1/auth/me", headers=bearer_header(dave["access_token"])).json()[
-        "password_change_required"
-    ] is True
+    assert (
+        client.get(
+            "/api/v1/auth/me", headers=bearer_header(dave["access_token"])
+        ).json()["password_change_required"]
+        is True
+    )
 
 
 def test_password_change_clears_the_flag_and_ends_sessions(client, store):
@@ -369,24 +473,41 @@ def test_password_change_clears_the_flag_and_ends_sessions(client, store):
     client.post(
         "/api/v1/users",
         headers=bearer_header(admin_token),
-        json={"username": "dave", "role": "reviewer", "temporary_password": "temporary passphrase"},
+        json={
+            "username": "dave",
+            "role": "reviewer",
+            "temporary_password": "temporary passphrase",
+        },
     )
     dave = login_tokens(client, "dave", "temporary passphrase")
 
     changed = client.post(
         "/api/v1/auth/password",
         headers=bearer_header(dave["access_token"]),
-        json={"current_password": "temporary passphrase", "new_password": "my own passphrase"},
+        json={
+            "current_password": "temporary passphrase",
+            "new_password": "my own passphrase",
+        },
     )
     assert changed.status_code == 204
-    assert client.get("/api/v1/auth/me", headers=bearer_header(dave["access_token"])).status_code == 401
+    assert (
+        client.get(
+            "/api/v1/auth/me", headers=bearer_header(dave["access_token"])
+        ).status_code
+        == 401
+    )
     assert login(client, "dave", "temporary passphrase").status_code == 401
 
     # Tokens are rejected if issued in the same second as the password change (iat has whole seconds).
     time.sleep(1.1)
     relogin = login_tokens(client, "dave", "my own passphrase")
     assert relogin["password_change_required"] is False
-    assert client.get("/api/v1/auth/me", headers=bearer_header(relogin["access_token"])).status_code == 200
+    assert (
+        client.get(
+            "/api/v1/auth/me", headers=bearer_header(relogin["access_token"])
+        ).status_code
+        == 200
+    )
 
 
 def test_password_change_requires_current_password(client):
@@ -405,7 +526,11 @@ def test_admin_can_create_user_with_temporary_password(client):
     response = client.post(
         "/api/v1/users",
         headers=bearer_header(admin_token),
-        json={"username": "frank", "role": "auditor", "temporary_password": "temporary passphrase"},
+        json={
+            "username": "frank",
+            "role": "auditor",
+            "temporary_password": "temporary passphrase",
+        },
     )
     assert response.status_code == 201
     assert response.json()["role"] == "auditor"
@@ -416,7 +541,11 @@ def test_duplicate_username_returns_409(client):
     response = client.post(
         "/api/v1/users",
         headers=bearer_header(admin_token),
-        json={"username": "alice", "role": "auditor", "temporary_password": "temporary passphrase"},
+        json={
+            "username": "alice",
+            "role": "auditor",
+            "temporary_password": "temporary passphrase",
+        },
     )
     assert response.status_code == 409
 
@@ -426,7 +555,11 @@ def test_non_admin_cannot_create_users(client):
     response = client.post(
         "/api/v1/users",
         headers=bearer_header(token),
-        json={"username": "frank", "role": "auditor", "temporary_password": "temporary passphrase"},
+        json={
+            "username": "frank",
+            "role": "auditor",
+            "temporary_password": "temporary passphrase",
+        },
     )
     assert response.status_code == 403
 
@@ -436,9 +569,13 @@ def test_unknown_role_is_rejected(client):
     response = client.post(
         "/api/v1/users",
         headers=bearer_header(admin_token),
-        json={"username": "frank", "role": "root", "temporary_password": "temporary passphrase"},
+        json={
+            "username": "frank",
+            "role": "root",
+            "temporary_password": "temporary passphrase",
+        },
     )
-    assert response.status_code == 422
+    assert response.status_code == 400
 
 
 def test_admin_reset_sets_temporary_password_and_ends_old_sessions(client):
@@ -452,8 +589,19 @@ def test_admin_reset_sets_temporary_password_and_ends_old_sessions(client):
     )
     assert response.status_code == 204
 
-    assert client.get("/api/v1/auth/me", headers=bearer_header(alice_tokens["access_token"])).status_code == 401
-    assert client.post("/api/v1/auth/refresh", json={"refresh_token": alice_tokens["refresh_token"]}).status_code == 401
+    assert (
+        client.get(
+            "/api/v1/auth/me", headers=bearer_header(alice_tokens["access_token"])
+        ).status_code
+        == 401
+    )
+    assert (
+        client.post(
+            "/api/v1/auth/refresh",
+            json={"refresh_token": alice_tokens["refresh_token"]},
+        ).status_code
+        == 401
+    )
     assert login(client, "alice", PASSWORD).status_code == 401
     temporary = login_tokens(client, "alice", "temporary passphrase")
     assert temporary["password_change_required"] is True
@@ -522,15 +670,22 @@ def expire_password(store, user_id):
 
 def test_temporary_password_cannot_be_set_as_the_new_password(client):
     create_dave(client)
-    response = change_password(client, "dave", "temporary passphrase", "temporary passphrase")
+    response = change_password(
+        client, "dave", "temporary passphrase", "temporary passphrase"
+    )
     assert response.status_code == 422
-    assert response.json() == {"detail": "password_reused"}
+    assert response.json()["detail"] == "password_reused"
 
 
 def test_temporary_password_stays_refused_after_later_changes(client):
     create_dave(client)
     current = "temporary passphrase"
-    for new in ["first passphrase here", "second passphrase here", "third passphrase here", "fourth passphrase here"]:
+    for new in [
+        "first passphrase here",
+        "second passphrase here",
+        "third passphrase here",
+        "fourth passphrase here",
+    ]:
         assert change_password(client, "dave", current, new).status_code == 204
         # Tokens are whole-second; wait so the next login is not rejected as issued before the change.
         time.sleep(1.1)
@@ -539,12 +694,17 @@ def test_temporary_password_stays_refused_after_later_changes(client):
     # Four later changes: the temporary password is outside the last three, and it is still refused.
     response = change_password(client, "dave", current, "temporary passphrase")
     assert response.status_code == 422
-    assert response.json() == {"detail": "password_reused"}
+    assert response.json()["detail"] == "password_reused"
 
 
 def test_last_three_passwords_cannot_be_reused_but_the_fourth_most_recent_can(client):
     create_dave(client)
-    passwords = ["first passphrase here", "second passphrase here", "third passphrase here", "fourth passphrase here"]
+    passwords = [
+        "first passphrase here",
+        "second passphrase here",
+        "third passphrase here",
+        "fourth passphrase here",
+    ]
     current = "temporary passphrase"
     for new in passwords:
         assert change_password(client, "dave", current, new).status_code == 204
@@ -556,10 +716,13 @@ def test_last_three_passwords_cannot_be_reused_but_the_fourth_most_recent_can(cl
     for recent in passwords[1:]:
         response = change_password(client, "dave", current, recent)
         assert response.status_code == 422
-        assert response.json() == {"detail": "password_reused"}
+        assert response.json()["detail"] == "password_reused"
 
     # The first password is now the fourth most recent non-temporary entry, outside the window.
-    assert change_password(client, "dave", current, "first passphrase here").status_code == 204
+    assert (
+        change_password(client, "dave", current, "first passphrase here").status_code
+        == 204
+    )
 
 
 def test_admin_reset_cannot_reuse_the_current_password(client):
@@ -569,7 +732,7 @@ def test_admin_reset_cannot_reuse_the_current_password(client):
         json={"temporary_password": PASSWORD},
     )
     assert response.status_code == 422
-    assert response.json() == {"detail": "password_reused"}
+    assert response.json()["detail"] == "password_reused"
 
 
 def test_expired_password_forces_a_change_at_login(client, store):
@@ -580,7 +743,12 @@ def test_expired_password_forces_a_change_at_login(client, store):
 
     # Restricted like a must-change account: a regular endpoint is refused, while /me and the change answer.
     assert client.get("/api/v1/system/timezone", headers=headers).status_code == 403
-    assert client.get("/api/v1/auth/me", headers=headers).json()["password_change_required"] is True
+    assert (
+        client.get("/api/v1/auth/me", headers=headers).json()[
+            "password_change_required"
+        ]
+        is True
+    )
     changed = client.post(
         "/api/v1/auth/password",
         headers=headers,
@@ -592,7 +760,12 @@ def test_expired_password_forces_a_change_at_login(client, store):
     time.sleep(1.1)
     relogin = login_tokens(client, "alice", "my own passphrase")
     assert relogin["password_change_required"] is False
-    assert client.get("/api/v1/system/timezone", headers=bearer_header(relogin["access_token"])).status_code == 200
+    assert (
+        client.get(
+            "/api/v1/system/timezone", headers=bearer_header(relogin["access_token"])
+        ).status_code
+        == 200
+    )
 
 
 def test_expired_account_can_still_log_out(client, store):
@@ -613,32 +786,38 @@ def test_short_passwords_are_rejected(client):
         headers=bearer_header(admin_token),
         json={"temporary_password": "short"},
     )
-    assert response.status_code == 422
+    assert response.status_code == 400
 
 
-def test_failed_login_is_audited_with_account_username_and_client_address(client, store):
-    response = client.post(
+def test_failed_login_is_audited_with_account_username_and_client_address(
+    gateway_client, store
+):
+    response = gateway_client.post(
         "/api/v1/auth/token",
-        headers={"X-Real-IP": "203.0.113.9"},
+        headers={"X-Forwarded-For": "203.0.113.9"},
         json={"username": "alice", "password": "wrong password here"},
     )
     assert response.status_code == 401
     assert store.login_failures == [(ALICE, "wrong_password", "alice", "203.0.113.9")]
 
 
-def test_failed_login_for_unknown_name_is_audited_with_the_submitted_name(client, store):
-    client.post(
+def test_failed_login_for_unknown_name_is_audited_with_the_submitted_name(
+    gateway_client, store
+):
+    gateway_client.post(
         "/api/v1/auth/token",
-        headers={"X-Real-IP": "203.0.113.9"},
+        headers={"X-Forwarded-For": "203.0.113.9"},
         json={"username": "nobody-by-this-name", "password": "whatever"},
     )
-    assert store.login_failures == [(None, "unknown_user", "nobody-by-this-name", "203.0.113.9")]
+    assert store.login_failures == [
+        (None, "unknown_user", "nobody-by-this-name", "203.0.113.9")
+    ]
 
 
-def test_login_to_disabled_account_is_audited_as_inactive(client, store):
-    client.post(
+def test_login_to_disabled_account_is_audited_as_inactive(gateway_client, store):
+    gateway_client.post(
         "/api/v1/auth/token",
-        headers={"X-Real-IP": "203.0.113.9"},
+        headers={"X-Forwarded-For": "203.0.113.9"},
         json={"username": "bob", "password": PASSWORD},
     )
     assert store.login_failures == [(BOB, "account_inactive", "bob", "203.0.113.9")]
@@ -656,7 +835,7 @@ def test_non_admin_cannot_sign_in_until_the_system_timezone_is_set(client, store
     store.timezone = None
     response = login(client, "alice")
     assert response.status_code == 503
-    assert response.json() == {"detail": {"status": "setup_required"}}
+    assert response.json()["detail"] == {"status": "setup_required"}
 
 
 def test_admin_can_sign_in_before_the_system_timezone_is_set(client, store):
@@ -664,12 +843,14 @@ def test_admin_can_sign_in_before_the_system_timezone_is_set(client, store):
     assert login(client, "carol").status_code == 200
 
 
-def test_authenticated_endpoints_refuse_non_admins_until_the_timezone_is_set(client, store):
+def test_authenticated_endpoints_refuse_non_admins_until_the_timezone_is_set(
+    client, store
+):
     token = login_tokens(client, "alice")["access_token"]
     store.timezone = None
     response = client.get("/api/v1/system/timezone", headers=bearer_header(token))
     assert response.status_code == 403
-    assert response.json() == {"detail": "system setup required"}
+    assert response.json()["detail"] == "system setup required"
 
 
 def test_admin_is_not_blocked_by_the_setup_gate(client, store):
@@ -683,7 +864,12 @@ def test_admin_is_not_blocked_by_the_setup_gate(client, store):
 def test_me_tells_an_admin_that_setup_is_required_and_nobody_else(client, store):
     store.timezone = None
     admin_token = login_tokens(client, "carol")["access_token"]
-    assert client.get("/api/v1/auth/me", headers=bearer_header(admin_token)).json()["timezone_setup_required"] is True
+    assert (
+        client.get("/api/v1/auth/me", headers=bearer_header(admin_token)).json()[
+            "timezone_setup_required"
+        ]
+        is True
+    )
 
     store.timezone = "Europe/Istanbul"
     alice_token = login_tokens(client, "alice")["access_token"]
@@ -697,4 +883,286 @@ def test_me_reports_no_setup_required_once_the_timezone_is_set(client, store):
     store.timezone = None
     token = login_tokens(client, "carol")["access_token"]
     store.timezone = "Pacific/Auckland"
-    assert client.get("/api/v1/auth/me", headers=bearer_header(token)).json()["timezone_setup_required"] is False
+    assert (
+        client.get("/api/v1/auth/me", headers=bearer_header(token)).json()[
+            "timezone_setup_required"
+        ]
+        is False
+    )
+
+
+# --- browser sessions: HttpOnly cookies and the CSRF check -----------------------------------------------------------
+# The browser client talks over https, as it does through the gateway: Secure cookies are sent only over https.
+
+
+@pytest.fixture
+def browser(store):
+    return TestClient(api.app, base_url="https://testserver")
+
+
+def set_cookie_lines(response) -> dict[str, str]:
+    return {
+        line.split("=", 1)[0]: line for line in response.headers.get_list("set-cookie")
+    }
+
+
+def cookie_attributes(line: str) -> set[str]:
+    return {part.strip().lower() for part in line.split(";")[1:]}
+
+
+def csrf_header(browser_client) -> dict[str, str]:
+    return {"X-CSRF-Token": browser_client.cookies.get("safe_csrf")}
+
+
+def presenting(*cookies: tuple[str, str]) -> TestClient:
+    """A client that presents only the given cookies, as a browser holding exactly those would."""
+    client = TestClient(api.app, base_url="https://testserver")
+    for name, value in cookies:
+        client.cookies.set(name, value)
+    return client
+
+
+def create_frank(client_or_browser, headers=None):
+    return client_or_browser.post(
+        "/api/v1/users",
+        headers=headers or {},
+        json={
+            "username": "frank",
+            "role": "auditor",
+            "temporary_password": "temporary passphrase",
+        },
+    )
+
+
+def test_login_sets_the_three_session_cookies_with_the_right_attributes(browser):
+    response = login(browser, "alice")
+    assert response.status_code == 200
+
+    lines = set_cookie_lines(response)
+    assert set(lines) == {"safe_access", "safe_refresh", "safe_csrf"}
+
+    access = cookie_attributes(lines["safe_access"])
+    assert {"httponly", "secure", "samesite=strict", "path=/"} <= access
+    assert any(part.startswith("max-age=") for part in access)
+
+    refresh = cookie_attributes(lines["safe_refresh"])
+    assert {"httponly", "secure", "samesite=strict", "path=/api/v1/auth"} <= refresh
+
+    # The page must read the CSRF cookie, so it is the one cookie that is not HttpOnly.
+    csrf = cookie_attributes(lines["safe_csrf"])
+    assert {"secure", "samesite=strict", "path=/"} <= csrf
+    assert "httponly" not in csrf
+
+
+def test_login_still_returns_the_tokens_in_the_body_for_the_cli(browser):
+    body = login(browser, "alice").json()
+    assert body["access_token"]
+    assert body["refresh_token"]
+
+
+def test_cookie_authenticates_a_read_without_a_csrf_header(browser):
+    login(browser, "alice")
+    response = browser.get("/api/v1/auth/me")
+    assert response.status_code == 200
+    assert response.json()["username"] == "alice"
+
+
+def test_bearer_header_still_authenticates_without_a_csrf_header(client):
+    token = login_tokens(client, "carol")["access_token"]
+    response = create_frank(client, bearer_header(token))
+    assert response.status_code == 201
+
+
+def test_bearer_write_needs_no_csrf_even_when_cookies_are_also_sent(browser):
+    # Carol's cookies are in the jar and the write has no CSRF header; the Bearer header alone authenticates it.
+    admin_token = login_tokens(browser, "carol")["access_token"]
+    response = create_frank(browser, bearer_header(admin_token))
+    assert response.status_code == 201
+
+
+def test_cookie_write_without_the_csrf_header_is_refused(browser, store):
+    login(browser, "carol")
+    response = create_frank(browser)
+    assert response.status_code == 403
+    assert response.json()["detail"] == "csrf_token_invalid"
+    assert "frank" not in {user.username for user in store.users.values()}
+
+
+def test_cookie_write_with_a_different_csrf_header_is_refused(browser, store):
+    login(browser, "carol")
+    response = create_frank(browser, {"X-CSRF-Token": "not-the-token"})
+    assert response.status_code == 403
+    assert response.json()["detail"] == "csrf_token_invalid"
+    assert "frank" not in {user.username for user in store.users.values()}
+
+
+def test_cookie_write_with_the_matching_csrf_header_succeeds(browser):
+    login(browser, "carol")
+    response = create_frank(browser, csrf_header(browser))
+    assert response.status_code == 201
+
+
+def test_cookie_read_does_not_need_the_csrf_header(browser):
+    login(browser, "carol")
+    assert browser.get("/api/v1/system/timezone").status_code == 200
+
+
+def test_bad_cookie_token_on_a_write_is_answered_with_401_not_403(browser):
+    fresh = TestClient(api.app, base_url="https://testserver")
+    fresh.cookies.set("safe_access", "not-a-jwt")
+    fresh.cookies.set("safe_csrf", "value")
+    response = fresh.post("/api/v1/auth/logout", headers={"X-CSRF-Token": "value"})
+    assert response.status_code == 401
+
+
+def test_refresh_by_cookie_rotates_the_cookies(browser):
+    login(browser, "alice")
+    old_access = browser.cookies.get("safe_access")
+    old_refresh = browser.cookies.get("safe_refresh")
+
+    response = browser.post("/api/v1/auth/refresh", headers=csrf_header(browser))
+    assert response.status_code == 200
+    assert response.json()["access_token"]
+
+    lines = set_cookie_lines(response)
+    assert set(lines) == {"safe_access", "safe_refresh", "safe_csrf"}
+    assert {
+        "httponly",
+        "secure",
+        "samesite=strict",
+        "path=/api/v1/auth",
+    } <= cookie_attributes(lines["safe_refresh"])
+    assert browser.cookies.get("safe_access") != old_access
+    assert browser.cookies.get("safe_refresh") != old_refresh
+    assert browser.get("/api/v1/auth/me").status_code == 200
+
+    # The rotated-out refresh cookie is refused, and presenting it ends the family.
+    replay = presenting(
+        ("safe_refresh", old_refresh), ("safe_csrf", browser.cookies.get("safe_csrf"))
+    )
+    assert (
+        replay.post("/api/v1/auth/refresh", headers=csrf_header(replay)).status_code
+        == 401
+    )
+
+
+def test_refresh_by_cookie_needs_the_csrf_header(browser):
+    login(browser, "alice")
+    assert browser.post("/api/v1/auth/refresh").status_code == 403
+    assert browser.get("/api/v1/auth/me").status_code == 200
+
+
+def test_start_up_refresh_restores_the_session_after_the_access_cookie_is_gone(browser):
+    # A page reload after the access cookie expired: /auth/me is refused, the refresh with the CSRF header succeeds,
+    # and /auth/me works again with the rotated cookies.
+    login(browser, "alice")
+    browser.cookies.delete("safe_access")
+    assert browser.get("/api/v1/auth/me").status_code == 401
+
+    response = browser.post("/api/v1/auth/refresh", headers=csrf_header(browser))
+    assert response.status_code == 200
+    assert browser.cookies.get("safe_access")
+
+    me = browser.get("/api/v1/auth/me")
+    assert me.status_code == 200
+    assert me.json()["username"] == "alice"
+
+
+def test_refresh_without_any_refresh_credential_is_refused(client):
+    assert client.post("/api/v1/auth/refresh").status_code == 401
+
+
+def test_logout_by_cookie_needs_the_csrf_header_and_keeps_the_session_without_it(
+    browser,
+):
+    login(browser, "alice")
+    assert browser.post("/api/v1/auth/logout").status_code == 403
+    assert browser.get("/api/v1/auth/me").status_code == 200
+
+
+def test_logout_by_cookie_clears_all_three_cookies_and_revokes_the_session(browser):
+    login(browser, "alice")
+    old_access = browser.cookies.get("safe_access")
+
+    response = browser.post("/api/v1/auth/logout", headers=csrf_header(browser))
+    assert response.status_code == 204
+
+    lines = set_cookie_lines(response)
+    assert set(lines) == {"safe_access", "safe_refresh", "safe_csrf"}
+    assert all("max-age=0" in cookie_attributes(line) for line in lines.values())
+    assert browser.cookies.get("safe_access") is None
+    assert browser.cookies.get("safe_refresh") is None
+    assert browser.cookies.get("safe_csrf") is None
+
+    # The old access token no longer works, even when it is presented directly.
+    assert (
+        presenting(("safe_access", old_access)).get("/api/v1/auth/me").status_code
+        == 401
+    )
+
+
+def test_refresh_after_logout_is_refused_for_the_old_refresh_cookie(browser):
+    login(browser, "alice")
+    old_refresh = browser.cookies.get("safe_refresh")
+    browser.post("/api/v1/auth/logout", headers=csrf_header(browser))
+
+    replay = presenting(("safe_refresh", old_refresh), ("safe_csrf", "same"))
+    response = replay.post("/api/v1/auth/refresh", headers={"X-CSRF-Token": "same"})
+    assert response.status_code == 401
+
+
+def test_password_change_by_cookie_needs_the_csrf_header(browser, store):
+    create_dave(TestClient(api.app), temporary="temporary passphrase")
+    login(browser, "dave", "temporary passphrase")
+    response = browser.post(
+        "/api/v1/auth/password",
+        json={
+            "current_password": "temporary passphrase",
+            "new_password": "my own passphrase",
+        },
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "csrf_token_invalid"
+
+
+def test_password_change_by_cookie_clears_the_cookies_and_ends_the_session(
+    browser, store
+):
+    create_dave(TestClient(api.app), temporary="temporary passphrase")
+    login(browser, "dave", "temporary passphrase")
+    old_access = browser.cookies.get("safe_access")
+
+    # The forced change at first login: regular endpoints refuse the cookie session, /me and the change answer.
+    assert browser.get("/api/v1/system/timezone").status_code == 403
+    assert browser.get("/api/v1/auth/me").json()["password_change_required"] is True
+
+    changed = browser.post(
+        "/api/v1/auth/password",
+        headers=csrf_header(browser),
+        json={
+            "current_password": "temporary passphrase",
+            "new_password": "my own passphrase",
+        },
+    )
+    assert changed.status_code == 204
+    lines = set_cookie_lines(changed)
+    assert all("max-age=0" in cookie_attributes(line) for line in lines.values())
+    assert browser.cookies.get("safe_access") is None
+    assert (
+        presenting(("safe_access", old_access)).get("/api/v1/auth/me").status_code
+        == 401
+    )
+    assert login(browser, "dave", "temporary passphrase").status_code == 401
+
+    # Tokens are rejected if issued in the same second as the password change (iat has whole seconds).
+    time.sleep(1.1)
+    relogin = login(browser, "dave", "my own passphrase")
+    assert relogin.status_code == 200
+    assert relogin.json()["password_change_required"] is False
+    assert browser.get("/api/v1/system/timezone").status_code == 200
+
+
+def test_disabled_account_loses_its_cookie_session_at_once(browser, store):
+    login(browser, "alice")
+    store._replace(ALICE, is_active=False)
+    assert browser.get("/api/v1/auth/me").status_code == 401

@@ -37,7 +37,7 @@ export function CaseSearch() {
     }
     let stale = false;
     setLoading(true);
-    listCases(MAX_RESULTS, 0, term)
+    listCases(MAX_RESULTS, undefined, term)
       .then((page) => {
         if (stale) return;
         setItems(page.items);

@@ -27,6 +27,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { EvidenceDetail } from "./EvidenceDetail";
 
 const PAGE_SIZE = 20;
 
@@ -46,6 +47,7 @@ export function CaseEvidence({ caseId, canRead, canWrite }: Props) {
   // Bumped after an upload so the list reloads from the server.
   const [version, setVersion] = useState(0);
   const [openCustodyId, setOpenCustodyId] = useState<string | null>(null);
+  const [openDetailId, setOpenDetailId] = useState<string | null>(null);
   const [custodyRevision, setCustodyRevision] = useState(0);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
@@ -135,6 +137,9 @@ export function CaseEvidence({ caseId, canRead, canWrite }: Props) {
                         custodyRevision={custodyRevision}
                         downloading={downloadingId === item.id}
                         onToggleCustody={() => setOpenCustodyId(openCustodyId === item.id ? null : item.id)}
+                        detailOpen={openDetailId === item.id}
+                        canWrite={canWrite}
+                        onToggleDetail={() => setOpenDetailId(openDetailId === item.id ? null : item.id)}
                         onDownload={() => void download(item)}
                       />
                     ))}
@@ -237,10 +242,23 @@ interface RowProps {
   custodyRevision: number;
   downloading: boolean;
   onToggleCustody: () => void;
+  detailOpen: boolean;
+  canWrite: boolean;
+  onToggleDetail: () => void;
   onDownload: () => void;
 }
 
-function EvidenceRowGroup({ item, custodyOpen, custodyRevision, downloading, onToggleCustody, onDownload }: RowProps) {
+function EvidenceRowGroup({
+  item,
+  custodyOpen,
+  custodyRevision,
+  downloading,
+  onToggleCustody,
+  detailOpen,
+  canWrite,
+  onToggleDetail,
+  onDownload,
+}: RowProps) {
   // Only available evidence can be downloaded. The server answers 409 for any other status.
   const canDownload = item.status === "available";
   return (
@@ -249,6 +267,7 @@ function EvidenceRowGroup({ item, custodyOpen, custodyRevision, downloading, onT
         <TableCell className="whitespace-normal">
           <span className="font-medium">{item.original_filename}</span>
           <span className="block text-xs text-muted-foreground">{item.media_type}</span>
+          {item.tlp_label && <span className="block text-xs text-muted-foreground">TLP {item.tlp_label}</span>}
         </TableCell>
         <TableCell>{formatBytes(item.size_bytes)}</TableCell>
         <TableCell>
@@ -265,12 +284,22 @@ function EvidenceRowGroup({ item, custodyOpen, custodyRevision, downloading, onT
             <Button size="sm" variant="outline" disabled={!canDownload || downloading} onClick={onDownload}>
               {downloading ? "Downloading…" : "Download"}
             </Button>
+            <Button size="sm" variant="ghost" aria-expanded={detailOpen} onClick={onToggleDetail}>
+              {detailOpen ? "Hide details" : "Details"}
+            </Button>
             <Button size="sm" variant="ghost" aria-expanded={custodyOpen} onClick={onToggleCustody}>
               {custodyOpen ? "Hide custody" : "Custody"}
             </Button>
           </div>
         </TableCell>
       </TableRow>
+      {detailOpen && (
+        <TableRow>
+          <TableCell colSpan={6} className="whitespace-normal bg-muted/40">
+            <EvidenceDetail evidenceId={item.id} canWrite={canWrite} />
+          </TableCell>
+        </TableRow>
+      )}
       {custodyOpen && (
         <TableRow>
           <TableCell colSpan={6} className="whitespace-normal bg-muted/40">

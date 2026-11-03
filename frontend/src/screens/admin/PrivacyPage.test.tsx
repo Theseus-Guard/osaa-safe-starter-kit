@@ -37,6 +37,7 @@ function item(index: number): PrivacyInventoryItem {
 beforeEach(() => {
   inventory.mockReset().mockResolvedValue({
     generated_at: "2026-11-01T10:00:00Z",
+    retention_years: 5,
     items: Array.from({ length: 7 }, (_, index) => item(index + 1)),
   } as Awaited<ReturnType<typeof getPrivacyInventory>>);
 });
@@ -63,5 +64,15 @@ describe("PrivacyPage pagination", () => {
 
     await user.click(screen.getByRole("button", { name: "Previous" }));
     expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled();
+  });
+});
+
+describe("PrivacyPage retention period", () => {
+  it("says the period is provisional and waiting for legal review", async () => {
+    render(<PrivacyPage />);
+
+    expect(await screen.findByText(/retention periods are provisional and await legal review/i)).toBeInTheDocument();
+    expect(screen.getByText(/5 years for each of the 7 tables/)).toBeInTheDocument();
+    expect(screen.queryByText(/not defined yet/i)).not.toBeInTheDocument();
   });
 });

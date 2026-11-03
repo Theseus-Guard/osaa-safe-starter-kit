@@ -11,7 +11,7 @@ deadlines (plans/01, R02).
 Classification versions are never edited. An edit inserts the next version, so the history stays complete.
 """
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import Enum
@@ -20,6 +20,7 @@ from typing import Any
 from safe_kit import audit, cases
 from safe_kit.cases import Case, CaseScope
 from safe_kit.db import connect
+from safe_kit.idempotency import KeyScope, check, remember
 
 # Awareness: the three facts that can start the clock (plans/01, timeline). Each is stored with its own time and basis.
 AWARENESS_KINDS = frozenset({"operator", "affected_party", "external_report"})
@@ -53,7 +54,13 @@ IMPACT_SEVERITIES = frozenset({"none", "low", "medium", "high", "critical", "unk
 
 DUTY_KINDS = frozenset({"statutory", "contractual"})
 DUTY_STATUSES = frozenset({"open", "done"})
-DUTY_EDITABLE_FIELDS = ("description", "source_reference", "jurisdiction", "due_at", "status")
+DUTY_EDITABLE_FIELDS = (
+    "description",
+    "source_reference",
+    "jurisdiction",
+    "due_at",
+    "status",
+)
 
 CLASSIFICATION_TEXT_FIELDS = (
     "classification_rationale",
@@ -64,10 +71,10 @@ CLASSIFICATION_TEXT_FIELDS = (
     "containment",
     "evidence_gap_plan",
 )
+# internal_incident_option is no longer a field: the external notice tasks are marked not applicable per task.
 CLASSIFICATION_EDITABLE_FIELDS = (
     "triggers",
     "event_kind",
-    "internal_incident_option",
     *CLASSIFICATION_TEXT_FIELDS,
     "next_update_due_at",
 )
@@ -92,6 +99,8 @@ class RecordOutcome(Enum):
     NOT_FOUND = "not_found"
     CLOSED = "closed"
     DUTY_NOT_FOUND = "duty_not_found"
+    # The caller read an older revision of the duty than the current one. Nothing changed.
+    REVISION_MISMATCH = "revision_mismatch"
     # The caller read an older classification version than the current one.
     VERSION_CONFLICT = "version_conflict"
 
@@ -131,6 +140,8 @@ class LegalDuty:
     status: str
     created_by: str
     created_at: datetime
+    # Starts at 1 and rises by one with each change to the duty (see update_legal_duty). Sent back as If-Match.
+    revision: int = 1
 
 
 @dataclass(frozen=True)
@@ -140,7 +151,6 @@ class Classification:
     version: int
     triggers: tuple[str, ...] = ()
     event_kind: str | None = None
-    internal_incident_option: bool = False
     classification_rationale: str | None = None
     responsible_operator: str | None = None
     affected_versions: str | None = None
@@ -162,7 +172,8 @@ def normalize_triggers(triggers: Iterable[str]) -> tuple[str, ...]:
     chosen = set(triggers)
     unknown = chosen - set(TRIGGERS)
     if unknown:
-        raise ValueError("unknown trigger: " + ", ".join(sorted(unknown)))
+        # The names are not repeated: an error body never quotes the submitted values (api-draft 3.6).
+        raise ValueError("unknown trigger: choose only values from the trigger list")
     if NONE_APPLIES in chosen and len(chosen) > 1:
         raise ValueError("none_applies cannot be combined with other triggers")
     return tuple(trigger for trigger in TRIGGERS if trigger in chosen)
@@ -174,7 +185,11 @@ def _marker(text: str | None) -> dict[str, int] | None:
 
 
 def _audit_value(name: str, value: Any) -> Any:
-    if name in CLASSIFICATION_TEXT_FIELDS or name in ("description", "source_reference", "jurisdiction"):
+    if name in CLASSIFICATION_TEXT_FIELDS or name in (
+        "description",
+        "source_reference",
+        "jurisdiction",
+    ):
         return _marker(value)
     if isinstance(value, datetime):
         return value.isoformat()
@@ -183,7 +198,9 @@ def _audit_value(name: str, value: Any) -> Any:
     return value
 
 
-def classification_changes(old: Classification, new_values: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+def classification_changes(
+    old: Classification, new_values: Mapping[str, Any]
+) -> dict[str, dict[str, Any]]:
     """The editable fields whose value differs, as {field: {"old": ..., "new": ...}} with text reduced to lengths."""
     changes: dict[str, dict[str, Any]] = {}
     for name in CLASSIFICATION_EDITABLE_FIELDS:
@@ -192,21 +209,34 @@ def classification_changes(old: Classification, new_values: Mapping[str, Any]) -
         if name == "triggers":
             before, after = tuple(before), tuple(after)
         if before != after:
-            changes[name] = {"old": _audit_value(name, before), "new": _audit_value(name, after)}
+            changes[name] = {
+                "old": _audit_value(name, before),
+                "new": _audit_value(name, after),
+            }
     return changes
 
 
-def duty_changes(old: Mapping[str, Any], new: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+def duty_changes(
+    old: Mapping[str, Any], new: Mapping[str, Any]
+) -> dict[str, dict[str, Any]]:
     return {
-        name: {"old": _audit_value(name, old[name]), "new": _audit_value(name, new[name])}
+        name: {
+            "old": _audit_value(name, old[name]),
+            "new": _audit_value(name, new[name]),
+        }
         for name in DUTY_EDITABLE_FIELDS
         if old[name] != new[name]
     }
 
 
-def impacts_in_order(assessed: Mapping[str, ImpactAssessment]) -> list[ImpactAssessment]:
+def impacts_in_order(
+    assessed: Mapping[str, ImpactAssessment],
+) -> list[ImpactAssessment]:
     """Every impact area, in the plan's order. An area missing from the mapping is returned as not assessed."""
-    return [assessed.get(area, ImpactAssessment(area=area, assessed=False)) for area in IMPACT_AREAS]
+    return [
+        assessed.get(area, ImpactAssessment(area=area, assessed=False))
+        for area in IMPACT_AREAS
+    ]
 
 
 def _is_empty(value: Any) -> bool:
@@ -238,18 +268,19 @@ def missing_fields(
 
 def _lock_case_for_change(conn, case_id: str, scope: CaseScope) -> str | None:
     """Lock the case row, then check the caller's visibility. Returns the case status, or None when not visible."""
-    row = conn.execute("SELECT status FROM cases WHERE id = %s AND NOT is_deleted FOR UPDATE", (case_id,)).fetchone()
+    row = conn.execute(
+        "SELECT status FROM cases WHERE id = %s AND NOT is_deleted FOR UPDATE",
+        (case_id,),
+    ).fetchone()
     if row is None or not cases.is_visible_on(conn, case_id, scope):
         return None
     return row[0]
 
 
 _AWARENESS_COLUMNS = "id::text, case_id::text, awareness_kind, event_kind, occurred_at, basis, recorded_by::text, created_at"
-_DUTY_COLUMNS = (
-    "id::text, case_id::text, kind, description, source_reference, jurisdiction, due_at, status, created_by::text, created_at"
-)
+_DUTY_COLUMNS = "id::text, case_id::text, kind, description, source_reference, jurisdiction, due_at, status, created_by::text, created_at, revision"
 _CLASSIFICATION_COLUMNS = (
-    "version, triggers, event_kind, internal_incident_option, classification_rationale, responsible_operator, "
+    "version, triggers, event_kind, classification_rationale, responsible_operator, "
     "affected_versions, approved_scope, scope_permission_source, containment, evidence_gap_plan, "
     "next_update_due_at, created_by::text, created_at"
 )
@@ -268,7 +299,12 @@ def _load_impacts(conn, case_id: str) -> list[ImpactAssessment]:
         "SELECT area, severity, scope, updated_at FROM impacts WHERE case_id = %s AND NOT is_deleted",
         (case_id,),
     ).fetchall()
-    assessed = {row[0]: ImpactAssessment(area=row[0], assessed=True, severity=row[1], scope=row[2], updated_at=row[3]) for row in rows}
+    assessed = {
+        row[0]: ImpactAssessment(
+            area=row[0], assessed=True, severity=row[1], scope=row[2], updated_at=row[3]
+        )
+        for row in rows
+    }
     return impacts_in_order(assessed)
 
 
@@ -292,17 +328,16 @@ def _current_classification(conn, case_id: str) -> Classification:
         version=row[0],
         triggers=tuple(row[1]),
         event_kind=row[2],
-        internal_incident_option=row[3],
-        classification_rationale=row[4],
-        responsible_operator=row[5],
-        affected_versions=row[6],
-        approved_scope=row[7],
-        scope_permission_source=row[8],
-        containment=row[9],
-        evidence_gap_plan=row[10],
-        next_update_due_at=row[11],
-        created_by=row[12],
-        created_at=row[13],
+        classification_rationale=row[3],
+        responsible_operator=row[4],
+        affected_versions=row[5],
+        approved_scope=row[6],
+        scope_permission_source=row[7],
+        containment=row[8],
+        evidence_gap_plan=row[9],
+        next_update_due_at=row[10],
+        created_by=row[11],
+        created_at=row[12],
     )
 
 
@@ -324,9 +359,16 @@ def record_awareness_event(
     occurred_at: datetime,
     basis: str,
     scope: CaseScope,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[AwarenessEvent], Any] | None = None,
 ) -> tuple[RecordOutcome, AwarenessEvent | None]:
-    """Append an awareness event. Events are never edited or removed, so the record of what was known stays intact."""
+    """Append an awareness event. Events are never edited or removed, so the record of what was known stays intact.
+
+    With an idempotency scope the key is checked first, and the stored response is render(event).
+    """
     with connect() as conn:
+        check(conn, idempotency)
         status = _lock_case_for_change(conn, case_id, scope)
         if status is None:
             return RecordOutcome.NOT_FOUND, None
@@ -361,20 +403,25 @@ def record_awareness_event(
             actor_id=scope.user_id,
             details=details,
         )
-    event = AwarenessEvent(
-        id=row[0],
-        case_id=case_id,
-        awareness_kind=awareness_kind,
-        event_kind=event_kind,
-        occurred_at=occurred_at,
-        basis=basis,
-        recorded_by=scope.user_id,
-        created_at=row[1],
-    )
+        event = AwarenessEvent(
+            id=row[0],
+            case_id=case_id,
+            awareness_kind=awareness_kind,
+            event_kind=event_kind,
+            occurred_at=occurred_at,
+            basis=basis,
+            recorded_by=scope.user_id,
+            created_at=row[1],
+        )
+        if idempotency is not None:
+            assert render is not None
+            remember(conn, idempotency, 201, render(event))
     return RecordOutcome.OK, event
 
 
-def list_awareness_events(case_id: str, scope: CaseScope) -> list[AwarenessEvent] | None:
+def list_awareness_events(
+    case_id: str, scope: CaseScope
+) -> list[AwarenessEvent] | None:
     """Awareness events of the case in time order, or None when the scope may not see the case."""
     with connect() as conn:
         if not cases.is_visible_on(conn, case_id, scope):
@@ -391,9 +438,16 @@ def set_impact(
     severity: str,
     impact_scope: str,
     scope: CaseScope,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[ImpactAssessment], Any] | None = None,
 ) -> tuple[RecordOutcome, ImpactAssessment | None]:
-    """Create or replace the assessment of one impact area. Writes only what changed, with one audit row."""
+    """Create or replace the assessment of one impact area. Writes only what changed, with one audit row.
+
+    With an idempotency scope the key is checked first, and the stored response is render(assessment).
+    """
     with connect() as conn:
+        check(conn, idempotency)
         status = _lock_case_for_change(conn, case_id, scope)
         if status is None:
             return RecordOutcome.NOT_FOUND, None
@@ -421,17 +475,40 @@ def set_impact(
             if row[1] != severity:
                 changes["severity"] = {"old": row[1], "new": severity}
             if row[2] != impact_scope:
-                changes["scope"] = {"old": _marker(row[2]), "new": _marker(impact_scope)}
+                changes["scope"] = {
+                    "old": _marker(row[2]),
+                    "new": _marker(impact_scope),
+                }
             if changes:
                 updated_at = conn.execute(
                     "UPDATE impacts SET severity = %s, scope = %s, updated_by = %s WHERE id = %s RETURNING updated_at",
                     (severity, impact_scope, scope.user_id, row[0]),
                 ).fetchone()[0]
             else:
-                updated_at = conn.execute("SELECT updated_at FROM impacts WHERE id = %s", (row[0],)).fetchone()[0]
+                updated_at = conn.execute(
+                    "SELECT updated_at FROM impacts WHERE id = %s", (row[0],)
+                ).fetchone()[0]
         if changes:
-            audit.record(conn, audit.CASE_IMPACT_CHANGE, "case", case_id, actor_id=scope.user_id, details={"area": area, **changes})
-    assessment = ImpactAssessment(area=area, assessed=True, severity=severity, scope=impact_scope, updated_at=updated_at)
+            audit.record(
+                conn,
+                audit.CASE_IMPACT_CHANGE,
+                "case",
+                case_id,
+                actor_id=scope.user_id,
+                details={"area": area, **changes},
+            )
+            # The weekly update depends on the significant risks, so it follows every change of an impact area.
+            cases.sync_weekly_update(conn, case_id, scope.user_id)
+        assessment = ImpactAssessment(
+            area=area,
+            assessed=True,
+            severity=severity,
+            scope=impact_scope,
+            updated_at=updated_at,
+        )
+        if idempotency is not None:
+            assert render is not None
+            remember(conn, idempotency, 200, render(assessment))
     return RecordOutcome.OK, assessment
 
 
@@ -454,8 +531,12 @@ def add_legal_duty(
     jurisdiction: str | None,
     due_at: datetime,
     scope: CaseScope,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[LegalDuty], Any] | None = None,
 ) -> tuple[RecordOutcome, LegalDuty | None]:
     with connect() as conn:
+        check(conn, idempotency)
         status = _lock_case_for_change(conn, case_id, scope)
         if status is None:
             return RecordOutcome.NOT_FOUND, None
@@ -467,7 +548,15 @@ def add_legal_duty(
             VALUES (%s, %s, %s, %s, %s, %s, 'open', %s)
             RETURNING id::text, created_at
             """,
-            (case_id, kind, description, source_reference, jurisdiction, due_at, scope.user_id),
+            (
+                case_id,
+                kind,
+                description,
+                source_reference,
+                jurisdiction,
+                due_at,
+                scope.user_id,
+            ),
         ).fetchone()
         audit.record(
             conn,
@@ -484,23 +573,37 @@ def add_legal_duty(
                 "jurisdiction": _marker(jurisdiction),
             },
         )
-    duty = LegalDuty(
-        id=row[0],
-        case_id=case_id,
-        kind=kind,
-        description=description,
-        source_reference=source_reference,
-        jurisdiction=jurisdiction,
-        due_at=due_at,
-        status="open",
-        created_by=scope.user_id,
-        created_at=row[1],
-    )
+        duty = LegalDuty(
+            id=row[0],
+            case_id=case_id,
+            kind=kind,
+            description=description,
+            source_reference=source_reference,
+            jurisdiction=jurisdiction,
+            due_at=due_at,
+            status="open",
+            created_by=scope.user_id,
+            created_at=row[1],
+        )
+        if idempotency is not None:
+            assert render is not None
+            remember(conn, idempotency, 201, render(duty))
     return RecordOutcome.OK, duty
 
 
-def update_legal_duty(case_id: str, duty_id: str, changes: Mapping[str, Any], scope: CaseScope) -> tuple[RecordOutcome, LegalDuty | None]:
-    """Change the given fields of a duty. Fields not in changes keep their value. Each real change is audited."""
+def update_legal_duty(
+    case_id: str,
+    duty_id: str,
+    changes: Mapping[str, Any],
+    scope: CaseScope,
+    expected_revision: int,
+) -> tuple[RecordOutcome, LegalDuty | None]:
+    """Change the given fields of a duty. Fields not in changes keep their value. Each real change is audited.
+
+    expected_revision is the duty revision the caller read. A different revision returns REVISION_MISMATCH with the
+    current duty and changes nothing. A change raises the revision by one in the same transaction; a change that
+    changes nothing keeps it. The case revision is not raised.
+    """
     unknown = set(changes) - set(DUTY_EDITABLE_FIELDS)
     if unknown:
         raise ValueError("fields that cannot be changed: " + ", ".join(sorted(unknown)))
@@ -517,16 +620,26 @@ def update_legal_duty(case_id: str, duty_id: str, changes: Mapping[str, Any], sc
         if row is None:
             return RecordOutcome.DUTY_NOT_FOUND, None
         duty = LegalDuty(*row)
+        if duty.revision != expected_revision:
+            return RecordOutcome.REVISION_MISMATCH, duty
         current = {name: getattr(duty, name) for name in DUTY_EDITABLE_FIELDS}
         new = {**current, **changes}
         diff = duty_changes(current, new)
         if diff:
             conn.execute(
                 """
-                UPDATE legal_duties SET description = %s, source_reference = %s, jurisdiction = %s, due_at = %s, status = %s
+                UPDATE legal_duties SET description = %s, source_reference = %s, jurisdiction = %s, due_at = %s, status = %s,
+                    revision = revision + 1
                 WHERE id = %s
                 """,
-                (new["description"], new["source_reference"], new["jurisdiction"], new["due_at"], new["status"], duty_id),
+                (
+                    new["description"],
+                    new["source_reference"],
+                    new["jurisdiction"],
+                    new["due_at"],
+                    new["status"],
+                    duty_id,
+                ),
             )
             audit.record(
                 conn,
@@ -536,7 +649,7 @@ def update_legal_duty(case_id: str, duty_id: str, changes: Mapping[str, Any], sc
                 actor_id=scope.user_id,
                 details={"legal_duty_id": duty_id, **diff},
             )
-            duty = replace(duty, **new)
+            duty = replace(duty, **new, revision=duty.revision + 1)
     return RecordOutcome.OK, duty
 
 
@@ -563,13 +676,18 @@ def update_classification(
     expected_version: int,
     values: Mapping[str, Any],
     scope: CaseScope,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[Classification], Any] | None = None,
 ) -> tuple[RecordOutcome, Classification | None]:
     """Store the given classification as the next version.
 
     expected_version is the version the editor read. A different current version is a conflict, and nothing is stored.
-    A request that changes nothing stores nothing and writes no audit row.
+    A request that changes nothing stores nothing and writes no audit row. With an idempotency scope the key is checked
+    first, and a successful request stores render(classification), changed or not.
     """
     with connect() as conn:
+        check(conn, idempotency)
         status = _lock_case_for_change(conn, case_id, scope)
         if status is None:
             return RecordOutcome.NOT_FOUND, None
@@ -580,19 +698,24 @@ def update_classification(
             return RecordOutcome.VERSION_CONFLICT, current
         changes = classification_changes(current, values)
         if not changes:
+            if idempotency is not None:
+                assert render is not None
+                remember(conn, idempotency, 200, render(current))
             return RecordOutcome.OK, current
         new_version = conn.execute(
             "SELECT COALESCE(MAX(version), 0) + 1 FROM case_classifications WHERE case_id = %s",
             (case_id,),
         ).fetchone()[0]
+        # The column keeps its default (false) in new versions: the option is no longer written. Older versions keep
+        # what they recorded, and migration 0037 turned that into per-task exceptions.
         created_at = conn.execute(
             """
             INSERT INTO case_classifications (
-                case_id, version, triggers, event_kind, internal_incident_option, classification_rationale,
+                case_id, version, triggers, event_kind, classification_rationale,
                 responsible_operator, affected_versions, approved_scope, scope_permission_source, containment,
                 evidence_gap_plan, next_update_due_at, created_by
             )
-            VALUES (%s, %s, %s::text[], %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s::text[], %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING created_at
             """,
             (
@@ -600,7 +723,6 @@ def update_classification(
                 new_version,
                 list(values["triggers"]),
                 values["event_kind"],
-                values["internal_incident_option"],
                 values["classification_rationale"],
                 values["responsible_operator"],
                 values["affected_versions"],
@@ -612,25 +734,31 @@ def update_classification(
                 scope.user_id,
             ),
         ).fetchone()[0]
-        # The external notice tasks follow the option in the same transaction. Each change writes its own audit row.
-        cases.sync_internal_incident_option(
-            conn, case_id, values["internal_incident_option"], values["classification_rationale"], scope.user_id
-        )
         audit.record(
             conn,
             audit.CASE_CLASSIFICATION_CHANGE,
             "case",
             case_id,
             actor_id=scope.user_id,
-            details={"version": {"old": current.version, "new": new_version}, **changes},
+            details={
+                "version": {"old": current.version, "new": new_version},
+                **changes,
+            },
         )
-    stored = Classification(
-        version=new_version,
-        **{name: values[name] for name in CLASSIFICATION_EDITABLE_FIELDS if name != "triggers"},
-        triggers=tuple(values["triggers"]),
-        created_by=scope.user_id,
-        created_at=created_at,
-    )
+        stored = Classification(
+            version=new_version,
+            **{
+                name: values[name]
+                for name in CLASSIFICATION_EDITABLE_FIELDS
+                if name != "triggers"
+            },
+            triggers=tuple(values["triggers"]),
+            created_by=scope.user_id,
+            created_at=created_at,
+        )
+        if idempotency is not None:
+            assert render is not None
+            remember(conn, idempotency, 200, render(stored))
     return RecordOutcome.OK, stored
 
 
@@ -647,7 +775,9 @@ def build_preliminary_report(
     generated_at: datetime,
 ) -> dict[str, Any]:
     """The preliminary report as plain data. It is generated even when fields are missing: they are listed, not refused."""
-    missing = missing_fields(classification, awareness_events, impacts, contact_recorded)
+    missing = missing_fields(
+        classification, awareness_events, impacts, contact_recorded
+    )
     return {
         "case_id": case.id,
         "reference": case.reference,
@@ -661,8 +791,10 @@ def build_preliminary_report(
             "version": classification.version,
             "triggers": list(classification.triggers),
             "event_kind": classification.event_kind,
-            "internal_incident_option": classification.internal_incident_option,
-            **{name: getattr(classification, name) for name in CLASSIFICATION_TEXT_FIELDS},
+            **{
+                name: getattr(classification, name)
+                for name in CLASSIFICATION_TEXT_FIELDS
+            },
             "next_update_due_at": _iso(classification.next_update_due_at),
         },
         "awareness_events": [
@@ -698,7 +830,12 @@ def build_preliminary_report(
             for duty in duties
         ],
         "safe_deadlines": [
-            {"kind": task.kind, "due_at": task.due_at.isoformat(), "status": task.status} for task in case.deadlines
+            {
+                "kind": task.kind,
+                "due_at": task.due_at.isoformat(),
+                "status": task.status,
+            }
+            for task in case.deadlines
         ],
     }
 

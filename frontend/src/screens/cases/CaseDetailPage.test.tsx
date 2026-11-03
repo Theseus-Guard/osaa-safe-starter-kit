@@ -6,7 +6,6 @@ import {
   Classification,
   PreliminaryReport,
   closeCase,
-  createReview,
   getCase,
   getCaseHistory,
   getClassification,
@@ -17,7 +16,8 @@ import {
   listEvidence,
   listImpacts,
   listLegalDuties,
-  listReviews,
+  listReviewRounds,
+  openReviewRound,
 } from "../../api";
 import { CaseDetailPage } from "./CaseDetailPage";
 
@@ -27,10 +27,10 @@ vi.mock("../../api", async (importOriginal) => {
     ...actual,
     getCase: vi.fn(),
     closeCase: vi.fn(),
-    createReview: vi.fn(),
+    openReviewRound: vi.fn(),
     listAssignments: vi.fn(),
     listEvidence: vi.fn(),
-    listReviews: vi.fn(),
+    listReviewRounds: vi.fn(),
     getCaseHistory: vi.fn(),
     listAwarenessEvents: vi.fn(),
     listImpacts: vi.fn(),
@@ -49,10 +49,10 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const get = vi.mocked(getCase);
 const close = vi.mocked(closeCase);
-const review = vi.mocked(createReview);
+const open = vi.mocked(openReviewRound);
 const assignments = vi.mocked(listAssignments);
 const evidence = vi.mocked(listEvidence);
-const reviews = vi.mocked(listReviews);
+const reviews = vi.mocked(listReviewRounds);
 const history = vi.mocked(getCaseHistory);
 const awarenessEvents = vi.mocked(listAwarenessEvents);
 const impacts = vi.mocked(listImpacts);
@@ -61,12 +61,17 @@ const classification = vi.mocked(getClassification);
 const report = vi.mocked(getPreliminaryReport);
 const read = vi.mocked(getReporterContact);
 
+// Selects one of the case tabs, as a user would before reading or pressing anything inside it.
+async function openTab(name: string) {
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("tab", { name }));
+}
+
 const NO_CLASSIFICATION: Classification = {
   case_id: "case-1",
   version: 0,
   triggers: [],
   event_kind: null,
-  internal_incident_option: false,
   classification_rationale: null,
   responsible_operator: null,
   affected_versions: null,
@@ -92,7 +97,6 @@ const EMPTY_REPORT: PreliminaryReport = {
     version: 0,
     triggers: [],
     event_kind: null,
-    internal_incident_option: false,
     classification_rationale: null,
     responsible_operator: null,
     affected_versions: null,
@@ -132,6 +136,10 @@ const OPEN_CASE: CaseDetail = {
   created_at: "2026-11-01T06:00:00Z",
   closed_at: null,
   close_reason: null,
+  risk_score: null,
+  impact_c: null,
+  impact_b: null,
+  impact_a: null,
   deadlines: [
     {
       id: "task-1",
@@ -146,7 +154,7 @@ const OPEN_CASE: CaseDetail = {
 beforeEach(() => {
   get.mockReset().mockResolvedValue(OPEN_CASE);
   close.mockReset();
-  review.mockReset();
+  open.mockReset();
   assignments.mockReset().mockResolvedValue([]);
   evidence.mockReset().mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
   reviews.mockReset().mockResolvedValue([]);
@@ -166,7 +174,7 @@ describe("CaseDetailPage", () => {
     expect(await screen.findByText("Example incident")).toBeInTheDocument();
     expect(screen.getByText("Deadline tasks")).toBeInTheDocument();
     expect(screen.getByText("Assignments")).toBeInTheDocument();
-    expect(screen.getByText("Evidence")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Evidence" })).toBeInTheDocument();
     expect(screen.getByText("History")).toBeInTheDocument();
     expect(assignments).toHaveBeenCalledWith("case-1");
     expect(evidence).toHaveBeenCalledWith("case-1", 20, 0);
@@ -184,7 +192,8 @@ describe("CaseDetailPage", () => {
     await user.click(screen.getByRole("button", { name: "Close case" }));
 
     await waitFor(() => expect(history).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText("Closed")).toBeInTheDocument();
+    // The status badge and the Closed card both say Closed.
+    expect((await screen.findAllByText("Closed")).length).toBeGreaterThan(0);
   });
 
   it("hides the evidence section without evidence:read or evidence:write", async () => {
@@ -199,8 +208,10 @@ describe("CaseDetailPage", () => {
   it("shows the evidence list without the upload form when the caller can only read", async () => {
     render(<CaseDetailPage caseId="case-1" permissions={["cases:read_all", "evidence:read"]} />);
 
-    expect(await screen.findByText("Evidence", { exact: true })).toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: "Evidence" })).toBeInTheDocument();
     expect(evidence).toHaveBeenCalledWith("case-1", 20, 0);
+    await openTab("Evidence");
+    expect(screen.getByRole("tabpanel", { name: "Evidence" })).toBeInTheDocument();
     expect(screen.queryByLabelText(/Upload evidence/)).not.toBeInTheDocument();
   });
 
@@ -229,7 +240,8 @@ describe("CaseDetailPage", () => {
     get.mockResolvedValue({ ...OPEN_CASE, status: "closed", closed_at: "2026-11-01T07:00:00Z", close_reason: "Done" });
     render(<CaseDetailPage caseId="case-1" permissions={["cases:read_all", "evidence:read"]} />);
 
-    expect(await screen.findByText("Closed")).toBeInTheDocument();
+    // The status badge and the Closed card both say Closed.
+    expect((await screen.findAllByText("Closed")).length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: "Reopen case" })).not.toBeInTheDocument();
   });
 
@@ -247,43 +259,49 @@ describe("CaseDetailPage", () => {
   it("shows the review section to a caller with reviews:write", async () => {
     render(<CaseDetailPage caseId="case-1" permissions={REVIEWER} />);
 
+    await openTab("Reviews");
     expect(await screen.findByText("Review", { exact: true })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Record review" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Open review round" })).toBeInTheDocument();
   });
 
-  it("lists the reviews but hides Record review without reviews:write", async () => {
+  it("lists the review rounds but hides the open button without reviews:write", async () => {
     render(<CaseDetailPage caseId="case-1" permissions={FULL_ACCESS} />);
 
     expect(await screen.findByText("Review", { exact: true })).toBeInTheDocument();
-    expect(await screen.findByText("No review has been recorded for this case yet.")).toBeInTheDocument();
+    expect(await screen.findByText("No review round has been opened for this case yet.")).toBeInTheDocument();
     expect(reviews).toHaveBeenCalledWith("case-1");
-    expect(screen.queryByRole("button", { name: "Record review" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open review round" })).not.toBeInTheDocument();
   });
 
-  it("shows the reviews of the case to a reporter who can read it", async () => {
+  it("shows the review rounds of the case to a reporter who can read it", async () => {
     render(<CaseDetailPage caseId="case-1" permissions={REPORTER} />);
 
     expect(await screen.findByText("Review", { exact: true })).toBeInTheDocument();
-    expect(await screen.findByText("No review has been recorded for this case yet.")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Record review" })).not.toBeInTheDocument();
+    expect(await screen.findByText("No review round has been opened for this case yet.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open review round" })).not.toBeInTheDocument();
   });
 
-  it("reloads the history after a review is recorded", async () => {
-    review.mockResolvedValue({ id: "review-1", case_id: "case-1", outcome: "pass", note: null });
+  it("reloads the history after a review round is opened", async () => {
+    open.mockResolvedValue({
+      id: "round-1",
+      case_id: "case-1",
+      status: "open",
+      revision: 1,
+      opened_at: "2026-11-01T09:00:00Z",
+      closed_at: null,
+      layers: [],
+    });
     const user = userEvent.setup();
     render(<CaseDetailPage caseId="case-1" permissions={REVIEWER} />);
 
     await screen.findByText("Example incident");
     expect(history).toHaveBeenCalledTimes(1);
 
-    await user.click(await screen.findByRole("button", { name: "Record review" }));
-    const dialog = await screen.findByRole("dialog");
-    await user.click(within(dialog).getByLabelText("Outcome"));
-    await user.click(await screen.findByRole("option", { name: "Pass" }));
-    await user.click(within(dialog).getByRole("button", { name: "Submit review" }));
+    await openTab("Reviews");
+    await user.click(await screen.findByRole("button", { name: "Open review round" }));
 
     await waitFor(() => expect(history).toHaveBeenCalledTimes(2));
-    expect(review).toHaveBeenCalledWith("case-1", { outcome: "pass", note: null });
+    expect(open).toHaveBeenCalledWith("case-1");
   });
 
   it("shows the case record sections to a reporter who can read the case, without the report", async () => {
@@ -309,6 +327,7 @@ describe("CaseDetailPage", () => {
     render(<CaseDetailPage caseId="case-1" permissions={["cases:read_all"]} />);
 
     expect(await screen.findByText("Example incident")).toBeInTheDocument();
+    await openTab("Deadlines");
     expect(await screen.findByText("No awareness event has been recorded for this case yet.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add awareness event" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add legal duty" })).not.toBeInTheDocument();
@@ -319,7 +338,9 @@ describe("CaseDetailPage", () => {
     get.mockResolvedValue({ ...OPEN_CASE, status: "closed", closed_at: "2026-11-01T07:00:00Z", close_reason: "Done" });
     render(<CaseDetailPage caseId="case-1" permissions={FULL_ACCESS} />);
 
-    expect(await screen.findByText("Closed")).toBeInTheDocument();
+    // The status badge and the Closed card both say Closed.
+    expect((await screen.findAllByText("Closed")).length).toBeGreaterThan(0);
+    await openTab("Deadlines");
     expect(await screen.findByText("No awareness event has been recorded for this case yet.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add awareness event" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add legal duty" })).not.toBeInTheDocument();
@@ -329,6 +350,7 @@ describe("CaseDetailPage", () => {
   it("offers the reporter contact to a caller with reporter_contact:read, without reading it on load", async () => {
     render(<CaseDetailPage caseId="case-1" permissions={["cases:read_all", "reporter_contact:read"]} />);
 
+    await openTab("Links and reporting");
     expect(await screen.findByRole("button", { name: "Show reporter contact" })).toBeInTheDocument();
     expect(read).not.toHaveBeenCalled();
   });
@@ -339,5 +361,30 @@ describe("CaseDetailPage", () => {
     await screen.findByText("Example incident");
     expect(screen.queryByRole("button", { name: "Show reporter contact" })).not.toBeInTheDocument();
     expect(read).not.toHaveBeenCalled();
+  });
+});
+
+describe("CaseDetailPage tabs", () => {
+  it("opens on the overview with the key facts, and shows one tab area at a time", async () => {
+    render(<CaseDetailPage caseId="case-1" permissions={REPORTER} />);
+
+    expect(await screen.findByText("Example incident")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel", { name: "Overview" })).toBeInTheDocument();
+    expect(screen.getByText("Key facts")).toBeInTheDocument();
+    expect(screen.queryByRole("tabpanel", { name: "Activity" })).not.toBeInTheDocument();
+
+    await openTab("Activity");
+    expect(screen.getByRole("tab", { name: "Activity" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel", { name: "Activity" })).toBeInTheDocument();
+    expect(screen.queryByRole("tabpanel", { name: "Overview" })).not.toBeInTheDocument();
+  });
+
+  it("leaves out the evidence tab for a caller without evidence permissions", async () => {
+    render(<CaseDetailPage caseId="case-1" permissions={REPORTER} />);
+
+    expect(await screen.findByText("Example incident")).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Evidence" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Links and reporting" })).toBeInTheDocument();
   });
 });

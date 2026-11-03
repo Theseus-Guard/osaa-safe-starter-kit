@@ -32,38 +32,109 @@ CASE_CLOSE = "case.closed"
 CASE_REOPEN = "case.reopened"
 CASE_ASSIGNMENT_ADD = "case.assignment_added"
 CASE_ASSIGNMENT_REMOVE = "case.assignment_removed"
-CASE_REVIEW = "case.review_recorded"
+CASE_REVIEW = "case.review_recorded"  # F1 whole-case review; kept so existing history rows keep their meaning
+CASE_REVIEW_ROUND_OPENED = "case.review_round_opened"
+CASE_REVIEW_LAYER_SET = "case.review_layer_set"
+# Conflicts, recusals and appeals on a review round (safe_kit.review_independence). Free text is never written here.
+CASE_REVIEW_CONFLICT_RECORDED = "case.review_conflict_recorded"
+CASE_REVIEW_RECUSAL_RECORDED = "case.review_recusal_recorded"
+CASE_REVIEW_APPEAL_RECORDED = "case.review_appeal_recorded"
 CASE_DEADLINE_UPDATE = "case.deadline_updated"
+CASE_TITLE_UPDATE = "case.title_updated"
 # Case record (safe_kit.case_records). Free text is never written here, only its length.
 CASE_AWARENESS_RECORDED = "case.awareness_recorded"
 CASE_IMPACT_CHANGE = "case.impact_changed"
 CASE_LEGAL_DUTY_ADD = "case.legal_duty_added"
 CASE_LEGAL_DUTY_CHANGE = "case.legal_duty_changed"
 CASE_CLASSIFICATION_CHANGE = "case.classification_changed"
+# Risk impact values (C, B, A) of a case, one row per version change (safe_kit.impact). Details hold the changed values.
+CASE_IMPACT_SCORES_CHANGE = "case.impact_scores_changed"
 # Case links: a record that two cases concern the same incident. The details hold the link and the other case's ID only.
 CASE_LINK_ADD = "case.link_added"
 CASE_LINK_REMOVE = "case.link_removed"
+# Written by the worker (no actor) when it creates a weekly update. Details hold the update ID and its sequence only.
+CASE_WEEKLY_UPDATE_CREATED = "case.weekly_update_created"
 # Written against the import record (target_type "case_import"), not the case, so it stays out of the case history.
 CASE_IMPORT = "case.import"
 # Written by safe_kit.evidence against the evidence item (target_type "evidence").
 EVIDENCE_UPLOADED = "evidence.uploaded"
 EVIDENCE_DOWNLOADED = "evidence.downloaded"
+# Redaction creates a derived item (target: the derived evidence ID). Details hold IDs and counts, never removed text.
+EVIDENCE_REDACTED = "evidence.redacted"
+EVIDENCE_RELEASE_APPROVED = "evidence.release_approved"
+# Model records (safe_kit.model_records). Details hold IDs, versions and the reason's length, never the reason itself.
+CASE_MODEL_RECORD_ADD = "case.model_record_added"
+CASE_MODEL_RECORD_REVOKE = "case.model_record_revoked"
 # Case history omits these actions for callers without evidence:read.
-EVIDENCE_AUDIT_ACTIONS = frozenset({EVIDENCE_UPLOADED, EVIDENCE_DOWNLOADED})
+EVIDENCE_AUDIT_ACTIONS = frozenset(
+    {
+        EVIDENCE_UPLOADED,
+        EVIDENCE_DOWNLOADED,
+        EVIDENCE_REDACTED,
+        EVIDENCE_RELEASE_APPROVED,
+        CASE_MODEL_RECORD_ADD,
+        CASE_MODEL_RECORD_REVOKE,
+    }
+)
+# Written for every successful read of a reporter contact. The row targets the case, so the case history shows it.
+REPORTER_CONTACT_READ = "reporter_contact.read"
+# Rows that only read a case. The case list's "last updated" time leaves them out, so reading is not a change.
+READ_ONLY_AUDIT_ACTIONS = frozenset({EVIDENCE_DOWNLOADED, REPORTER_CONTACT_READ})
+# Catalog (safe_kit.catalog). Written against the recommendation or the entry (target_type "catalog_recommendation" or
+# "catalog_entry"). Free text is never written here; the details hold identifiers, version numbers, and results only.
+CATALOG_RECOMMENDATION_ADD = "catalog.recommendation_added"
+CATALOG_VERIFICATION_RECORD = "catalog.verification_recorded"
+CATALOG_ENTRY_CREATE = "catalog.entry_created"
+CATALOG_ENTRY_VERSION = "catalog.entry_versioned"
+CATALOG_ENTRY_CORRECTION = "catalog.entry_corrected"
+CATALOG_ENTRY_DISPUTE = "catalog.entry_disputed"
+CATALOG_ENTRY_WITHDRAWAL = "catalog.entry_withdrawn"
+CATALOG_ENTRY_SUPERSESSION = "catalog.entry_superseded"
+# Written on every catalog export (safe_kit.catalog.public_export), against the catalog as a whole (target_type "catalog",
+# no target ID). Details hold the export schema version and the entry count only, never entry text.
+CATALOG_EXPORT = "catalog.exported"
+# Disclosure packages (safe_kit.disclosure). Written against the version (target_type "disclosure_version"). Recipient and
+# purpose are free text and are never written here; the details hold identifiers, the digest, and counts only.
+DISCLOSURE_VERSION_CREATE = "disclosure.version_created"
+DISCLOSURE_APPROVAL = "disclosure.approved"
+# Written on every export of an approved version (safe_kit.disclosure.export_version). Details hold identifiers, the
+# status, and the digest only: never the export's content, the recipient or the purpose.
+DISCLOSURE_EXPORT = "disclosure.exported"
+# A release attempt (notice record or export) that the release check or a later rule refused. Details hold identifiers,
+# the purpose and the reason code only (safe_kit.disclosure.close_release_attempt).
+DISCLOSURE_RELEASE_REFUSED = "disclosure.release_refused"
+# External notices (safe_kit.external_notices). Written against the notice (target_type "disclosure_notice"). Details hold
+# identifiers, the channel, states, reason codes and the length of each free-text reason, never the text itself.
+DISCLOSURE_NOTICE_RECORD = "disclosure.notice_recorded"
+DISCLOSURE_NOTICE_STATE = "disclosure.notice_state_changed"
 SYSTEM_TIMEZONE_SET = "system.timezone_set"
 SYSTEM_TIMEZONE_CHANGED = "system.timezone_changed"
 
 # A key is rejected when any word in it starts with one of these stems, or equals one of the network words.
-_SECRET_STEMS = ("password", "passwd", "pwd", "secret", "token", "credential", "cookie", "authorization", "hash")
+_SECRET_STEMS = (
+    "password",
+    "passwd",
+    "pwd",
+    "secret",
+    "token",
+    "credential",
+    "cookie",
+    "authorization",
+    "hash",
+)
 _NETWORK_WORDS = frozenset({"ip", "ips", "addr", "address"})
 # Identity words are rejected like network words, unless an action lists the key explicitly.
 _RESTRICTED_WORDS = _NETWORK_WORDS | {"username"}
 _WORD_SPLIT = re.compile(r"[^a-z0-9]+")
 
 # Top-level keys that one action may carry in addition to the generic rules. Secret stems are never allowed.
-_ACTION_EXTRA_KEYS: dict[str, frozenset[str]] = {LOGIN_FAILED: frozenset({"username", "client_ip"})}
+_ACTION_EXTRA_KEYS: dict[str, frozenset[str]] = {
+    LOGIN_FAILED: frozenset({"username", "client_ip"})
+}
 # Of those, the keys whose values may be an IP address. Only the client address of a login failure qualifies.
-_ACTION_ADDRESS_KEYS: dict[str, frozenset[str]] = {LOGIN_FAILED: frozenset({"client_ip"})}
+_ACTION_ADDRESS_KEYS: dict[str, frozenset[str]] = {
+    LOGIN_FAILED: frozenset({"client_ip"})
+}
 _NO_KEYS: frozenset[str] = frozenset()
 
 
@@ -94,7 +165,9 @@ def _check_value(value: Any, where: str, address_ok: bool = False) -> None:
         return
     if isinstance(value, str):
         if not address_ok and _looks_like_ip(value):
-            raise ValueError(f"{where}: IP addresses are allowed only as client_ip of a login failure")
+            raise ValueError(
+                f"{where}: IP addresses are allowed only as client_ip of a login failure"
+            )
         return
     if isinstance(value, Mapping):
         for key, item in value.items():
@@ -137,7 +210,9 @@ def record(
     )
 
 
-def record_login_failure(user_id: str | None, reason: str, username: str, client_ip: str) -> None:
+def record_login_failure(
+    user_id: str | None, reason: str, username: str, client_ip: str
+) -> None:
     """Log a failed login with the account, the submitted username, and the client address.
 
     user_id is None when no account matches the submitted name. The reason is one of

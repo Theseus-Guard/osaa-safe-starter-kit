@@ -60,7 +60,9 @@ def _read_kek_file(path: Path) -> bytes:
         if not stat.S_ISREG(info.st_mode):
             raise KeyProviderError("KEK path is not a regular file")
         if info.st_mode & 0o077:
-            raise KeyProviderError("KEK file is accessible by group or others: set its mode to 600")
+            raise KeyProviderError(
+                "KEK file is accessible by group or others: set its mode to 600"
+            )
         raw = handle.read()
     if not raw.strip():
         raise KeyProviderError("KEK file is empty")
@@ -69,7 +71,9 @@ def _read_kek_file(path: Path) -> bytes:
     try:
         decoded = base64.b64decode(raw.strip(), validate=True)
     except (binascii.Error, ValueError):
-        raise KeyProviderError("KEK file must hold 32 raw bytes or base64 text") from None
+        raise KeyProviderError(
+            "KEK file must hold 32 raw bytes or base64 text"
+        ) from None
     if len(decoded) != KEK_BYTES:
         raise KeyProviderError("KEK file must hold exactly 32 bytes of key material")
     return decoded
@@ -83,7 +87,9 @@ class LocalFileKeyProvider:
 
     def __init__(self, path: str | os.PathLike, key_id: str = DEFAULT_KEY_ID) -> None:
         if not KEY_ID_PATTERN.fullmatch(key_id):
-            raise KeyProviderError("key id may contain only letters, digits, dots, underscores, and hyphens")
+            raise KeyProviderError(
+                "key id may contain only letters, digits, dots, underscores, and hyphens"
+            )
         self.key_id = key_id
         self._kek = _read_kek_file(Path(path))
 
@@ -98,7 +104,9 @@ class LocalFileKeyProvider:
         try:
             return AESGCM(self._kek).decrypt(nonce, body, context)
         except InvalidTag:
-            raise KeyProviderError("data key cannot be unwrapped: wrong key or altered record") from None
+            raise KeyProviderError(
+                "data key cannot be unwrapped: wrong key or altered record"
+            ) from None
 
     def __repr__(self) -> str:
         return f"LocalFileKeyProvider(key_id={self.key_id!r})"
@@ -133,7 +141,11 @@ def key_provider_from_env() -> KeyProvider:
         path = os.environ.get("SAFE_EVIDENCE_KEK_FILE", "")
         if not path:
             raise KeyProviderError("SAFE_EVIDENCE_KEK_FILE is not set")
-        return LocalFileKeyProvider(path, os.environ.get("SAFE_EVIDENCE_KEK_ID", DEFAULT_KEY_ID))
+        return LocalFileKeyProvider(
+            path, os.environ.get("SAFE_EVIDENCE_KEK_ID", DEFAULT_KEY_ID)
+        )
     if name == PROVIDER_VAULT_TRANSIT:
         return VaultTransitKeyProvider()
-    raise KeyProviderError("SAFE_EVIDENCE_KEY_PROVIDER must be local-file or vault-transit")
+    raise KeyProviderError(
+        "SAFE_EVIDENCE_KEY_PROVIDER must be local-file or vault-transit"
+    )

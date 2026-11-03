@@ -9,14 +9,16 @@ hides the actor of the case-creation entry for every caller, triagers included. 
 that actor is the reporter. Retaliation is a risk for the reporter, so the rule does not depend on the caller's role.
 
 The contact is returned only by read_reporter_contact, to a caller with reporter_contact:read, and every read writes
-an audit row in the same transaction. Reporter-channel cases are hidden from read_all callers until they are assigned
+an audit row in the same transaction. A triager (cases:assign) sees a reporter-channel case before it is assigned, so
+it can assign it, but never sees the reporter or the contact. Other read_all callers see it only once it is assigned
 (see cases.CaseScope.visibility_sql).
 
 The contact can be read while the case is open, or within REPORTER_CONTACT_WINDOW_HOURS after its latest closure. A
 case closed longer ago refuses the read, and a refused read writes no audit row. A reopened case is open again.
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from typing import Any
 from dataclasses import replace
 from datetime import datetime
 from enum import Enum
@@ -24,9 +26,10 @@ from enum import Enum
 from safe_kit import audit, cases
 from safe_kit.cases import Case, CaseScope, HistoryEntry
 from safe_kit.db import connect
+from safe_kit.idempotency import KeyScope, check, remember
 
 # Written for every successful read of a reporter contact. The row targets the case, so the case history shows it.
-REPORTER_CONTACT_READ = "reporter_contact.read"
+REPORTER_CONTACT_READ = audit.REPORTER_CONTACT_READ
 
 # How long after a closure the reporter contact can still be read. The clock is the database clock, as is the
 # changed_at of case_status_changes, which holds the closure time.
@@ -43,14 +46,30 @@ class ContactOutcome(Enum):
     WINDOW_CLOSED = "window_closed"
 
 
-def submit_report(title: str, awareness_time: datetime, contact: str | None, reporter_id: str) -> Case:
-    """Create the case and its reporter identity in one transaction. The case is created the same way as any other."""
+def submit_report(
+    title: str,
+    awareness_time: datetime,
+    contact: str | None,
+    reporter_id: str,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[Case], Any] | None = None,
+) -> Case:
+    """Create the case and its reporter identity in one transaction. The case is created the same way as any other.
+
+    With an idempotency scope the key is checked first, and the stored response is render(case). The contact is not
+    part of the stored response.
+    """
     with connect() as conn:
+        check(conn, idempotency)
         case = cases.insert_case(conn, title, awareness_time, reporter_id)
         conn.execute(
             "INSERT INTO reporter_identities (case_id, reporter_id, contact) VALUES (%s, %s, %s)",
             (case.id, reporter_id, contact),
         )
+        if idempotency is not None:
+            assert render is not None
+            remember(conn, idempotency, 201, render(case))
     return case
 
 
@@ -75,7 +94,9 @@ def _contact_window_open(conn, case_id: str) -> bool:
     return row is not None and bool(row[0])
 
 
-def read_reporter_contact(case_id: str, scope: CaseScope) -> tuple[ContactOutcome, str | None]:
+def read_reporter_contact(
+    case_id: str, scope: CaseScope
+) -> tuple[ContactOutcome, str | None]:
     """The contact the reporter gave for an active case, and an audit row for the read.
 
     The visibility check, the window check, and the audit row share one transaction, so a read is never logged without
@@ -93,10 +114,15 @@ def read_reporter_contact(case_id: str, scope: CaseScope) -> tuple[ContactOutcom
             return ContactOutcome.NO_REPORTER, None
         if not _contact_window_open(conn, case_id):
             return ContactOutcome.WINDOW_CLOSED, None
-        audit.record(conn, REPORTER_CONTACT_READ, "case", case_id, actor_id=scope.user_id)
+        audit.record(
+            conn, REPORTER_CONTACT_READ, "case", case_id, actor_id=scope.user_id
+        )
     return ContactOutcome.OK, row[0]
 
 
 def hide_reporter(entries: Sequence[HistoryEntry]) -> list[HistoryEntry]:
     """Blank the actor of each case-creation entry. The action, time, and details stay."""
-    return [replace(entry, actor_id=None) if entry.action == audit.CASE_CREATE else entry for entry in entries]
+    return [
+        replace(entry, actor_id=None) if entry.action == audit.CASE_CREATE else entry
+        for entry in entries
+    ]

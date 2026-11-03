@@ -5,11 +5,25 @@ import {
   evidenceStatusLabel,
   formatBytes,
   historyActionLabel,
+  formatRiskScore,
+  riskLevelLabel,
   humanize,
+  isOverdue,
   missingFieldLabel,
+  parseImpactValue,
   recordText,
   triggerLabel,
 } from "./case-format";
+
+describe("isOverdue", () => {
+  const now = new Date("2026-11-02T12:00:00Z");
+
+  it("is true only when the due time is before now", () => {
+    expect(isOverdue("2026-11-02T11:59:59Z", now)).toBe(true);
+    expect(isOverdue("2026-11-02T12:00:00Z", now)).toBe(false);
+    expect(isOverdue("2026-11-03T00:00:00Z", now)).toBe(false);
+  });
+});
 
 describe("case record labels", () => {
   it("labels each R01 trigger in plain words", () => {
@@ -91,5 +105,45 @@ describe("describeDetails", () => {
       "Kind: weekly_update",
       'Extra: {"a":1}',
     ]);
+  });
+});
+
+describe("formatRiskScore", () => {
+  it("shows one decimal place", () => {
+    expect(formatRiskScore(3)).toBe("3.0 (Medium)");
+    expect(formatRiskScore(3.7)).toBe("3.7 (High)");
+    expect(formatRiskScore(1.7)).toBe("1.7 (Low)");
+  });
+
+  it("maps each score to its band at the upper limits", () => {
+    expect(riskLevelLabel(1.0)).toBe("Very Low");
+    expect(riskLevelLabel(1.3)).toBe("Very Low");
+    expect(riskLevelLabel(1.7)).toBe("Low");
+    expect(riskLevelLabel(2.3)).toBe("Low");
+    expect(riskLevelLabel(2.7)).toBe("Medium");
+    expect(riskLevelLabel(3.3)).toBe("Medium");
+    expect(riskLevelLabel(3.7)).toBe("High");
+    expect(riskLevelLabel(4.3)).toBe("High");
+    expect(riskLevelLabel(4.7)).toBe("Very High");
+    expect(riskLevelLabel(5.0)).toBe("Very High");
+  });
+
+  it("shows Not assessed while the score is null", () => {
+    expect(formatRiskScore(null)).toBe("Not assessed");
+  });
+});
+
+describe("parseImpactValue", () => {
+  it("accepts the digits 1 to 5", () => {
+    expect(parseImpactValue("1")).toEqual({ value: 1 });
+    expect(parseImpactValue("5")).toEqual({ value: 5 });
+  });
+
+  it("reads an empty choice as not set", () => {
+    expect(parseImpactValue("")).toEqual({ value: null });
+  });
+
+  it.each(["0", "6", "-1", "2.5", "3.0", " 3", "three"])("refuses %s", (text) => {
+    expect(parseImpactValue(text)).toHaveProperty("error");
   });
 });

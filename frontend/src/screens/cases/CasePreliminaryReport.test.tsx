@@ -31,7 +31,6 @@ const INCOMPLETE: PreliminaryReport = {
     version: 1,
     triggers: ["boundary_escape"],
     event_kind: "incident",
-    internal_incident_option: false,
     classification_rationale: "Attacker reached the admin panel",
     responsible_operator: null,
     affected_versions: null,

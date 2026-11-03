@@ -1,9 +1,15 @@
 // Display helpers for the case screens. Pure functions, so they are tested without rendering.
+import type { ImpactValue } from "../../api";
 
 // "preliminary_safe_report" -> "Preliminary safe report", "case.closed" -> "Case closed"
 export function humanize(value: string): string {
   const words = value.replace(/[._]/g, " ");
   return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+// A deadline is overdue when its due time is before now. now is a parameter, so the rule is tested without a clock.
+export function isOverdue(dueAt: string, now: Date): boolean {
+  return new Date(dueAt).getTime() < now.getTime();
 }
 
 const HISTORY_ACTION_LABELS: Record<string, string> = {
@@ -13,6 +19,8 @@ const HISTORY_ACTION_LABELS: Record<string, string> = {
   "case.assignment_added": "Assignment added",
   "case.assignment_removed": "Assignment removed",
   "case.review_recorded": "Review recorded",
+  "case.review_round_opened": "Review round opened",
+  "case.review_layer_set": "Review layer set",
   "case.deadline_updated": "Deadline updated",
   "evidence.uploaded": "Evidence uploaded",
   "evidence.downloaded": "Evidence downloaded",
@@ -95,6 +103,44 @@ export function triggerLabel(trigger: string): string {
 export function recordText(value: string | null, fullView: boolean): string {
   if (value !== null) return value;
   return fullView ? "Not recorded." : "Not shown for your role.";
+}
+
+// The risk score with one decimal place, for example "3.7". "Not assessed" while a value is not set.
+// Labels for the score bands, from 1 (Very Low) to 5 (Very High). A score belongs to the band whose upper limit it does
+// not exceed: 1.0 to 1.5 is Very Low, 1.6 to 2.5 is Low, 2.6 to 3.5 is Medium, 3.6 to 4.5 is High, 4.6 to 5.0 is Very High.
+export const RISK_LEVEL_LABELS = ["Very Low", "Low", "Medium", "High", "Very High"] as const;
+
+export function riskLevelLabel(score: number): string {
+  const tenths = Math.round(score * 10) / 10;
+  if (tenths <= 1.5) return RISK_LEVEL_LABELS[0];
+  if (tenths <= 2.5) return RISK_LEVEL_LABELS[1];
+  if (tenths <= 3.5) return RISK_LEVEL_LABELS[2];
+  if (tenths <= 4.5) return RISK_LEVEL_LABELS[3];
+  return RISK_LEVEL_LABELS[4];
+}
+
+// The score with one decimal place and its label, for example "3.7 (High)".
+export function formatRiskScore(score: number | null): string {
+  if (score === null) return "Not assessed";
+  return `${score.toFixed(1)} (${riskLevelLabel(score)})`;
+}
+
+// The three impact values with the labels the owner asked for, in the order C, B, A.
+export const IMPACT_VALUE_LABELS = [
+  { key: "c", label: "C – Confidentiality" },
+  { key: "b", label: "B – Integrity" },
+  { key: "a", label: "A – Availability" },
+] as const;
+
+export type ImpactKey = (typeof IMPACT_VALUE_LABELS)[number]["key"];
+
+export type ImpactParse = { value: ImpactValue | null } | { error: string };
+
+// A form value is "" (not set) or a single digit from 1 to 5. Anything else, such as 0, 6, 2.5 or " 3", is refused.
+export function parseImpactValue(text: string): ImpactParse {
+  if (text === "") return { value: null };
+  if (/^[1-5]$/.test(text)) return { value: Number(text) as ImpactValue };
+  return { error: "Choose a whole number from 1 to 5, or leave the value not set." };
 }
 
 // Lists one entry of the preliminary report's missing_fields as a sentence fragment.

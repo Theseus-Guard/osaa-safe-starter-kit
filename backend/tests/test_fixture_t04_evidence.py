@@ -45,8 +45,20 @@ REVIEWER = User(
     created_at=datetime(2026, 11, 1, tzinfo=UTC),
 )
 
-SOURCE_MODULES = ("evidence.py", "evidence_api.py", "evidence_crypto.py", "evidence_storage.py", "cli.py")
-TAMPER_PROOF_CLAIMS = ("tamper-proof", "tamperproof", "tamper proof", "tamper-evident", "cannot be altered")
+SOURCE_MODULES = (
+    "evidence.py",
+    "evidence_api.py",
+    "evidence_crypto.py",
+    "evidence_storage.py",
+    "cli.py",
+)
+TAMPER_PROOF_CLAIMS = (
+    "tamper-proof",
+    "tamperproof",
+    "tamper proof",
+    "tamper-evident",
+    "cannot be altered",
+)
 
 
 class RecordingStorage(LocalVolumeStorage):
@@ -73,16 +85,32 @@ def test_stored_original_is_never_overwritten(tmp_path):
     assert storage.get(key) == b"original sealed bytes"
 
 
-def test_every_upload_gets_its_own_evidence_id_and_object_key(ledger, provider, tmp_path):
+def test_every_upload_gets_its_own_evidence_id_and_object_key(
+    ledger, provider, tmp_path
+):
     storage = RecordingStorage(tmp_path)
     scope = read_all(str(uuid.uuid4()))
     first = evidence.create_evidence(
-        str(uuid.uuid4()), REVIEWER.id, "a.pdf", "application/pdf", PDF, storage, provider, scope,
+        str(uuid.uuid4()),
+        REVIEWER.id,
+        "a.pdf",
+        "application/pdf",
+        PDF,
+        storage,
+        provider,
+        scope,
     )
     first_object = storage.get(storage.written[0])
 
     second = evidence.create_evidence(
-        str(uuid.uuid4()), REVIEWER.id, "b.pdf", "application/pdf", PDF + b"2", storage, provider, scope,
+        str(uuid.uuid4()),
+        REVIEWER.id,
+        "b.pdf",
+        "application/pdf",
+        PDF + b"2",
+        storage,
+        provider,
+        scope,
     )
 
     assert first.id != second.id
@@ -92,11 +120,20 @@ def test_every_upload_gets_its_own_evidence_id_and_object_key(ledger, provider, 
 
 
 @requires_database
-def test_evidence_id_is_the_same_in_the_case_list_the_lookup_and_the_custody_log(provider, tmp_path):
+def test_evidence_id_is_the_same_in_the_case_list_the_lookup_and_the_custody_log(
+    provider, tmp_path
+):
     user_id, case_id = database_case()
     scope = read_all(user_id)
     item = evidence.create_evidence(
-        case_id, user_id, "scan.pdf", "application/pdf", PDF, LocalVolumeStorage(tmp_path), provider, scope,
+        case_id,
+        user_id,
+        "scan.pdf",
+        "application/pdf",
+        PDF,
+        LocalVolumeStorage(tmp_path),
+        provider,
+        scope,
     )
 
     listed, total = evidence.list_evidence(case_id, 50, 0)
@@ -105,7 +142,9 @@ def test_evidence_id_is_the_same_in_the_case_list_the_lookup_and_the_custody_log
     assert total == 1
     assert [row.id for row in listed] == [item.id]
     assert stored is not None and stored.id == item.id
-    assert {event.evidence_id for event in evidence.custody_events(item.id)} == {item.id}
+    assert {event.evidence_id for event in evidence.custody_events(item.id)} == {
+        item.id
+    }
 
 
 @requires_database
@@ -113,7 +152,9 @@ def test_custody_log_records_the_upload_and_each_access_in_order(provider, tmp_p
     user_id, case_id = database_case()
     storage = LocalVolumeStorage(tmp_path)
     scope = read_all(user_id)
-    item = evidence.create_evidence(case_id, user_id, "scan.pdf", "application/pdf", PDF, storage, provider, scope)
+    item = evidence.create_evidence(
+        case_id, user_id, "scan.pdf", "application/pdf", PDF, storage, provider, scope
+    )
 
     stored = evidence.find_stored(item.id, scope)
     content = evidence.read_original(stored, storage, provider)
@@ -121,7 +162,10 @@ def test_custody_log_records_the_upload_and_each_access_in_order(provider, tmp_p
 
     assert content == PDF
     events = evidence.custody_events(item.id)
-    assert [(event.action, event.actor_id) for event in events] == [("uploaded", user_id), ("downloaded", user_id)]
+    assert [(event.action, event.actor_id) for event in events] == [
+        ("uploaded", user_id),
+        ("downloaded", user_id),
+    ]
     assert database_status(item.id) == "available"
 
 
@@ -150,7 +194,9 @@ def test_digest_mismatch_is_reported_by_its_integrity_reason(provider, tmp_path)
 
     damaged = bytearray(sealed.ciphertext)
     damaged[10] ^= 0x01
-    (tmp_path / key).write_bytes(bytes(damaged))  # the stored object changes after the upload was verified
+    (tmp_path / key).write_bytes(
+        bytes(damaged)
+    )  # the stored object changes after the upload was verified
 
     with pytest.raises(VerificationFailed) as failure:
         evidence.read_original(stored, storage, provider)
@@ -163,20 +209,26 @@ def test_no_evidence_source_text_claims_tamper_proofing():
     for name in SOURCE_MODULES:
         text = (source_dir / name).read_text(encoding="utf-8").lower()
         for claim in TAMPER_PROOF_CLAIMS:
-            assert claim not in text, f"{name} claims {claim!r}; a SHA-256 digest only shows a mismatch"
+            assert claim not in text, (
+                f"{name} claims {claim!r}; a SHA-256 digest only shows a mismatch"
+            )
 
 
 # --- T04: crash recovery of orphaned uploads -----------------------------------------------------------------------
 
 
 @requires_database
-def test_object_left_by_a_crash_is_failed_by_the_reconciliation_job_and_kept_on_disk(provider, tmp_path):
+def test_object_left_by_a_crash_is_failed_by_the_reconciliation_job_and_kept_on_disk(
+    provider, tmp_path
+):
     user_id, case_id = database_case()
     storage = LocalVolumeStorage(tmp_path)
     scope = read_all(user_id)
     key = str(uuid.uuid4())
     sealed = evidence_crypto.seal(PDF, key, provider)
-    storage.put(key, sealed.ciphertext)  # the process stopped after the object was written and before it was marked
+    storage.put(
+        key, sealed.ciphertext
+    )  # the process stopped after the object was written and before it was marked
     with connect() as conn:
         evidence_id = conn.execute(
             """
@@ -186,7 +238,15 @@ def test_object_left_by_a_crash_is_failed_by_the_reconciliation_job_and_kept_on_
                     now() - interval '2 hours')
             RETURNING id::text
             """,
-            (case_id, user_id, len(PDF), key, sealed.key_id, sealed.wrapped_data_key, sealed.nonce),
+            (
+                case_id,
+                user_id,
+                len(PDF),
+                key,
+                sealed.key_id,
+                sealed.wrapped_data_key,
+                sealed.nonce,
+            ),
         ).fetchone()[0]
 
     failed_count = worker.reconcile_pending_uploads()
@@ -208,12 +268,18 @@ def evidence_app(monkeypatch):
     app = FastAPI()
     app.include_router(evidence_api.evidence_router)
     app.dependency_overrides[auth.current_user] = lambda: REVIEWER
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"evidence:read", "evidence:write"}))
+    monkeypatch.setattr(
+        auth,
+        "permissions_for_role",
+        lambda role: frozenset({"evidence:read", "evidence:write"}),
+    )
     monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope: True)
     return TestClient(app)
 
 
-def test_unknown_evidence_custody_and_download_are_404_not_an_empty_success(evidence_app, monkeypatch):
+def test_unknown_evidence_custody_and_download_are_404_not_an_empty_success(
+    evidence_app, monkeypatch
+):
     monkeypatch.setattr(evidence, "find_stored", lambda evidence_id, scope: None)
     unknown = str(uuid.uuid4())
 
@@ -222,21 +288,17 @@ def test_unknown_evidence_custody_and_download_are_404_not_an_empty_success(evid
 
     assert custody.status_code == 404
     assert download.status_code == 404
-    assert custody.json() == {"detail": "evidence not found"}
+    assert custody.json()["detail"] == "evidence not found"
 
 
-# --- T05 gap: no model, runtime or reasoning record in F1 ---------------------------------------------------------------
+# --- T05: the model, runtime and reasoning record has a place in the schema ---------------------------------------------
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "T05 model, runtime and reasoning record is not in F1: no migration stores the model, the runtime version, "
-        "the provider alias, or the reasoning text of an assessment"
-    ),
-)
 def test_model_runtime_and_reasoning_have_a_place_in_the_schema():
-    schema = "\n".join(path.read_text(encoding="utf-8") for path in sorted(MIGRATIONS_DIR.glob("*.sql"))).lower()
+    schema = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(MIGRATIONS_DIR.glob("*.sql"))
+    ).lower()
     assert all(word in schema for word in ("model", "runtime", "reasoning"))

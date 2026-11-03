@@ -16,7 +16,8 @@ The two cases are locked before the rules are checked, in one statement ordered 
 same pair run one after another.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from typing import Any
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -24,6 +25,7 @@ from enum import Enum
 from safe_kit import audit, cases
 from safe_kit.cases import CaseScope
 from safe_kit.db import connect
+from safe_kit.idempotency import KeyScope, check, remember
 
 
 class LinkOutcome(Enum):
@@ -46,7 +48,9 @@ class CaseLink:
     created_at: datetime
 
 
-def check_pair(case_id: str, linked_case_id: str, statuses: Mapping[str, str]) -> LinkOutcome | None:
+def check_pair(
+    case_id: str, linked_case_id: str, statuses: Mapping[str, str]
+) -> LinkOutcome | None:
     """The rules shared by add and remove. statuses holds only the cases the caller may see, with their status.
 
     Returns None when the pair may be changed. The order of the checks decides which refusal a caller sees: a
@@ -63,7 +67,9 @@ def check_pair(case_id: str, linked_case_id: str, statuses: Mapping[str, str]) -
     return None
 
 
-def _lock_visible_pair(conn, case_id: str, linked_case_id: str, scope: CaseScope) -> dict[str, tuple[str, str]]:
+def _lock_visible_pair(
+    conn, case_id: str, linked_case_id: str, scope: CaseScope
+) -> dict[str, tuple[str, str]]:
     """Lock the visible cases of the pair, in ID order, and return {id: (status, title)} for those the scope may see."""
     visibility, params = scope.visibility_sql()
     rows = conn.execute(
@@ -83,9 +89,21 @@ def _pair_condition() -> str:
     return "((case_id = %s AND linked_case_id = %s) OR (case_id = %s AND linked_case_id = %s))"
 
 
-def add_link(case_id: str, linked_case_id: str, actor: str, scope: CaseScope) -> tuple[LinkOutcome, CaseLink | None]:
-    """Record that the two cases concern the same incident. Both must be visible and open, and not yet linked."""
+def add_link(
+    case_id: str,
+    linked_case_id: str,
+    actor: str,
+    scope: CaseScope,
+    *,
+    idempotency: KeyScope | None = None,
+    render: Callable[[CaseLink], Any] | None = None,
+) -> tuple[LinkOutcome, CaseLink | None]:
+    """Record that the two cases concern the same incident. Both must be visible and open, and not yet linked.
+
+    With an idempotency scope the key is checked first, and a new link stores render(link) in the same transaction.
+    """
     with connect() as conn:
+        check(conn, idempotency)
         locked = _lock_visible_pair(conn, case_id, linked_case_id, scope)
         refusal = check_pair(case_id, linked_case_id, _statuses(locked))
         if refusal is not None:
@@ -112,10 +130,16 @@ def add_link(case_id: str, linked_case_id: str, actor: str, scope: CaseScope) ->
             details={"link_id": row[0], "linked_case_id": linked_case_id},
         )
         title = locked[linked_case_id][1]
-    return LinkOutcome.OK, CaseLink(case_id, linked_case_id, title, row[1])
+        link = CaseLink(case_id, linked_case_id, title, row[1])
+        if idempotency is not None:
+            assert render is not None
+            remember(conn, idempotency, 201, render(link))
+    return LinkOutcome.OK, link
 
 
-def remove_link(case_id: str, linked_case_id: str, actor: str, scope: CaseScope) -> LinkOutcome:
+def remove_link(
+    case_id: str, linked_case_id: str, actor: str, scope: CaseScope
+) -> LinkOutcome:
     """Soft delete the link between the two cases. The row is kept, so the history stays complete."""
     with connect() as conn:
         locked = _lock_visible_pair(conn, case_id, linked_case_id, scope)
@@ -157,7 +181,12 @@ def list_links(case_id: str, scope: CaseScope) -> list[CaseLink] | None:
             """,
             (case_id, case_id),
         ).fetchall()
-        others = list(dict.fromkeys(linked if source == case_id else source for source, linked, _created in rows))
+        others = list(
+            dict.fromkeys(
+                linked if source == case_id else source
+                for source, linked, _created in rows
+            )
+        )
         titles: dict[str, str] = {}
         if others:
             visibility, params = scope.visibility_sql()

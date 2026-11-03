@@ -3,7 +3,12 @@
 from datetime import datetime
 
 from safe_kit.db import connect
-from safe_kit.security import hash_refresh_token, new_refresh_token, refresh_token_ttl, session_max_age
+from safe_kit.security import (
+    hash_refresh_token,
+    new_refresh_token,
+    refresh_token_ttl,
+    session_max_age,
+)
 
 
 class InvalidRefreshToken(Exception):
@@ -60,14 +65,21 @@ def rotate_session(raw_token: str) -> tuple[str, str]:
         elif not unexpired:
             raise InvalidRefreshToken
         else:
-            conn.execute("UPDATE refresh_tokens SET revoked_at = now() WHERE id = %s", (row_id,))
+            conn.execute(
+                "UPDATE refresh_tokens SET revoked_at = now() WHERE id = %s", (row_id,)
+            )
             new_token = new_refresh_token()
             conn.execute(
                 """
                 INSERT INTO refresh_tokens (user_id, family_id, token_hash, expires_at)
                 VALUES (%s, %s, %s, now() + make_interval(secs => %s))
                 """,
-                (user_id, family_id, hash_refresh_token(new_token), refresh_token_ttl().total_seconds()),
+                (
+                    user_id,
+                    family_id,
+                    hash_refresh_token(new_token),
+                    refresh_token_ttl().total_seconds(),
+                ),
             )
     # Raised after the commit above, so that the family revocation is not rolled back.
     if revoked_family:

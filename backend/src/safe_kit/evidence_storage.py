@@ -15,7 +15,9 @@ from pathlib import Path
 from typing import Protocol
 
 DEFAULT_EVIDENCE_DIR = "/var/lib/safe/evidence"
-OBJECT_KEY_PATTERN = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+OBJECT_KEY_PATTERN = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+)
 TEMP_PREFIX = ".tmp-"
 
 
@@ -40,8 +42,7 @@ class EvidenceStorage(Protocol):
         """Return the whole object. Raises ObjectNotFound when it is absent."""
         ...
 
-    def exists(self, object_key: str) -> bool:
-        ...
+    def exists(self, object_key: str) -> bool: ...
 
 
 def _check_key(object_key: str) -> str:
@@ -74,7 +75,9 @@ class LocalVolumeStorage:
         if final.exists():
             raise StorageError("object already exists")
         try:
-            fd, temp_name = tempfile.mkstemp(dir=self._root, prefix=TEMP_PREFIX, suffix=".part")
+            fd, temp_name = tempfile.mkstemp(
+                dir=self._root, prefix=TEMP_PREFIX, suffix=".part"
+            )
         except OSError as error:
             raise StorageError("evidence directory is not writable") from error
         temp = Path(temp_name)

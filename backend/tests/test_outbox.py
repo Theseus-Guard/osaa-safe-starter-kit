@@ -111,7 +111,9 @@ def test_unknown_job_type_fails_without_running_anything(queue):
 
 
 def test_error_text_is_bounded_and_carries_no_payload(queue):
-    job = Job(id="j5", job_type="noop", payload={"email": "person@example.test"}, attempts=1)
+    job = Job(
+        id="j5", job_type="noop", payload={"email": "person@example.test"}, attempts=1
+    )
     fake = queue(job)
 
     def boom(payload):

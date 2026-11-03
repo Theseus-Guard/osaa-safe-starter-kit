@@ -4,6 +4,7 @@ The rules are checked on plain values. The HTTP mapping is checked with the doma
 test_case_access.py. The database-backed flow is in test_case_records_db.py.
 """
 
+import uuid
 import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -50,6 +51,11 @@ NOW = datetime(2026, 11, 1, 9, 0, tzinfo=UTC)
 RAW_TEXT = "Operator account name and a customer's phone number"
 
 
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
+
+
 def make_user(user_id, role):
     return User(
         id=user_id,
@@ -68,7 +74,6 @@ def full_classification(version: int = 1) -> Classification:
         version=version,
         triggers=("boundary_escape",),
         event_kind="near_miss",
-        internal_incident_option=False,
         classification_rationale="rationale",
         responsible_operator="operator",
         affected_versions="model 1.2",
@@ -83,7 +88,12 @@ def full_classification(version: int = 1) -> Classification:
 
 
 def full_impacts(severity: str = "none") -> list[ImpactAssessment]:
-    return [ImpactAssessment(area=area, assessed=True, severity=severity, scope="scope", updated_at=NOW) for area in IMPACT_AREAS]
+    return [
+        ImpactAssessment(
+            area=area, assessed=True, severity=severity, scope="scope", updated_at=NOW
+        )
+        for area in IMPACT_AREAS
+    ]
 
 
 def one_awareness_event() -> list[AwarenessEvent]:
@@ -142,7 +152,9 @@ def test_incident_near_miss_and_blocked_attempt_are_distinct_event_kinds():
 
 
 def test_normalize_triggers_removes_duplicates_and_keeps_the_plan_order():
-    chosen = normalize_triggers(["harm_inaction_near_miss", "boundary_escape", "boundary_escape"])
+    chosen = normalize_triggers(
+        ["harm_inaction_near_miss", "boundary_escape", "boundary_escape"]
+    )
     assert chosen == ("boundary_escape", "harm_inaction_near_miss")
 
 
@@ -170,7 +182,13 @@ def test_every_impact_area_is_listed_even_when_nothing_is_assessed():
 
 
 def test_an_assessed_none_is_different_from_an_unassessed_area():
-    rows = impacts_in_order({"scale": ImpactAssessment(area="scale", assessed=True, severity="none", scope="s")})
+    rows = impacts_in_order(
+        {
+            "scale": ImpactAssessment(
+                area="scale", assessed=True, severity="none", scope="s"
+            )
+        }
+    )
     by_area = {row.area: row for row in rows}
     assert by_area["scale"].assessed and by_area["scale"].severity == "none"
     assert not by_area["duration"].assessed
@@ -180,7 +198,9 @@ def test_an_assessed_none_is_different_from_an_unassessed_area():
 
 
 def test_an_empty_record_marks_every_gap_as_missing():
-    missing = missing_fields(Classification(version=0), [], impacts_in_order({}), contact_recorded=False)
+    missing = missing_fields(
+        Classification(version=0), [], impacts_in_order({}), contact_recorded=False
+    )
     fields = {(item["field"], item["state"]) for item in missing}
     assert ("contact", "missing") in fields
     assert ("classification.triggers", "missing") in fields
@@ -192,19 +212,33 @@ def test_an_empty_record_marks_every_gap_as_missing():
 
 
 def test_a_complete_record_has_nothing_missing():
-    assert missing_fields(full_classification(), one_awareness_event(), full_impacts(), contact_recorded=True) == []
+    assert (
+        missing_fields(
+            full_classification(),
+            one_awareness_event(),
+            full_impacts(),
+            contact_recorded=True,
+        )
+        == []
+    )
 
 
 def test_an_explicit_unknown_impact_is_listed_as_unknown():
     impacts = full_impacts()
-    impacts[2] = ImpactAssessment(area=impacts[2].area, assessed=True, severity="unknown", scope="to research")
-    missing = missing_fields(full_classification(), one_awareness_event(), impacts, contact_recorded=True)
+    impacts[2] = ImpactAssessment(
+        area=impacts[2].area, assessed=True, severity="unknown", scope="to research"
+    )
+    missing = missing_fields(
+        full_classification(), one_awareness_event(), impacts, contact_recorded=True
+    )
     assert missing == [{"field": f"impacts.{IMPACT_AREAS[2]}", "state": "unknown"}]
 
 
 def test_an_empty_trigger_set_is_missing_not_no_trigger():
     classification = replace(full_classification(), triggers=())
-    missing = missing_fields(classification, one_awareness_event(), full_impacts(), contact_recorded=True)
+    missing = missing_fields(
+        classification, one_awareness_event(), full_impacts(), contact_recorded=True
+    )
     assert missing == [{"field": "classification.triggers", "state": "missing"}]
 
 
@@ -239,7 +273,13 @@ def test_preliminary_report_keeps_legal_duties_apart_from_safe_deadlines():
         created_at=NOW,
     )
     report = build_preliminary_report(
-        sample_case(), full_classification(), one_awareness_event(), full_impacts(), [duty], True, NOW
+        sample_case(),
+        full_classification(),
+        one_awareness_event(),
+        full_impacts(),
+        [duty],
+        True,
+        NOW,
     )
     assert [item["id"] for item in report["legal_duties"]] == [DUTY_ID]
     assert report["safe_deadlines"] == []
@@ -264,7 +304,10 @@ def test_classification_text_is_reduced_to_its_length_in_the_diff():
     values = old.editable_values()
     values["containment"] = RAW_TEXT
     changes = classification_changes(old, values)
-    assert changes["containment"] == {"old": {"length": len("contained")}, "new": {"length": len(RAW_TEXT)}}
+    assert changes["containment"] == {
+        "old": {"length": len("contained")},
+        "new": {"length": len(RAW_TEXT)},
+    }
     assert RAW_TEXT not in json.dumps(changes)
 
 
@@ -286,11 +329,37 @@ def test_duty_changes_lists_only_changed_fields_and_hides_text():
 @pytest.mark.parametrize(
     "action, details",
     [
-        (audit.CASE_AWARENESS_RECORDED, {"awareness_event_id": "e", "basis": {"length": 4}, "occurred_at": NOW.isoformat()}),
-        (audit.CASE_IMPACT_CHANGE, {"area": "scale", "severity": {"old": None, "new": "low"}, "scope": {"old": None, "new": {"length": 3}}}),
-        (audit.CASE_LEGAL_DUTY_ADD, {"legal_duty_id": "d", "kind": "statutory", "description": {"length": 3}}),
-        (audit.CASE_LEGAL_DUTY_CHANGE, {"legal_duty_id": "d", "status": {"old": "open", "new": "done"}}),
-        (audit.CASE_CLASSIFICATION_CHANGE, {"version": {"old": 0, "new": 1}, "triggers": {"old": [], "new": ["boundary_escape"]}}),
+        (
+            audit.CASE_AWARENESS_RECORDED,
+            {
+                "awareness_event_id": "e",
+                "basis": {"length": 4},
+                "occurred_at": NOW.isoformat(),
+            },
+        ),
+        (
+            audit.CASE_IMPACT_CHANGE,
+            {
+                "area": "scale",
+                "severity": {"old": None, "new": "low"},
+                "scope": {"old": None, "new": {"length": 3}},
+            },
+        ),
+        (
+            audit.CASE_LEGAL_DUTY_ADD,
+            {"legal_duty_id": "d", "kind": "statutory", "description": {"length": 3}},
+        ),
+        (
+            audit.CASE_LEGAL_DUTY_CHANGE,
+            {"legal_duty_id": "d", "status": {"old": "open", "new": "done"}},
+        ),
+        (
+            audit.CASE_CLASSIFICATION_CHANGE,
+            {
+                "version": {"old": 0, "new": 1},
+                "triggers": {"old": [], "new": ["boundary_escape"]},
+            },
+        ),
     ],
 )
 def test_case_record_audit_details_pass_the_audit_rules(action, details):
@@ -305,16 +374,25 @@ def test_audit_refuses_a_raw_ip_address_in_case_record_details():
 # --- request validation ----------------------------------------------------------------------------------------------
 
 
-def test_internal_incident_option_needs_a_rationale():
-    with pytest.raises(ValidationError):
-        ClassificationRequest(expected_version=0, internal_incident_option=True)
-    accepted = ClassificationRequest(expected_version=0, internal_incident_option=True, classification_rationale="why")
-    assert accepted.internal_incident_option
+@pytest.mark.parametrize("value", [True, False])
+def test_the_request_refuses_the_case_wide_internal_option(value):
+    # The option is per task now. A request that sends it is refused, with the way to mark the tasks.
+    with pytest.raises(ValidationError, match="PATCH /api/v1/cases/"):
+        ClassificationRequest(
+            expected_version=0,
+            internal_incident_option=value,
+            classification_rationale="why",
+        )
 
 
 def test_classification_request_removes_duplicate_triggers():
     request = ClassificationRequest(
-        expected_version=0, triggers=["boundary_escape", "boundary_escape", "unauthorized_access_or_change"]
+        expected_version=0,
+        triggers=[
+            "boundary_escape",
+            "boundary_escape",
+            "unauthorized_access_or_change",
+        ],
     )
     assert request.triggers == ["unauthorized_access_or_change", "boundary_escape"]
 
@@ -325,7 +403,9 @@ def test_classification_request_refuses_an_unknown_trigger():
 
 
 def test_classification_text_is_stripped_and_blank_becomes_none():
-    request = ClassificationRequest(expected_version=0, containment="   ", responsible_operator="  team  ")
+    request = ClassificationRequest(
+        expected_version=0, containment="   ", responsible_operator="  team  "
+    )
     assert request.containment is None
     assert request.responsible_operator == "team"
 
@@ -338,16 +418,34 @@ def test_classification_request_refuses_a_negative_expected_version():
 def test_awareness_event_refuses_a_future_time_a_blank_basis_and_a_long_basis():
     future = datetime.now(UTC) + timedelta(hours=1)
     with pytest.raises(ValidationError):
-        AwarenessEventRequest(awareness_kind="operator", event_kind="incident", occurred_at=future, basis="x")
+        AwarenessEventRequest(
+            awareness_kind="operator",
+            event_kind="incident",
+            occurred_at=future,
+            basis="x",
+        )
     with pytest.raises(ValidationError):
-        AwarenessEventRequest(awareness_kind="operator", event_kind="incident", occurred_at=NOW, basis="   ")
+        AwarenessEventRequest(
+            awareness_kind="operator",
+            event_kind="incident",
+            occurred_at=NOW,
+            basis="   ",
+        )
     with pytest.raises(ValidationError):
-        AwarenessEventRequest(awareness_kind="operator", event_kind="incident", occurred_at=NOW, basis="x" * 1001)
+        AwarenessEventRequest(
+            awareness_kind="operator",
+            event_kind="incident",
+            occurred_at=NOW,
+            basis="x" * 1001,
+        )
 
 
 def test_awareness_event_accepts_an_earlier_affected_party_time():
     event = AwarenessEventRequest(
-        awareness_kind="affected_party", event_kind="blocked_attempt", occurred_at=NOW - timedelta(days=2), basis="log"
+        awareness_kind="affected_party",
+        event_kind="blocked_attempt",
+        occurred_at=NOW - timedelta(days=2),
+        basis="log",
     )
     assert event.event_kind == "blocked_attempt"
 
@@ -365,9 +463,16 @@ def test_impact_accepts_the_explicit_unknown_value():
 
 def test_legal_duty_request_needs_a_source_and_a_due_time():
     with pytest.raises(ValidationError):
-        LegalDutyRequest(kind="statutory", description="d", source_reference="", due_at=NOW)
+        LegalDutyRequest(
+            kind="statutory", description="d", source_reference="", due_at=NOW
+        )
     with pytest.raises(ValidationError):
-        LegalDutyRequest(kind="statutory", description="d", source_reference="s", due_at=datetime(2026, 11, 2))
+        LegalDutyRequest(
+            kind="statutory",
+            description="d",
+            source_reference="s",
+            due_at=datetime(2026, 11, 2),
+        )
 
 
 def test_legal_duty_update_refuses_an_empty_body_and_null_required_fields():
@@ -395,7 +500,11 @@ def test_legal_duty_update_reports_only_the_fields_that_were_sent():
 def caller(monkeypatch):
     state = {"user": make_user(REPORTER_ID, "reporter")}
     api.app.dependency_overrides[auth.current_user] = lambda: state["user"]
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()))
+    monkeypatch.setattr(
+        auth,
+        "permissions_for_role",
+        lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()),
+    )
     yield state
     api.app.dependency_overrides.clear()
 
@@ -423,24 +532,53 @@ def test_the_case_record_routes_are_mounted_under_the_case():
         assert f"/api/v1/cases/{{case_id}}/{suffix}" in paths
 
 
-def test_awareness_list_answers_404_for_a_case_the_caller_may_not_see(client, caller, monkeypatch):
-    monkeypatch.setattr(case_records_api, "list_awareness_events", lambda case_id, scope: None)
+def test_awareness_list_answers_404_for_a_case_the_caller_may_not_see(
+    client, caller, monkeypatch
+):
+    monkeypatch.setattr(
+        case_records_api, "list_awareness_events", lambda case_id, scope: None
+    )
     assert client.get(f"/api/v1/cases/{CASE_ID}/awareness-events").status_code == 404
 
 
 def test_reporter_cannot_record_an_awareness_event(client, caller):
-    body = {"awareness_kind": "operator", "event_kind": "incident", "occurred_at": NOW.isoformat(), "basis": "b"}
-    assert client.post(f"/api/v1/cases/{CASE_ID}/awareness-events", json=body).status_code == 403
+    body = {
+        "awareness_kind": "operator",
+        "event_kind": "incident",
+        "occurred_at": NOW.isoformat(),
+        "basis": "b",
+    }
+    assert (
+        client.post(
+            f"/api/v1/cases/{CASE_ID}/awareness-events", json=body, headers=idem()
+        ).status_code
+        == 403
+    )
 
 
-def test_triager_records_an_event_and_only_read_all_callers_see_the_basis(client, caller, monkeypatch):
+def test_triager_records_an_event_and_only_read_all_callers_see_the_basis(
+    client, caller, monkeypatch
+):
     event = one_awareness_event()[0]
-    monkeypatch.setattr(case_records_api, "record_awareness_event", lambda *args: (RecordOutcome.OK, event))
-    monkeypatch.setattr(case_records_api, "list_awareness_events", lambda case_id, scope: [event])
+    monkeypatch.setattr(
+        case_records_api,
+        "record_awareness_event",
+        lambda *args, **kwargs: (RecordOutcome.OK, event),
+    )
+    monkeypatch.setattr(
+        case_records_api, "list_awareness_events", lambda case_id, scope: [event]
+    )
 
     as_role(caller, TRIAGER_ID, "triager")
-    body = {"awareness_kind": "operator", "event_kind": "incident", "occurred_at": NOW.isoformat(), "basis": RAW_TEXT}
-    created = client.post(f"/api/v1/cases/{CASE_ID}/awareness-events", json=body)
+    body = {
+        "awareness_kind": "operator",
+        "event_kind": "incident",
+        "occurred_at": NOW.isoformat(),
+        "basis": RAW_TEXT,
+    }
+    created = client.post(
+        f"/api/v1/cases/{CASE_ID}/awareness-events", json=body, headers=idem()
+    )
     assert created.status_code == 201
     assert created.json()["basis"] == RAW_TEXT
 
@@ -452,55 +590,117 @@ def test_triager_records_an_event_and_only_read_all_callers_see_the_basis(client
 
 
 def test_awareness_write_on_a_closed_case_answers_409(client, caller, monkeypatch):
-    monkeypatch.setattr(case_records_api, "record_awareness_event", lambda *args: (RecordOutcome.CLOSED, None))
+    monkeypatch.setattr(
+        case_records_api,
+        "record_awareness_event",
+        lambda *args, **kwargs: (RecordOutcome.CLOSED, None),
+    )
     as_role(caller, TRIAGER_ID, "triager")
-    body = {"awareness_kind": "operator", "event_kind": "incident", "occurred_at": NOW.isoformat(), "basis": "b"}
-    assert client.post(f"/api/v1/cases/{CASE_ID}/awareness-events", json=body).status_code == 409
+    body = {
+        "awareness_kind": "operator",
+        "event_kind": "incident",
+        "occurred_at": NOW.isoformat(),
+        "basis": "b",
+    }
+    assert (
+        client.post(
+            f"/api/v1/cases/{CASE_ID}/awareness-events", json=body, headers=idem()
+        ).status_code
+        == 409
+    )
 
 
-def test_impacts_are_listed_in_full_even_when_nothing_is_assessed(client, caller, monkeypatch):
-    monkeypatch.setattr(case_records_api, "list_impacts", lambda case_id, scope: impacts_in_order({}))
+def test_impacts_are_listed_in_full_even_when_nothing_is_assessed(
+    client, caller, monkeypatch
+):
+    monkeypatch.setattr(
+        case_records_api, "list_impacts", lambda case_id, scope: impacts_in_order({})
+    )
     as_role(caller, INVESTIGATOR_ID, "investigator")
     response = client.get(f"/api/v1/cases/{CASE_ID}/impacts")
     assert response.status_code == 200
     assert [row["area"] for row in response.json()] == list(IMPACT_AREAS)
-    assert all(row["assessed"] is False and row["severity"] is None for row in response.json())
+    assert all(
+        row["assessed"] is False and row["severity"] is None for row in response.json()
+    )
 
 
 def test_impact_put_refuses_an_unknown_area(client, caller):
     as_role(caller, TRIAGER_ID, "triager")
     body = {"severity": "low", "scope": "s"}
-    assert client.put(f"/api/v1/cases/{CASE_ID}/impacts/made_up", json=body).status_code == 422
+    assert (
+        client.put(
+            f"/api/v1/cases/{CASE_ID}/impacts/made_up", json=body, headers=idem()
+        ).status_code
+        == 400
+    )
 
 
 def test_impact_put_answers_404_for_an_invisible_case(client, caller, monkeypatch):
-    monkeypatch.setattr(case_records_api, "set_impact", lambda *args: (RecordOutcome.NOT_FOUND, None))
+    monkeypatch.setattr(
+        case_records_api,
+        "set_impact",
+        lambda *args, **kwargs: (RecordOutcome.NOT_FOUND, None),
+    )
     as_role(caller, TRIAGER_ID, "triager")
     body = {"severity": "low", "scope": "s"}
-    assert client.put(f"/api/v1/cases/{CASE_ID}/impacts/scale", json=body).status_code == 404
+    assert (
+        client.put(
+            f"/api/v1/cases/{CASE_ID}/impacts/scale", json=body, headers=idem()
+        ).status_code
+        == 404
+    )
 
 
 def test_investigator_cannot_change_a_legal_duty(client, caller):
     as_role(caller, INVESTIGATOR_ID, "investigator")
-    assert client.patch(f"/api/v1/cases/{CASE_ID}/legal-duties/{DUTY_ID}", json={"status": "done"}).status_code == 403
+    assert (
+        client.patch(
+            f"/api/v1/cases/{CASE_ID}/legal-duties/{DUTY_ID}", json={"status": "done"}
+        ).status_code
+        == 403
+    )
 
 
 def test_legal_duty_patch_answers_404_for_an_unknown_duty(client, caller, monkeypatch):
-    monkeypatch.setattr(case_records_api, "update_legal_duty", lambda *args: (RecordOutcome.DUTY_NOT_FOUND, None))
+    monkeypatch.setattr(
+        case_records_api,
+        "update_legal_duty",
+        lambda *args, **kwargs: (RecordOutcome.DUTY_NOT_FOUND, None),
+    )
     as_role(caller, TRIAGER_ID, "triager")
-    assert client.patch(f"/api/v1/cases/{CASE_ID}/legal-duties/{DUTY_ID}", json={"status": "done"}).status_code == 404
+    assert (
+        client.patch(
+            f"/api/v1/cases/{CASE_ID}/legal-duties/{DUTY_ID}",
+            json={"status": "done"},
+            headers={"If-Match": '"1"'},
+        ).status_code
+        == 404
+    )
 
 
-def test_classification_reads_version_zero_when_nothing_is_recorded(client, caller, monkeypatch):
-    monkeypatch.setattr(case_records_api, "read_classification", lambda case_id, scope: Classification(version=0))
+def test_classification_reads_version_zero_when_nothing_is_recorded(
+    client, caller, monkeypatch
+):
+    monkeypatch.setattr(
+        case_records_api,
+        "read_classification",
+        lambda case_id, scope: Classification(version=0),
+    )
     as_role(caller, REPORTER_ID, "reporter")
     body = client.get(f"/api/v1/cases/{CASE_ID}/classification").json()
     assert body["version"] == 0
     assert body["triggers"] == []
 
 
-def test_classification_free_text_is_hidden_from_callers_without_read_all(client, caller, monkeypatch):
-    monkeypatch.setattr(case_records_api, "read_classification", lambda case_id, scope: full_classification())
+def test_classification_free_text_is_hidden_from_callers_without_read_all(
+    client, caller, monkeypatch
+):
+    monkeypatch.setattr(
+        case_records_api,
+        "read_classification",
+        lambda case_id, scope: full_classification(),
+    )
     as_role(caller, REPORTER_ID, "reporter")
     hidden = client.get(f"/api/v1/cases/{CASE_ID}/classification").json()
     assert hidden["classification_rationale"] is None
@@ -510,45 +710,90 @@ def test_classification_free_text_is_hidden_from_callers_without_read_all(client
     assert shown["classification_rationale"] == "rationale"
 
 
-def test_classification_put_answers_409_with_the_current_version(client, caller, monkeypatch):
+def test_classification_put_answers_409_with_the_current_version(
+    client, caller, monkeypatch
+):
     monkeypatch.setattr(
         case_records_api,
         "update_classification",
-        lambda *args: (RecordOutcome.VERSION_CONFLICT, full_classification(version=3)),
+        lambda *args, **kwargs: (
+            RecordOutcome.VERSION_CONFLICT,
+            full_classification(version=3),
+        ),
     )
     as_role(caller, TRIAGER_ID, "triager")
-    response = client.put(f"/api/v1/cases/{CASE_ID}/classification", json={"expected_version": 1})
+    response = client.put(
+        f"/api/v1/cases/{CASE_ID}/classification",
+        json={"expected_version": 1},
+        headers=idem(),
+    )
     assert response.status_code == 409
-    assert response.json() == {
-        "detail": {"status": "classification_version_conflict", "current_version": 3},
+    assert response.json()["detail"] == {
+        "status": "classification_version_conflict",
+        "current_version": 3,
     }
 
 
 def test_investigator_cannot_store_a_classification(client, caller):
     as_role(caller, INVESTIGATOR_ID, "investigator")
-    assert client.put(f"/api/v1/cases/{CASE_ID}/classification", json={"expected_version": 0}).status_code == 403
+    assert (
+        client.put(
+            f"/api/v1/cases/{CASE_ID}/classification",
+            json={"expected_version": 0},
+            headers=idem(),
+        ).status_code
+        == 403
+    )
 
 
-def test_classification_put_is_refused_without_read_all_so_the_hidden_text_is_not_cleared(client, caller, monkeypatch):
+def test_classification_put_is_refused_without_read_all_so_the_hidden_text_is_not_cleared(
+    client, caller, monkeypatch
+):
     def must_not_save(*args):
-        raise AssertionError("a caller without cases:read_all must not replace the classification")
+        raise AssertionError(
+            "a caller without cases:read_all must not replace the classification"
+        )
 
     monkeypatch.setattr(case_records_api, "update_classification", must_not_save)
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: frozenset({"cases:triage", "cases:read_own"}))
+    monkeypatch.setattr(
+        auth,
+        "permissions_for_role",
+        lambda role: frozenset({"cases:triage", "cases:read_own"}),
+    )
     as_role(caller, TRIAGER_ID, "triager")
-    response = client.put(f"/api/v1/cases/{CASE_ID}/classification", json={"expected_version": 0})
+    response = client.put(
+        f"/api/v1/cases/{CASE_ID}/classification",
+        json={"expected_version": 0},
+        headers=idem(),
+    )
     assert response.status_code == 403
     assert response.json()["detail"] == "classification_requires_full_view"
 
 
-def test_classification_put_refuses_internal_option_without_rationale(client, caller):
+def test_classification_put_refuses_the_case_wide_internal_option(
+    client, caller, monkeypatch
+):
+    monkeypatch.setattr(
+        case_records_api,
+        "update_classification",
+        lambda *args, **kwargs: pytest.fail("the save must not run"),
+    )
     as_role(caller, TRIAGER_ID, "triager")
     body = {"expected_version": 0, "internal_incident_option": True}
-    assert client.put(f"/api/v1/cases/{CASE_ID}/classification", json=body).status_code == 422
+    assert (
+        client.put(
+            f"/api/v1/cases/{CASE_ID}/classification", json=body, headers=idem()
+        ).status_code
+        == 400
+    )
 
 
 def test_preliminary_report_is_for_read_all_callers_only(client, caller, monkeypatch):
-    monkeypatch.setattr(case_records_api, "preliminary_report", lambda case_id, scope: {"case_id": case_id, "complete": False})
+    monkeypatch.setattr(
+        case_records_api,
+        "preliminary_report",
+        lambda case_id, scope: {"case_id": case_id, "complete": False},
+    )
     as_role(caller, INVESTIGATOR_ID, "investigator")
     assert client.get(f"/api/v1/cases/{CASE_ID}/preliminary-report").status_code == 403
     as_role(caller, TRIAGER_ID, "triager")
@@ -557,13 +802,19 @@ def test_preliminary_report_is_for_read_all_callers_only(client, caller, monkeyp
     assert response.json()["complete"] is False
 
 
-def test_preliminary_report_answers_404_for_an_invisible_case(client, caller, monkeypatch):
-    monkeypatch.setattr(case_records_api, "preliminary_report", lambda case_id, scope: None)
+def test_preliminary_report_answers_404_for_an_invisible_case(
+    client, caller, monkeypatch
+):
+    monkeypatch.setattr(
+        case_records_api, "preliminary_report", lambda case_id, scope: None
+    )
     as_role(caller, TRIAGER_ID, "triager")
     assert client.get(f"/api/v1/cases/{CASE_ID}/preliminary-report").status_code == 404
 
 
-def test_the_scope_passed_to_the_domain_comes_from_the_caller(client, caller, monkeypatch):
+def test_the_scope_passed_to_the_domain_comes_from_the_caller(
+    client, caller, monkeypatch
+):
     seen: list[CaseScope] = []
 
     def fake_list(case_id, scope):

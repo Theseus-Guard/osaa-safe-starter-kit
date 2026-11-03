@@ -43,9 +43,13 @@ def ensure_migrated_with_a_timezone() -> None:
     migrate.MIGRATIONS_DIR = MIGRATIONS
     assert migrate.main() == 0
     with connect() as conn:
-        exists = conn.execute("SELECT EXISTS (SELECT 1 FROM system_timezone WHERE NOT is_deleted)").fetchone()[0]
+        exists = conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM system_timezone WHERE NOT is_deleted)"
+        ).fetchone()[0]
         if not exists:
-            conn.execute("INSERT INTO system_timezone (timezone) VALUES ('Europe/Istanbul')")
+            conn.execute(
+                "INSERT INTO system_timezone (timezone) VALUES ('Europe/Istanbul')"
+            )
 
 
 @pytest.fixture
@@ -53,24 +57,33 @@ def clean_outbox():
     """Soft-delete jobs left by earlier runs, so that run_once only sees this test's jobs. Nothing is removed."""
     ensure_migrated_with_a_timezone()
     with connect() as conn:
-        conn.execute("UPDATE outbox_jobs SET is_deleted = true, deleted_at = now() WHERE NOT is_deleted")
+        conn.execute(
+            "UPDATE outbox_jobs SET is_deleted = true, deleted_at = now() WHERE NOT is_deleted"
+        )
 
 
 def job_status(job_id: str) -> tuple[str, int]:
     with connect() as conn:
-        return conn.execute("SELECT status, attempts FROM outbox_jobs WHERE id = %s", (job_id,)).fetchone()
+        return conn.execute(
+            "SELECT status, attempts FROM outbox_jobs WHERE id = %s", (job_id,)
+        ).fetchone()
 
 
 def expire_lease(job_id: str) -> None:
     with connect() as conn:
-        conn.execute("UPDATE outbox_jobs SET lease_until = now() - interval '1 second' WHERE id = %s", (job_id,))
+        conn.execute(
+            "UPDATE outbox_jobs SET lease_until = now() - interval '1 second' WHERE id = %s",
+            (job_id,),
+        )
 
 
 # --- T16: crash between the claim and the commit ---------------------------------------------------------------------
 
 
 @requires_database
-def test_job_of_a_worker_that_stopped_after_its_claim_runs_once_more_and_takes_effect_once(clean_outbox):
+def test_job_of_a_worker_that_stopped_after_its_claim_runs_once_more_and_takes_effect_once(
+    clean_outbox,
+):
     effect_key = uuid.uuid4().hex
     with connect() as conn:
         job_id = outbox.enqueue(conn, "noop", {"effect_key": effect_key})
@@ -81,7 +94,10 @@ def test_job_of_a_worker_that_stopped_after_its_claim_runs_once_more_and_takes_e
     effects: list[str] = [effect_key]
 
     # The restarted worker finds the job still leased, so it does nothing yet.
-    assert outbox.run_once({"noop": lambda payload: effects.append(payload["effect_key"])}) is False
+    assert (
+        outbox.run_once({"noop": lambda payload: effects.append(payload["effect_key"])})
+        is False
+    )
 
     expire_lease(job_id)
 
@@ -111,15 +127,23 @@ def test_job_enqueued_in_a_rolled_back_transaction_is_never_run(clean_outbox):
 
 
 @requires_database
-def test_job_enqueued_in_a_committed_transaction_is_run_once_after_a_restart(clean_outbox):
+def test_job_enqueued_in_a_committed_transaction_is_run_once_after_a_restart(
+    clean_outbox,
+):
     marker = uuid.uuid4().hex
     with connect() as conn:
         job_id = outbox.enqueue(conn, "noop", {"marker": marker})
     seen: list[str] = []
 
     # A fresh call stands for a restarted worker: nothing is kept in memory between calls.
-    assert outbox.run_once({"noop": lambda payload: seen.append(payload["marker"])}) is True
-    assert outbox.run_once({"noop": lambda payload: seen.append(payload["marker"])}) is False
+    assert (
+        outbox.run_once({"noop": lambda payload: seen.append(payload["marker"])})
+        is True
+    )
+    assert (
+        outbox.run_once({"noop": lambda payload: seen.append(payload["marker"])})
+        is False
+    )
     assert job_status(job_id) == ("done", 1)
     assert seen == [marker]
 
@@ -139,11 +163,16 @@ def test_rerunning_the_migrations_applies_nothing_and_exits_zero(capsys):
 
     assert "applied:" not in capsys.readouterr().out
     with connect() as conn:
-        assert conn.execute("SELECT count(*) FROM schema_migrations").fetchone()[0] == before
+        assert (
+            conn.execute("SELECT count(*) FROM schema_migrations").fetchone()[0]
+            == before
+        )
 
 
 @requires_database
-def test_migration_runner_refuses_an_applied_migration_whose_file_changed(tmp_path, monkeypatch, capsys):
+def test_migration_runner_refuses_an_applied_migration_whose_file_changed(
+    tmp_path, monkeypatch, capsys
+):
     version = f"zz_fixture_{uuid.uuid4().hex[:12]}"
     migration = tmp_path / f"{version}.sql"
     migration.write_text("SELECT 1;\n", encoding="utf-8")
@@ -154,7 +183,10 @@ def test_migration_runner_refuses_an_applied_migration_whose_file_changed(tmp_pa
     migration.write_text("SELECT 2;\n", encoding="utf-8")
 
     assert migrate.main() == 1
-    assert f"checksum mismatch: applied migration {version} was modified" in capsys.readouterr().err
+    assert (
+        f"checksum mismatch: applied migration {version} was modified"
+        in capsys.readouterr().err
+    )
 
 
 # --- T17: readiness when the database is down --------------------------------------------------------------------------
@@ -166,19 +198,23 @@ def _closed_local_port() -> int:
         return probe.getsockname()[1]
 
 
-def test_readiness_is_503_when_the_database_cannot_be_reached_and_liveness_stays_ok(tmp_path, monkeypatch):
+def test_readiness_is_503_when_the_database_cannot_be_reached_and_liveness_stays_ok(
+    tmp_path, monkeypatch
+):
     password_file = tmp_path / "db_password.txt"
     password_file.write_text("not-used-because-nothing-listens", encoding="utf-8")
     monkeypatch.setenv("SAFE_DB_PASSWORD_FILE", str(password_file))
     monkeypatch.setenv("SAFE_DB_HOST", "127.0.0.1")
     monkeypatch.setenv("SAFE_DB_PORT", str(_closed_local_port()))
+    monkeypatch.setenv("SAFE_DB_NAME", "safe")
+    monkeypatch.setenv("SAFE_DB_USER", "safe_api")
     client = TestClient(api.app)
 
     ready = client.get("/api/v1/health/ready")
     live = client.get("/api/v1/health/live")
 
     assert ready.status_code == 503
-    assert ready.json() == {"detail": {"status": "unavailable"}}
+    assert ready.json()["detail"] == {"status": "unavailable"}
     assert live.status_code == 200
     assert live.json() == {"status": "ok"}
 
@@ -216,7 +252,9 @@ def test_case_and_evidence_survive_a_process_restart(tmp_path):
     suffix = uuid.uuid4().hex[:12]
     user_id = users.create_user("t-" + suffix, "temporary passphrase", "investigator")
     scope = CaseScope.from_permissions(user_id, frozenset({"cases:read_all"}))
-    case = cases.create_case("Restart " + suffix, datetime.now(UTC) - timedelta(hours=1), user_id)
+    case = cases.create_case(
+        "Restart " + suffix, datetime.now(UTC) - timedelta(hours=1), user_id
+    )
     kek = tmp_path / "kek.bin"
     kek.write_bytes(os.urandom(32))
     os.chmod(kek, 0o600)
@@ -224,7 +262,14 @@ def test_case_and_evidence_survive_a_process_restart(tmp_path):
     store_dir.mkdir()
     storage = LocalVolumeStorage(store_dir)
     item = evidence.create_evidence(
-        case.id, user_id, "scan.pdf", "application/pdf", PDF, storage, LocalFileKeyProvider(kek), scope,
+        case.id,
+        user_id,
+        "scan.pdf",
+        "application/pdf",
+        PDF,
+        storage,
+        LocalFileKeyProvider(kek),
+        scope,
     )
 
     # A new interpreter has no state from this test: whatever it reads comes from PostgreSQL and the volume.
@@ -239,7 +284,11 @@ def test_case_and_evidence_survive_a_process_restart(tmp_path):
         "FIXTURE_KEK": str(kek),
     }
     result = subprocess.run(
-        [sys.executable, "-c", RESTART_CHECK], env=env, capture_output=True, text=True, timeout=120,
+        [sys.executable, "-c", RESTART_CHECK],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     assert result.returncode == 0, result.stderr[-2000:]
     after_restart = json.loads(result.stdout.strip().splitlines()[-1])

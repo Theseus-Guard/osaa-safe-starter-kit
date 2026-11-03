@@ -2,12 +2,12 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
-import { CaseDetail, DeadlineTask, updateDeadline } from "../../api";
+import { CaseDetail, DeadlineTask, restoreDeadline, updateDeadline } from "../../api";
 import { CaseDeadlines } from "./CaseDeadlines";
 
 vi.mock("../../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../api")>();
-  return { ...actual, updateDeadline: vi.fn() };
+  return { ...actual, updateDeadline: vi.fn(), restoreDeadline: vi.fn() };
 });
 
 vi.mock("../../system-timezone", () => ({
@@ -17,6 +17,7 @@ vi.mock("../../system-timezone", () => ({
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const update = vi.mocked(updateDeadline);
+const restore = vi.mocked(restoreDeadline);
 
 const TASKS: DeadlineTask[] = [
   {
@@ -25,6 +26,7 @@ const TASKS: DeadlineTask[] = [
     due_at: "2026-11-02T06:00:00Z",
     status: "open",
     not_applicable_reason: null,
+    revision: 2,
   },
   {
     id: "task-2",
@@ -32,6 +34,7 @@ const TASKS: DeadlineTask[] = [
     due_at: "2026-11-08T06:00:00Z",
     status: "done",
     not_applicable_reason: null,
+    revision: 1,
   },
 ];
 
@@ -42,6 +45,7 @@ function openRow(): HTMLElement {
 
 beforeEach(() => {
   update.mockReset();
+  restore.mockReset();
   vi.mocked(toast.success).mockClear();
   vi.mocked(toast.error).mockClear();
 });
@@ -89,7 +93,7 @@ describe("CaseDeadlines", () => {
     const openRow = screen.getByText("Preliminary safe report").closest("tr") as HTMLElement;
     await user.click(openRow.querySelector("button") as HTMLButtonElement);
 
-    expect(update).toHaveBeenCalledWith("case-1", "task-1", "done", undefined);
+    expect(update).toHaveBeenCalledWith("case-1", "task-1", "done", undefined, 2);
     await waitFor(() => expect(onChanged).toHaveBeenCalledWith(updated));
     expect(toast.success).toHaveBeenCalledWith("Preliminary safe report is now done.");
   });
@@ -133,7 +137,7 @@ describe("CaseDeadlines", () => {
     await user.click(screen.getByRole("button", { name: "Confirm" }));
 
     await waitFor(() =>
-      expect(update).toHaveBeenCalledWith("case-1", "task-1", "not_applicable", "Not a reportable incident"),
+      expect(update).toHaveBeenCalledWith("case-1", "task-1", "not_applicable", "Not a reportable incident", 2),
     );
   });
 
@@ -222,7 +226,7 @@ describe("CaseDeadlines", () => {
     expect(within(openRow()).getByRole("button", { name: "Mark done" })).toBeEnabled();
 
     await user.click(within(openRow()).getByRole("button", { name: "Mark done" }));
-    expect(update).toHaveBeenCalledWith("case-1", "task-1", "done", undefined);
+    expect(update).toHaveBeenCalledWith("case-1", "task-1", "done", undefined, 2);
   });
 
   it("shows the recorded reason for a not-applicable task", () => {
@@ -239,5 +243,31 @@ describe("CaseDeadlines", () => {
     );
 
     expect(screen.getByText("Reason: Out of scope")).toBeInTheDocument();
+  });
+
+  it("restores a not-applicable task to its previous status and reports the updated case", async () => {
+    const updated = { id: "case-1" } as CaseDetail;
+    restore.mockResolvedValue(updated);
+    const onChanged = vi.fn();
+    const na: DeadlineTask = { ...TASKS[0], status: "not_applicable", not_applicable_reason: "Out of scope" };
+    const user = userEvent.setup();
+    render(
+      <CaseDeadlines caseId="case-1" deadlines={[na]} closed={false} canUpdate canMarkNotApplicable onChanged={onChanged} />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Restore previous status" }));
+
+    expect(restore).toHaveBeenCalledWith("case-1", "task-1");
+    await waitFor(() => expect(onChanged).toHaveBeenCalledWith(updated));
+    expect(toast.success).toHaveBeenCalledWith("Preliminary safe report is restored to its previous status.");
+  });
+
+  it("locks the restore action for a caller who is not a triager", () => {
+    const na: DeadlineTask = { ...TASKS[0], status: "not_applicable", not_applicable_reason: "Out of scope" };
+    render(
+      <CaseDeadlines caseId="case-1" deadlines={[na]} closed={false} canUpdate canMarkNotApplicable={false} onChanged={() => {}} />,
+    );
+
+    expect(screen.getByRole("button", { name: "Restore previous status" })).toBeDisabled();
   });
 });

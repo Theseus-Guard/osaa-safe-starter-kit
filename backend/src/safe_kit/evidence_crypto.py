@@ -60,7 +60,12 @@ def seal(plaintext: bytes, storage_key: str, provider: KeyProvider) -> SealedObj
     nonce = secrets.token_bytes(CONTENT_NONCE_BYTES)
     ciphertext = AESGCM(data_key).encrypt(nonce, plaintext, _content_aad(storage_key))
     wrapped = provider.wrap(data_key, _wrap_aad(storage_key))
-    return SealedObject(ciphertext=ciphertext, nonce=nonce, wrapped_data_key=wrapped, key_id=provider.key_id)
+    return SealedObject(
+        ciphertext=ciphertext,
+        nonce=nonce,
+        wrapped_data_key=wrapped,
+        key_id=provider.key_id,
+    )
 
 
 def open_sealed(
@@ -73,7 +78,9 @@ def open_sealed(
 ) -> bytes:
     """Decrypt one object. Raises KeyProviderError for key problems and IntegrityError when authentication fails."""
     if key_id != provider.key_id:
-        raise KeyProviderError(f"object was sealed with key id {key_id!r}, which is not the configured key")
+        raise KeyProviderError(
+            f"object was sealed with key id {key_id!r}, which is not the configured key"
+        )
     data_key = provider.unwrap(wrapped_data_key, _wrap_aad(storage_key))
     try:
         return AESGCM(data_key).decrypt(nonce, ciphertext, _content_aad(storage_key))

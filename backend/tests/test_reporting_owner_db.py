@@ -6,6 +6,7 @@ can assign no case and triage none. The database tests use the helpers of tests/
 skipped unless SAFE_TEST_DATABASE=1.
 """
 
+import uuid
 import pytest
 
 from safe_kit import audit
@@ -16,6 +17,7 @@ from safe_kit.rbac import RoleOutcome, list_role_permissions, set_role_permissio
 # Fixtures and helpers are imported from the sibling test module and requested by name, which pyflakes reports as a
 # redefinition. That is the intended use here.
 # ruff: noqa: F401, F811
+from if_match import user_if_match
 from test_reporter_channel import (
     CONTACT,
     contact_audit_rows,
@@ -28,17 +30,27 @@ from test_reporter_channel import (
 )
 
 
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
+
+
 @requires_database
 def test_migration_seeds_the_role_and_its_two_grants():
     migrate()
-    assert list_role_permissions()["reporting_owner"] == ["cases:read_all", "reporter_contact:read"]
+    assert list_role_permissions()["reporting_owner"] == [
+        "cases:read_all",
+        "reporter_contact:read",
+    ]
 
 
 @requires_database
 def test_the_users_role_check_accepts_reporting_owner():
     account = new_user("reporting_owner")
     with connect() as conn:
-        role = conn.execute("SELECT role FROM users WHERE id = %s", (account,)).fetchone()[0]
+        role = conn.execute(
+            "SELECT role FROM users WHERE id = %s", (account,)
+        ).fetchone()[0]
     assert role == "reporting_owner"
 
 
@@ -46,7 +58,10 @@ def test_the_users_role_check_accepts_reporting_owner():
 def test_saving_the_fixed_set_again_is_refused_and_changes_nothing():
     migrate()
     before = list_role_permissions()["reporting_owner"]
-    assert set_role_permissions("reporting_owner", frozenset(before)) is RoleOutcome.REPORTING_OWNER_FIXED
+    assert (
+        set_role_permissions("reporting_owner", frozenset(before))
+        is RoleOutcome.REPORTING_OWNER_FIXED
+    )
     assert list_role_permissions()["reporting_owner"] == before
 
 
@@ -62,7 +77,9 @@ def test_the_matrix_refuses_to_remove_the_grant_and_keeps_it():
 def test_the_matrix_refuses_to_change_the_role_at_all():
     migrate()
     before = list_role_permissions()["reporting_owner"]
-    outcome = set_role_permissions("reporting_owner", frozenset({"cases:read_all", "cases:triage"}))
+    outcome = set_role_permissions(
+        "reporting_owner", frozenset({"cases:read_all", "cases:triage"})
+    )
     assert outcome is RoleOutcome.REPORTING_OWNER_FIXED
     assert list_role_permissions()["reporting_owner"] == before
 
@@ -76,7 +93,9 @@ def test_the_matrix_does_not_add_back_a_grant_removed_by_hand():
             "WHERE role = 'reporting_owner' AND permission = 'reporter_contact:read' AND NOT is_deleted"
         )
     try:
-        outcome = set_role_permissions("reporting_owner", frozenset({"cases:read_all", "reporter_contact:read"}))
+        outcome = set_role_permissions(
+            "reporting_owner", frozenset({"cases:read_all", "reporter_contact:read"})
+        )
         assert outcome is RoleOutcome.REPORTING_OWNER_FIXED
         assert "reporter_contact:read" not in list_role_permissions()["reporting_owner"]
     finally:
@@ -88,7 +107,9 @@ def test_the_matrix_does_not_add_back_a_grant_removed_by_hand():
 
 
 @requires_database
-def test_reporting_owner_reads_the_contact_of_an_open_unassigned_case(db_client, people):
+def test_reporting_owner_reads_the_contact_of_an_open_unassigned_case(
+    db_client, people
+):
     case_id = open_report_via_api(db_client, people["reporter"])
     owner = new_user("reporting_owner")
 
@@ -109,7 +130,9 @@ def test_reporting_owner_can_see_the_case_it_reads(db_client, people):
 
 @requires_database
 @pytest.mark.parametrize("role", ["admin", "triager"])
-def test_admin_and_triager_are_refused_the_contact_and_nothing_is_audited(db_client, people, role):
+def test_admin_and_triager_are_refused_the_contact_and_nothing_is_audited(
+    db_client, people, role
+):
     case_id = open_report_via_api(db_client, people["reporter"])
     caller = new_user(role)
 
@@ -124,7 +147,11 @@ def test_reporting_owner_cannot_assign_the_case(db_client, people):
     case_id = open_report_via_api(db_client, people["reporter"])
     owner = new_user("reporting_owner")
 
-    response = db_client(owner).post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["investigator"]})
+    response = db_client(owner).post(
+        f"/api/v1/cases/{case_id}/assignments",
+        json={"user_id": people["investigator"]},
+        headers=idem(),
+    )
 
     assert response.status_code == 403
 
@@ -134,7 +161,11 @@ def test_admin_assigns_the_reporting_owner_role_and_the_change_is_audited(db_cli
     admin = new_user("admin")
     target = new_user("auditor")
 
-    response = db_client(admin).patch(f"/api/v1/users/{target}", json={"role": "reporting_owner"})
+    response = db_client(admin).patch(
+        f"/api/v1/users/{target}",
+        json={"role": "reporting_owner"},
+        headers=user_if_match(db_client(admin), target),
+    )
 
     assert response.status_code == 200
     assert response.json()["role"] == "reporting_owner"
@@ -144,4 +175,6 @@ def test_admin_assigns_the_reporting_owner_role_and_the_change_is_audited(db_cli
             "ORDER BY created_at",
             (audit.USER_UPDATE, target),
         ).fetchall()
-    assert rows == [(admin, {"changes": {"role": {"from": "auditor", "to": "reporting_owner"}}})]
+    assert rows == [
+        (admin, {"changes": {"role": {"from": "auditor", "to": "reporting_owner"}}})
+    ]

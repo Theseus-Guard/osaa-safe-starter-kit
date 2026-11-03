@@ -18,7 +18,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/co
 import { SystemClock } from "@/components/system-clock";
 import { cn } from "@/lib/utils";
 import { canReadCases } from "../permissions";
-import { hashFor, Page, PAGE_INFO, PAGES } from "../routes";
+import { hashFor, Page, PAGE_INFO, PAGES, pageInNavigation } from "../routes";
 import { isThemePreference, setPreference, ThemePreference, useThemePreference } from "../theme";
 import { CaseSearch } from "./cases/CaseSearch";
 
@@ -34,7 +34,7 @@ interface Props {
 export function AppShell({ profile, page, onLogout, children, heading }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const isAdmin = profile.role === "admin";
-  const visiblePages = PAGES.filter((item) => isAdmin || !PAGE_INFO[item].adminOnly);
+  const visiblePages = PAGES.filter((item) => pageInNavigation(item, isAdmin, profile.permissions));
   const info = heading ?? PAGE_INFO[page];
   const canSearchCases = canReadCases(profile.permissions);
 
@@ -64,20 +64,24 @@ export function AppShell({ profile, page, onLogout, children, heading }: Props) 
           <span className="font-semibold tracking-tight">SAFE-Starter-Kit</span>
         </div>
         {canSearchCases && (
-          <div className="order-last w-full md:order-none md:w-auto md:max-w-[38rem] md:flex-1">
+          <div className="order-last w-full min-w-0 md:order-none md:w-auto md:max-w-[38rem] md:flex-1">
             <CaseSearch />
           </div>
         )}
-        <div className="flex items-center justify-end gap-3 md:flex-1">
-          <SystemClock />
+        {/* The right side keeps its full width, so the clock and the user menu never run under the search box. */}
+        <div className="flex shrink-0 items-center justify-end gap-3 md:flex-1">
+          {/* The clock is hidden on phones, where the header has no room for it next to the user menu. */}
+          <div className="hidden sm:block">
+            <SystemClock />
+          </div>
           <UserMenu profile={profile} onLogout={onLogout} />
         </div>
       </header>
       <div className="flex flex-1">
-        {/* Pinned under the header (h-14 on md and up), so Log out stays visible on long pages. */}
+        {/* Pinned under the header (h-14 on md and up). Log out sits a little above the bottom edge of the sidebar. */}
         <aside className="hidden w-56 shrink-0 flex-col border-r p-3 md:sticky md:top-14 md:flex md:h-[calc(100svh-3.5rem)] md:self-start">
           <Navigation pages={visiblePages} current={page} />
-          <Button variant="outline" className="mt-auto justify-start gap-2" onClick={onLogout}>
+          <Button variant="outline" className="mt-auto mb-12 justify-start gap-2" onClick={onLogout}>
             <LogOut />
             Log out
           </Button>
@@ -150,7 +154,7 @@ function UserMenu({ profile, onLogout }: UserMenuProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button variant="ghost" className="max-w-full gap-2" />}>
-        <span className="max-w-64 truncate text-sm">{displayName(profile)}</span>
+        <span className="max-w-32 truncate text-sm sm:max-w-64">{displayName(profile)}</span>
         <Badge variant="secondary">{profile.role}</Badge>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">

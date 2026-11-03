@@ -17,21 +17,35 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from safe_kit import api, audit, auth, case_import, system_timezone, users
+from safe_kit import api, audit, auth, case_import, reviews_api, system_timezone, users
 from safe_kit.cases import (
     Assignment,
     Case,
     CaseScope,
     HistoryEntry,
     Outcome,
-    Review,
     closure_blockers,
     redact_history,
 )
 from safe_kit.db import connect
+from safe_kit.reporter_channel import REPORTER_CONTACT_READ
+from safe_kit.reviews import RoundOutcome
 from test_case_records_db import reporter_contact_granted_directly
-from safe_kit.rbac import ADMIN_REQUIRED_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, list_role_permissions, set_role_permissions
+from safe_kit.rbac import (
+    ADMIN_REQUIRED_PERMISSIONS,
+    DEFAULT_ROLE_PERMISSIONS,
+    list_role_permissions,
+    set_role_permissions,
+)
 from safe_kit.users import User
+from error_body import without_request_id
+from if_match import task_if_match
+
+
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
+
 
 REPORTER_ID = "11111111-1111-1111-1111-111111111111"
 TRIAGER_ID = "22222222-2222-2222-2222-222222222222"
@@ -55,9 +69,13 @@ def system_timezone_configured():
 
     migrate()  # idempotent: applies pending migrations on a fresh test database
     with connect() as conn:
-        exists = conn.execute("SELECT EXISTS (SELECT 1 FROM system_timezone WHERE NOT is_deleted)").fetchone()[0]
+        exists = conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM system_timezone WHERE NOT is_deleted)"
+        ).fetchone()[0]
         if not exists:
-            conn.execute("INSERT INTO system_timezone (timezone) VALUES ('Europe/Istanbul')")
+            conn.execute(
+                "INSERT INTO system_timezone (timezone) VALUES ('Europe/Istanbul')"
+            )
     yield
 
 
@@ -78,26 +96,51 @@ def make_user(user_id, role):
 
 
 def test_closure_needs_at_least_one_review():
-    assert closure_blockers(0, [("affected_customers", "done")]) == ["no review is recorded"]
+    assert closure_blockers(0, [("affected_customers", "done")]) == [
+        "no review is recorded"
+    ]
 
 
 def test_closure_is_blocked_by_open_deadline_and_open_weekly_update():
-    blockers = closure_blockers(1, [("affected_customers", "open"), ("weekly_update", "open")])
-    assert blockers == ["deadline task affected_customers is open", "deadline task weekly_update is open"]
+    blockers = closure_blockers(
+        1, [("affected_customers", "open"), ("weekly_update", "open")]
+    )
+    assert blockers == [
+        "deadline task affected_customers is open",
+        "deadline task weekly_update is open",
+    ]
 
 
 def test_done_and_not_applicable_tasks_do_not_block_closure():
-    assert closure_blockers(1, [("affected_customers", "done"), ("broader_advisory", "not_applicable")]) == []
+    assert (
+        closure_blockers(
+            1, [("affected_customers", "done"), ("broader_advisory", "not_applicable")]
+        )
+        == []
+    )
 
 
 def test_reporter_scope_sees_only_own_cases():
-    sql, params = CaseScope.from_permissions(REPORTER_ID, frozenset({"cases:read_own"})).visibility_sql()
+    sql, params = CaseScope.from_permissions(
+        REPORTER_ID, frozenset({"cases:read_own"})
+    ).visibility_sql()
     assert sql == "(cases.created_by = %s)"
     assert params == (REPORTER_ID,)
 
 
-def test_triager_scope_sees_every_case_except_unassigned_reporter_cases():
-    sql, params = CaseScope.from_permissions(TRIAGER_ID, DEFAULT_ROLE_PERMISSIONS["triager"]).visibility_sql()
+def test_triager_scope_sees_every_case_including_unassigned_reporter_cases():
+    # The triager holds cases:assign, so it may assign a reporter-channel case that has no assignee yet.
+    scope = CaseScope.from_permissions(TRIAGER_ID, DEFAULT_ROLE_PERMISSIONS["triager"])
+    assert scope.can_assign is True
+    assert scope.reporter_contact is False
+    assert scope.visibility_sql() == ("TRUE", ())
+
+
+def test_read_all_without_assign_keeps_hiding_unassigned_reporter_cases():
+    # The disclosure approver holds cases:read_all but not cases:assign, so the reporter-channel rule is unchanged.
+    sql, params = CaseScope.from_permissions(
+        TRIAGER_ID, frozenset({"cases:read_all"})
+    ).visibility_sql()
     assert sql == (
         "(NOT EXISTS (SELECT 1 FROM reporter_identities ri WHERE ri.case_id = cases.id AND NOT ri.is_deleted) "
         "OR EXISTS (SELECT 1 FROM case_assignments ca WHERE ca.case_id = cases.id AND NOT ca.is_deleted))"
@@ -106,23 +149,31 @@ def test_triager_scope_sees_every_case_except_unassigned_reporter_cases():
 
 
 def test_reporter_contact_holder_sees_every_case_including_unassigned_reporter_cases():
-    scope = CaseScope.from_permissions(TRIAGER_ID, DEFAULT_ROLE_PERMISSIONS["triager"] | {"reporter_contact:read"})
+    scope = CaseScope.from_permissions(
+        TRIAGER_ID, DEFAULT_ROLE_PERMISSIONS["triager"] | {"reporter_contact:read"}
+    )
     assert scope.reporter_contact is True
     assert scope.visibility_sql() == ("TRUE", ())
 
 
 def test_reporter_contact_permission_is_granted_by_default_to_reporting_owner_only():
-    holders = {role for role, permissions in DEFAULT_ROLE_PERMISSIONS.items() if "reporter_contact:read" in permissions}
+    holders = {
+        role
+        for role, permissions in DEFAULT_ROLE_PERMISSIONS.items()
+        if "reporter_contact:read" in permissions
+    }
     assert holders == {"reporting_owner"}
 
 
 def test_assignee_scope_needs_an_active_assignment():
-    sql, params = CaseScope.from_permissions(INVESTIGATOR_ID, DEFAULT_ROLE_PERMISSIONS["investigator"]).visibility_sql()
+    sql, params = CaseScope.from_permissions(
+        INVESTIGATOR_ID, DEFAULT_ROLE_PERMISSIONS["investigator"]
+    ).visibility_sql()
     assert "case_assignments" in sql and "NOT ca.is_deleted" in sql
     assert params == (INVESTIGATOR_ID,)
 
 
-@pytest.mark.parametrize("role", ["admin", "auditor", "disclosure_approver"])
+@pytest.mark.parametrize("role", ["admin", "auditor"])
 def test_roles_without_case_permissions_see_no_case(role):
     scope = CaseScope.from_permissions(ADMIN_ID, DEFAULT_ROLE_PERMISSIONS[role])
     assert scope.visibility_sql() == ("FALSE", ())
@@ -137,7 +188,11 @@ def test_history_redaction_keeps_only_action_and_timestamp():
         details={"status": {"old": "open", "new": "closed"}},
     )
     [redacted] = redact_history([entry])
-    assert (redacted.id, redacted.action, redacted.created_at) == ("e1", audit.CASE_CLOSE, NOW)
+    assert (redacted.id, redacted.action, redacted.created_at) == (
+        "e1",
+        audit.CASE_CLOSE,
+        NOW,
+    )
     assert redacted.actor_id is None
     assert redacted.details is None
 
@@ -147,7 +202,9 @@ def test_case_roles_in_the_default_seed():
     assert {"cases:read_all", "cases:assign", "cases:close", "cases:triage"} <= triager
     assert "cases:read_all" not in DEFAULT_ROLE_PERMISSIONS["reporter"]
     assert "cases:read_all" not in DEFAULT_ROLE_PERMISSIONS["investigator"]
-    assert not {"cases:assign", "cases:close"} & DEFAULT_ROLE_PERMISSIONS["investigator"]
+    assert (
+        not {"cases:assign", "cases:close"} & DEFAULT_ROLE_PERMISSIONS["investigator"]
+    )
     assert not {"cases:assign", "cases:close"} & DEFAULT_ROLE_PERMISSIONS["reviewer"]
     # Assignability is its own permission: investigator and reviewer hold it, the triager (who assigns) does not.
     assert "cases:assignable" in DEFAULT_ROLE_PERMISSIONS["investigator"]
@@ -173,7 +230,11 @@ def test_auditor_keeps_only_audit_read_among_its_permissions():
 def caller(monkeypatch):
     state = {"user": make_user(REPORTER_ID, "reporter")}
     api.app.dependency_overrides[auth.current_user] = lambda: state["user"]
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()))
+    monkeypatch.setattr(
+        auth,
+        "permissions_for_role",
+        lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()),
+    )
     yield state
     api.app.dependency_overrides.clear()
 
@@ -219,7 +280,9 @@ def sample_assignment() -> Assignment:
 def test_unknown_or_invisible_case_is_404_on_every_read(client, caller, monkeypatch):
     monkeypatch.setattr(api, "find_visible_case", lambda case_id, scope: None)
     monkeypatch.setattr(api, "list_assignments", lambda case_id, scope: None)
-    monkeypatch.setattr(api, "case_history", lambda case_id, scope, limit, offset, **kwargs: None)
+    monkeypatch.setattr(
+        api, "case_history", lambda case_id, scope, limit, offset, **kwargs: None
+    )
     assert client.get(f"/api/v1/cases/{CASE_ID}").status_code == 404
     assert client.get(f"/api/v1/cases/{CASE_ID}/assignments").status_code == 404
     assert client.get(f"/api/v1/cases/{CASE_ID}/history").status_code == 404
@@ -228,42 +291,121 @@ def test_unknown_or_invisible_case_is_404_on_every_read(client, caller, monkeypa
 def test_list_is_built_from_the_callers_scope(client, caller, monkeypatch):
     seen = {}
 
-    def fake_list(scope, limit, offset, q=None):
+    def fake_list(scope, limit, after=None, q=None, **kwargs):
         seen["scope"] = scope
         return []
 
     monkeypatch.setattr(api, "list_visible_cases", fake_list)
-    monkeypatch.setattr(api, "count_visible_cases", lambda scope, q=None: 0)
     as_role(caller, TRIAGER_ID, "triager")
     assert client.get("/api/v1/cases").status_code == 200
-    assert seen["scope"] == CaseScope(user_id=TRIAGER_ID, read_all=True, read_assigned=True)
+    assert seen["scope"] == CaseScope(
+        user_id=TRIAGER_ID, read_all=True, read_assigned=True, can_assign=True
+    )
 
 
-@pytest.mark.parametrize("role", ["admin", "auditor", "disclosure_approver"])
-def test_roles_without_case_permissions_get_403_on_every_case_endpoint(client, caller, role):
+@pytest.mark.parametrize("role", ["admin", "auditor"])
+def test_roles_without_case_permissions_get_403_on_every_case_endpoint(
+    client, caller, role
+):
     as_role(caller, ADMIN_ID, role)
     assert client.get("/api/v1/cases").status_code == 403
     assert client.get(f"/api/v1/cases/{CASE_ID}").status_code == 403
     assert client.get(f"/api/v1/cases/{CASE_ID}/assignments").status_code == 403
     assert client.get(f"/api/v1/cases/{CASE_ID}/history").status_code == 403
-    assert client.post(f"/api/v1/cases/{CASE_ID}/assignments", json={"user_id": ASSIGNEE_ID}).status_code == 403
-    assert client.post(f"/api/v1/cases/{CASE_ID}/close", json={"reason": "done"}).status_code == 403
-    assert client.post(f"/api/v1/cases/{CASE_ID}/reviews", json={"outcome": "pass"}).status_code == 403
+    assert (
+        client.post(
+            f"/api/v1/cases/{CASE_ID}/assignments",
+            json={"user_id": ASSIGNEE_ID},
+            headers=idem(),
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            f"/api/v1/cases/{CASE_ID}/close", json={"reason": "done"}, headers=idem()
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            "/api/v1/reviews", headers=idem(), json={"case_id": CASE_ID}
+        ).status_code
+        == 403
+    )
+
+
+def test_the_disclosure_approver_may_not_change_deadlines_assign_close_or_review(
+    client, caller
+):
+    # The approver reads the case through cases:read_all (migration 0044), which the deadline routes also accept. The
+    # approver role is refused those routes by name; the other writes need permissions the approver does not hold.
+    as_role(caller, ADMIN_ID, "disclosure_approver")
+    deadline = f"/api/v1/cases/{CASE_ID}/deadlines/{TASK_ID}"
+    refused = [
+        client.patch(deadline, json={"status": "done"}, headers=idem()),
+        client.post(f"{deadline}/restore", headers=idem()),
+        client.post(
+            f"/api/v1/cases/{CASE_ID}/assignments",
+            json={"user_id": ASSIGNEE_ID},
+            headers=idem(),
+        ),
+        client.post(
+            f"/api/v1/cases/{CASE_ID}/close", json={"reason": "done"}, headers=idem()
+        ),
+        client.post("/api/v1/reviews", headers=idem(), json={"case_id": CASE_ID}),
+    ]
+    for response in refused:
+        assert response.status_code == 403, response.request.url
+        assert response.json()["detail"] == "forbidden"
 
 
 def test_reporter_cannot_assign_review_close_or_change_deadlines(client, caller):
-    assert client.post(f"/api/v1/cases/{CASE_ID}/assignments", json={"user_id": ASSIGNEE_ID}).status_code == 403
-    assert client.post(f"/api/v1/cases/{CASE_ID}/reviews", json={"outcome": "pass"}).status_code == 403
-    assert client.post(f"/api/v1/cases/{CASE_ID}/close", json={"reason": "done"}).status_code == 403
+    assert (
+        client.post(
+            f"/api/v1/cases/{CASE_ID}/assignments",
+            json={"user_id": ASSIGNEE_ID},
+            headers=idem(),
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            "/api/v1/reviews", headers=idem(), json={"case_id": CASE_ID}
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            f"/api/v1/cases/{CASE_ID}/close", json={"reason": "done"}, headers=idem()
+        ).status_code
+        == 403
+    )
     response = client.patch(
-        f"/api/v1/cases/{CASE_ID}/deadlines/{TASK_ID}", json={"status": "done"}
+        f"/api/v1/cases/{CASE_ID}/deadlines/{TASK_ID}",
+        json={"status": "done"},
+        headers=idem(),
     )
     assert response.status_code == 403
 
 
-def test_triager_cannot_record_a_review(client, caller):
+def test_triager_cannot_open_a_review_round_or_set_a_layer(client, caller):
     as_role(caller, TRIAGER_ID, "triager")
-    assert client.post(f"/api/v1/cases/{CASE_ID}/reviews", json={"outcome": "pass"}).status_code == 403
+    assert (
+        client.post(
+            "/api/v1/reviews", headers=idem(), json={"case_id": CASE_ID}
+        ).status_code
+        == 403
+    )
+    round_id = str(uuid.uuid4())
+    body = {"outcome": "pass"}
+    assert (
+        client.patch(
+            f"/api/v1/reviews/{round_id}/layers/model",
+            json=body,
+            headers={**idem(), "If-Match": '"1"'},
+        ).status_code
+        == 403
+    )
 
 
 @pytest.mark.parametrize(
@@ -272,22 +414,42 @@ def test_triager_cannot_record_a_review(client, caller):
         (Outcome.NOT_FOUND, 404, "case not found"),
         (Outcome.CLOSED, 409, "case is closed"),
         (Outcome.ASSIGNEE_INACTIVE, 422, "assignee is not an active user"),
-        (Outcome.ROLE_NOT_ASSIGNABLE, 422, "assignee must be an investigator or reviewer"),
+        (
+            Outcome.ROLE_NOT_ASSIGNABLE,
+            422,
+            "assignee must be an investigator or reviewer",
+        ),
         (Outcome.DUPLICATE, 409, "user is already assigned to this case"),
     ],
 )
 def test_assignment_refusals(client, caller, monkeypatch, outcome, status, detail):
     as_role(caller, TRIAGER_ID, "triager")
-    monkeypatch.setattr(api, "assign_member", lambda case_id, user_id, scope: (outcome, None))
-    response = client.post(f"/api/v1/cases/{CASE_ID}/assignments", json={"user_id": ASSIGNEE_ID})
+    monkeypatch.setattr(
+        api, "assign_member", lambda case_id, user_id, scope, **kwargs: (outcome, None)
+    )
+    response = client.post(
+        f"/api/v1/cases/{CASE_ID}/assignments",
+        json={"user_id": ASSIGNEE_ID},
+        headers=idem(),
+    )
     assert response.status_code == status
-    assert response.json() == {"detail": detail}
+    assert response.json()["detail"] == detail
 
 
-def test_assignment_created_returns_201_with_the_assignment(client, caller, monkeypatch):
+def test_assignment_created_returns_201_with_the_assignment(
+    client, caller, monkeypatch
+):
     as_role(caller, TRIAGER_ID, "triager")
-    monkeypatch.setattr(api, "assign_member", lambda case_id, user_id, scope: (Outcome.OK, sample_assignment()))
-    response = client.post(f"/api/v1/cases/{CASE_ID}/assignments", json={"user_id": ASSIGNEE_ID})
+    monkeypatch.setattr(
+        api,
+        "assign_member",
+        lambda case_id, user_id, scope, **kwargs: (Outcome.OK, sample_assignment()),
+    )
+    response = client.post(
+        f"/api/v1/cases/{CASE_ID}/assignments",
+        json={"user_id": ASSIGNEE_ID},
+        headers=idem(),
+    )
     assert response.status_code == 201
     assert response.json()["user_id"] == ASSIGNEE_ID
     assert response.json()["role"] == "investigator"
@@ -295,7 +457,14 @@ def test_assignment_created_returns_201_with_the_assignment(client, caller, monk
 
 def test_assignee_must_be_a_user_id(client, caller):
     as_role(caller, TRIAGER_ID, "triager")
-    assert client.post(f"/api/v1/cases/{CASE_ID}/assignments", json={"user_id": "not-a-uuid"}).status_code == 422
+    assert (
+        client.post(
+            f"/api/v1/cases/{CASE_ID}/assignments",
+            json={"user_id": "not-a-uuid"},
+            headers=idem(),
+        ).status_code
+        == 400
+    )
 
 
 @pytest.mark.parametrize(
@@ -308,86 +477,181 @@ def test_assignee_must_be_a_user_id(client, caller):
 )
 def test_unassign_refusals(client, caller, monkeypatch, outcome, status, detail):
     as_role(caller, TRIAGER_ID, "triager")
-    monkeypatch.setattr(api, "unassign_member", lambda case_id, user_id, scope: outcome)
+    monkeypatch.setattr(
+        api, "unassign_member", lambda case_id, user_id, scope, **kwargs: outcome
+    )
     response = client.delete(f"/api/v1/cases/{CASE_ID}/assignments/{ASSIGNEE_ID}")
     assert response.status_code == status
-    assert response.json() == {"detail": detail}
+    assert response.json()["detail"] == detail
 
 
 def test_unassign_success_is_204(client, caller, monkeypatch):
     as_role(caller, TRIAGER_ID, "triager")
-    monkeypatch.setattr(api, "unassign_member", lambda case_id, user_id, scope: Outcome.OK)
-    assert client.delete(f"/api/v1/cases/{CASE_ID}/assignments/{ASSIGNEE_ID}").status_code == 204
+    monkeypatch.setattr(
+        api, "unassign_member", lambda case_id, user_id, scope, **kwargs: Outcome.OK
+    )
+    assert (
+        client.delete(f"/api/v1/cases/{CASE_ID}/assignments/{ASSIGNEE_ID}").status_code
+        == 204
+    )
 
 
-def test_reviewer_review_outcome_must_be_a_known_value(client, caller):
+def test_layer_outcome_must_be_a_known_value(client, caller):
     as_role(caller, REVIEWER_ID, "reviewer")
-    assert client.post(f"/api/v1/cases/{CASE_ID}/reviews", json={"outcome": "maybe"}).status_code == 422
+    round_id = str(uuid.uuid4())
+    body = {"outcome": "maybe"}
+    assert (
+        client.patch(
+            f"/api/v1/reviews/{round_id}/layers/model",
+            json=body,
+            headers={**idem(), "If-Match": '"1"'},
+        ).status_code
+        == 400
+    )
 
 
-def test_review_note_is_limited_to_1000_characters(client, caller):
+def test_layer_reason_is_limited_to_1000_characters(client, caller):
     as_role(caller, REVIEWER_ID, "reviewer")
-    too_long = client.post(f"/api/v1/cases/{CASE_ID}/reviews", json={"outcome": "pass", "note": "x" * 1001})
-    assert too_long.status_code == 422
+    round_id = str(uuid.uuid4())
+    body = {"outcome": "pass", "reason": "x" * 1001}
+    assert (
+        client.patch(
+            f"/api/v1/reviews/{round_id}/layers/model",
+            json=body,
+            headers={**idem(), "If-Match": '"1"'},
+        ).status_code
+        == 400
+    )
 
 
-def test_review_refusals_and_success(client, caller, monkeypatch):
+def test_layer_refusals_map_to_their_status_codes(client, caller, monkeypatch):
     as_role(caller, REVIEWER_ID, "reviewer")
-    monkeypatch.setattr(api, "record_review", lambda case_id, outcome, note, scope: (Outcome.NOT_ASSIGNED, None))
-    response = client.post(f"/api/v1/cases/{CASE_ID}/reviews", json={"outcome": "pass"})
+    round_id = str(uuid.uuid4())
+    body = {"outcome": "pass"}
+    url = f"/api/v1/reviews/{round_id}/layers/model"
+
+    monkeypatch.setattr(
+        reviews_api,
+        "set_layer",
+        lambda *args, **kwargs: (RoundOutcome.NOT_ASSIGNED, None),
+    )
+    response = client.patch(url, headers={**idem(), "If-Match": '"1"'}, json=body)
     assert response.status_code == 403
-    assert response.json() == {"detail": "only an assigned reviewer can record a review"}
+    assert response.json()["detail"] == "only an assigned reviewer can record a review"
 
-    monkeypatch.setattr(api, "record_review", lambda case_id, outcome, note, scope: (Outcome.CLOSED, None))
-    assert client.post(f"/api/v1/cases/{CASE_ID}/reviews", json={"outcome": "pass"}).json() == {"detail": "case is closed"}
+    monkeypatch.setattr(
+        reviews_api, "set_layer", lambda *args, **kwargs: (RoundOutcome.CLOSED, None)
+    )
+    assert (
+        client.patch(url, headers={**idem(), "If-Match": '"1"'}, json=body).json()[
+            "detail"
+        ]
+        == "case is closed"
+    )
 
+    monkeypatch.setattr(
+        reviews_api, "set_layer", lambda *args, **kwargs: (RoundOutcome.NOT_FOUND, None)
+    )
+    assert (
+        client.patch(url, headers={**idem(), "If-Match": '"1"'}, json=body).json()[
+            "detail"
+        ]
+        == "review not found"
+    )
+
+
+def test_layer_blank_reason_is_stored_as_no_reason(client, caller, monkeypatch):
+    as_role(caller, REVIEWER_ID, "reviewer")
     seen = {}
 
-    def fake_review(case_id, outcome, note, scope):
-        seen["note"] = note
-        return Outcome.OK, Review(id="r1", case_id=case_id, outcome=outcome, note=note, created_at=NOW)
+    def fake_set_layer(
+        round_id,
+        layer,
+        outcome,
+        reason,
+        evidence_ids,
+        expected_revision,
+        scope,
+        **kwargs,
+    ):
+        seen["reason"] = reason
+        return RoundOutcome.NOT_FOUND, None
 
-    monkeypatch.setattr(api, "record_review", fake_review)
-    response = client.post(f"/api/v1/cases/{CASE_ID}/reviews", json={"outcome": "pass", "note": "   "})
-    assert response.status_code == 201
-    assert seen["note"] is None  # a blank note is stored as no note
+    monkeypatch.setattr(reviews_api, "set_layer", fake_set_layer)
+    client.patch(
+        f"/api/v1/reviews/{uuid.uuid4()}/layers/model",
+        json={"outcome": "pass", "reason": "   "},
+        headers={**idem(), "If-Match": '"1"'},
+    )
+    assert (
+        seen["reason"] is None
+    )  # a pass needs no reason, and a blank one is stored as none
 
 
 def test_closure_refusal_lists_the_blockers(client, caller, monkeypatch):
     as_role(caller, TRIAGER_ID, "triager")
     blockers = ["no review is recorded", "deadline task weekly_update is open"]
-    monkeypatch.setattr(api, "close_case", lambda case_id, reason, scope: (Outcome.BLOCKED, blockers))
-    response = client.post(f"/api/v1/cases/{CASE_ID}/close", json={"reason": "done"})
+    monkeypatch.setattr(
+        api,
+        "close_case",
+        lambda case_id, reason, scope, **kwargs: (Outcome.BLOCKED, blockers),
+    )
+    response = client.post(
+        f"/api/v1/cases/{CASE_ID}/close", json={"reason": "done"}, headers=idem()
+    )
     assert response.status_code == 409
-    assert response.json() == {
-        "detail": "case cannot be closed: no review is recorded; deadline task weekly_update is open"
-    }
+    assert (
+        response.json()["detail"]
+        == "case cannot be closed: no review is recorded; deadline task weekly_update is open"
+    )
 
 
-def test_closing_an_already_closed_case_is_409_case_is_closed(client, caller, monkeypatch):
+def test_closing_an_already_closed_case_is_409_case_is_closed(
+    client, caller, monkeypatch
+):
     as_role(caller, TRIAGER_ID, "triager")
-    monkeypatch.setattr(api, "close_case", lambda case_id, reason, scope: (Outcome.CLOSED, []))
-    assert client.post(f"/api/v1/cases/{CASE_ID}/close", json={"reason": "again"}).json() == {"detail": "case is closed"}
+    monkeypatch.setattr(
+        api, "close_case", lambda case_id, reason, scope, **kwargs: (Outcome.CLOSED, [])
+    )
+    assert (
+        client.post(
+            f"/api/v1/cases/{CASE_ID}/close", json={"reason": "again"}, headers=idem()
+        ).json()["detail"]
+        == "case is closed"
+    )
 
 
 @pytest.mark.parametrize("reason", ["", "   ", "x" * 1001])
 def test_close_reason_must_be_1_to_1000_characters(client, caller, reason):
     as_role(caller, TRIAGER_ID, "triager")
-    assert client.post(f"/api/v1/cases/{CASE_ID}/close", json={"reason": reason}).status_code == 422
+    assert (
+        client.post(
+            f"/api/v1/cases/{CASE_ID}/close", json={"reason": reason}, headers=idem()
+        ).status_code
+        == 400
+    )
 
 
-def test_close_success_returns_the_closed_case_and_strips_the_reason(client, caller, monkeypatch):
+def test_close_success_returns_the_closed_case_and_strips_the_reason(
+    client, caller, monkeypatch
+):
     as_role(caller, TRIAGER_ID, "triager")
     seen = {}
 
-    def fake_close(case_id, reason, scope):
+    def fake_close(case_id, reason, scope, **kwargs):
         seen["reason"] = reason
         return Outcome.OK, []
 
-    closed = sample_case(status="closed", closed_at=NOW, closed_by=TRIAGER_ID, close_reason="Confirmed")
+    closed = sample_case(
+        status="closed", closed_at=NOW, closed_by=TRIAGER_ID, close_reason="Confirmed"
+    )
     monkeypatch.setattr(api, "close_case", fake_close)
     monkeypatch.setattr(api, "find_visible_case", lambda case_id, scope: closed)
-    response = client.post(f"/api/v1/cases/{CASE_ID}/close", json={"reason": "  Confirmed  "})
+    response = client.post(
+        f"/api/v1/cases/{CASE_ID}/close",
+        json={"reason": "  Confirmed  "},
+        headers=idem(),
+    )
     assert response.status_code == 200
     assert seen["reason"] == "Confirmed"
     assert response.json()["status"] == "closed"
@@ -395,40 +659,70 @@ def test_close_success_returns_the_closed_case_and_strips_the_reason(client, cal
 
 def test_reopen_refusal_when_the_case_is_open(client, caller, monkeypatch):
     as_role(caller, TRIAGER_ID, "triager")
-    monkeypatch.setattr(api, "reopen_case", lambda case_id, reason, scope: Outcome.NOT_CLOSED)
-    response = client.post(f"/api/v1/cases/{CASE_ID}/reopen", json={"reason": "new facts"})
+    monkeypatch.setattr(
+        api, "reopen_case", lambda case_id, reason, scope, **kwargs: Outcome.NOT_CLOSED
+    )
+    response = client.post(
+        f"/api/v1/cases/{CASE_ID}/reopen", json={"reason": "new facts"}, headers=idem()
+    )
     assert response.status_code == 409
-    assert response.json() == {"detail": "case is not closed"}
+    assert response.json()["detail"] == "case is not closed"
 
 
 def test_deadline_update_bodies_are_validated(client, caller):
     as_role(caller, TRIAGER_ID, "triager")
     url = f"/api/v1/cases/{CASE_ID}/deadlines/{TASK_ID}"
-    assert client.patch(url, json={"status": "not_applicable"}).status_code == 422
-    assert client.patch(url, json={"status": "not_applicable", "reason": "  "}).status_code == 422
-    assert client.patch(url, json={"status": "done", "reason": "not needed"}).status_code == 422
-    assert client.patch(url, json={"status": "archived"}).status_code == 422
+    assert (
+        client.patch(url, headers=idem(), json={"status": "not_applicable"}).status_code
+        == 400
+    )
+    assert (
+        client.patch(
+            url, headers=idem(), json={"status": "not_applicable", "reason": "  "}
+        ).status_code
+        == 400
+    )
+    assert (
+        client.patch(
+            url, headers=idem(), json={"status": "done", "reason": "not needed"}
+        ).status_code
+        == 400
+    )
+    assert (
+        client.patch(url, headers=idem(), json={"status": "archived"}).status_code
+        == 400
+    )
 
 
-def test_deadline_update_passes_the_triage_permission_to_the_service(client, caller, monkeypatch):
+def test_deadline_update_passes_the_triage_permission_to_the_service(
+    client, caller, monkeypatch
+):
     seen = {}
 
-    def fake_update(case_id, task_id, status, reason, scope, may_mark_not_applicable):
+    def fake_update(
+        case_id, task_id, status, reason, scope, may_mark_not_applicable, **kwargs
+    ):
         seen.update(status=status, reason=reason, may=may_mark_not_applicable)
-        return Outcome.OK
+        return Outcome.OK, 2
 
     monkeypatch.setattr(api, "update_deadline", fake_update)
     monkeypatch.setattr(api, "find_visible_case", lambda case_id, scope: sample_case())
 
     as_role(caller, TRIAGER_ID, "triager")
     response = client.patch(
-        f"/api/v1/cases/{CASE_ID}/deadlines/{TASK_ID}", json={"status": "not_applicable", "reason": " out of scope "}
+        f"/api/v1/cases/{CASE_ID}/deadlines/{TASK_ID}",
+        json={"status": "not_applicable", "reason": " out of scope "},
+        headers={**idem(), "If-Match": '"1"'},
     )
     assert response.status_code == 200
     assert seen == {"status": "not_applicable", "reason": "out of scope", "may": True}
 
     as_role(caller, INVESTIGATOR_ID, "investigator")
-    client.patch(f"/api/v1/cases/{CASE_ID}/deadlines/{TASK_ID}", json={"status": "done"})
+    client.patch(
+        f"/api/v1/cases/{CASE_ID}/deadlines/{TASK_ID}",
+        json={"status": "done"},
+        headers={**idem(), "If-Match": '"1"'},
+    )
     assert seen["may"] is False
 
 
@@ -438,18 +732,28 @@ def test_deadline_update_passes_the_triage_permission_to_the_service(client, cal
         (Outcome.NOT_FOUND, 404, "case not found"),
         (Outcome.CLOSED, 409, "case is closed"),
         (Outcome.TASK_NOT_FOUND, 404, "deadline task not found"),
-        (Outcome.NOT_APPLICABLE_FORBIDDEN, 403, "only a triager may mark a deadline not applicable"),
+        (
+            Outcome.NOT_APPLICABLE_FORBIDDEN,
+            403,
+            "only a triager may mark a deadline not applicable",
+        ),
     ],
 )
 def test_deadline_update_refusals(client, caller, monkeypatch, outcome, status, detail):
     as_role(caller, INVESTIGATOR_ID, "investigator")
-    monkeypatch.setattr(api, "update_deadline", lambda *args, **kwargs: outcome)
-    response = client.patch(f"/api/v1/cases/{CASE_ID}/deadlines/{TASK_ID}", json={"status": "done"})
+    monkeypatch.setattr(api, "update_deadline", lambda *args, **kwargs: (outcome, 1))
+    response = client.patch(
+        f"/api/v1/cases/{CASE_ID}/deadlines/{TASK_ID}",
+        json={"status": "done"},
+        headers={**idem(), "If-Match": '"1"'},
+    )
     assert response.status_code == status
-    assert response.json() == {"detail": detail}
+    assert response.json()["detail"] == detail
 
 
-def test_history_gives_triager_the_details_and_reporter_only_actions(client, caller, monkeypatch):
+def test_history_gives_triager_the_details_and_reporter_only_actions(
+    client, caller, monkeypatch
+):
     entry = HistoryEntry(
         id="e1",
         action=audit.CASE_CLOSE,
@@ -476,7 +780,9 @@ def test_history_gives_triager_the_details_and_reporter_only_actions(client, cal
     assert stripped["items"][0]["actor_id"] is None
 
 
-def test_history_leaves_out_evidence_entries_unless_the_caller_holds_evidence_read(client, caller, monkeypatch):
+def test_history_leaves_out_evidence_entries_unless_the_caller_holds_evidence_read(
+    client, caller, monkeypatch
+):
     seen = []
 
     def fake_history(case_id, scope, limit, offset, **kwargs):
@@ -492,8 +798,8 @@ def test_history_leaves_out_evidence_entries_unless_the_caller_holds_evidence_re
 
 
 def test_history_is_paged_with_the_standard_bounds(client, caller):
-    assert client.get(f"/api/v1/cases/{CASE_ID}/history?limit=0").status_code == 422
-    assert client.get(f"/api/v1/cases/{CASE_ID}/history?offset=-1").status_code == 422
+    assert client.get(f"/api/v1/cases/{CASE_ID}/history?limit=0").status_code == 400
+    assert client.get(f"/api/v1/cases/{CASE_ID}/history?offset=-1").status_code == 400
 
 
 # --- database: the same flow against PostgreSQL ------------------------------------------------------------------
@@ -553,6 +859,7 @@ def create_case_via_api(db_client, reporter: str) -> str:
             "title": "Database case title",
             "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
         },
+        headers=idem(),
     )
     assert response.status_code == 201, response.text
     return response.json()["id"]
@@ -592,10 +899,12 @@ def test_reporter_sees_own_case_and_not_another_reporters(db_client, people):
     other = get_case(db_client, people["other_reporter"], case_id)
     missing = get_case(db_client, people["other_reporter"], str(uuid.uuid4()))
     assert other.status_code == missing.status_code == 404
-    assert other.json() == missing.json()
+    assert without_request_id(other) == without_request_id(missing)
     listed = db_client(people["reporter"]).get("/api/v1/cases?limit=200").json()
     assert case_id in {item["id"] for item in listed["items"]}
-    other_list = db_client(people["other_reporter"]).get("/api/v1/cases?limit=200").json()
+    other_list = (
+        db_client(people["other_reporter"]).get("/api/v1/cases?limit=200").json()
+    )
     assert case_id not in {item["id"] for item in other_list["items"]}
 
 
@@ -612,14 +921,21 @@ def test_assigned_investigator_sees_only_assigned_cases(db_client, people):
     first = create_case_via_api(db_client, people["reporter"])
     second = create_case_via_api(db_client, people["reporter"])
     response = db_client(people["triager"]).post(
-        f"/api/v1/cases/{first}/assignments", json={"user_id": people["investigator"]}
+        f"/api/v1/cases/{first}/assignments",
+        json={"user_id": people["investigator"]},
+        headers=idem(),
     )
     assert response.status_code == 201
 
     assert get_case(db_client, people["investigator"], first).status_code == 200
     assert get_case(db_client, people["investigator"], second).status_code == 404
     assert get_case(db_client, people["other_investigator"], first).status_code == 404
-    listed = {item["id"] for item in db_client(people["investigator"]).get("/api/v1/cases?limit=200").json()["items"]}
+    listed = {
+        item["id"]
+        for item in db_client(people["investigator"])
+        .get("/api/v1/cases?limit=200")
+        .json()["items"]
+    }
     assert first in listed and second not in listed
 
 
@@ -631,14 +947,33 @@ def test_assignment_rules_roles_duplicates_and_soft_delete(db_client, people):
 
     # The triager holds cases:assign (it makes assignments) but not cases:assignable, so it is refused as an assignee.
     for wrong in ("reporter", "auditor", "admin", "triager"):
-        response = triager.post(url, json={"user_id": people[wrong]})
+        response = triager.post(url, json={"user_id": people[wrong]}, headers=idem())
         assert response.status_code == 422
-        assert response.json() == {"detail": "assignee must be an investigator or reviewer"}
+        assert (
+            response.json()["detail"] == "assignee must be an investigator or reviewer"
+        )
 
-    assert triager.post(url, json={"user_id": people["investigator"]}).status_code == 201
-    assert triager.post(url, json={"user_id": people["reviewer"]}).status_code == 201
-    assert triager.post(url, json={"user_id": people["other_investigator"]}).status_code == 201
-    duplicate = triager.post(url, json={"user_id": people["investigator"]})
+    assert (
+        triager.post(
+            url, json={"user_id": people["investigator"]}, headers=idem()
+        ).status_code
+        == 201
+    )
+    assert (
+        triager.post(
+            url, json={"user_id": people["reviewer"]}, headers=idem()
+        ).status_code
+        == 201
+    )
+    assert (
+        triager.post(
+            url, json={"user_id": people["other_investigator"]}, headers=idem()
+        ).status_code
+        == 201
+    )
+    duplicate = triager.post(
+        url, json={"user_id": people["investigator"]}, headers=idem()
+    )
     assert duplicate.status_code == 409
     assert len(triager.get(url).json()) == 3
 
@@ -652,7 +987,12 @@ def test_assignment_rules_roles_duplicates_and_soft_delete(db_client, people):
         ).fetchall()
     assert rows == [(True, True)]  # the row is kept, soft deleted
     assert len(triager.get(url).json()) == 2
-    assert triager.post(url, json={"user_id": people["investigator"]}).status_code == 201  # assignable again
+    assert (
+        triager.post(
+            url, json={"user_id": people["investigator"]}, headers=idem()
+        ).status_code
+        == 201
+    )  # assignable again
 
     with connect() as conn:
         actions = [
@@ -676,42 +1016,88 @@ def test_inactive_and_deleted_users_cannot_be_assigned(db_client, people):
     deleted = new_user("investigator")
     users.soft_delete_user(deleted, actor_id=people["admin"])
     for user_id in (disabled, deleted):
-        response = triager.post(url, json={"user_id": user_id})
+        response = triager.post(url, json={"user_id": user_id}, headers=idem())
         assert response.status_code == 422
-        assert response.json() == {"detail": "assignee is not an active user"}
+        assert response.json()["detail"] == "assignee is not an active user"
+
+
+def open_and_set_review(
+    client, case_id: str, outcome: str = "pass", reason: str | None = None
+):
+    """Open a review round and set its model layer. Closing a case needs at least one layer outcome."""
+    opened = client.post("/api/v1/reviews", headers=idem(), json={"case_id": case_id})
+    assert opened.status_code == 201, opened.text
+    review = opened.json()
+    body = {"outcome": outcome}
+    if reason is not None:
+        body["reason"] = reason
+    return client.patch(
+        f"/api/v1/reviews/{review['id']}/layers/model",
+        json=body,
+        headers={**idem(), "If-Match": f'"{review["revision"]}"'},
+    )
 
 
 @requires_database
 def test_review_needs_an_assignment_and_the_reviewer_role(db_client, people):
     case_id = create_case_via_api(db_client, people["reporter"])
-    body = {"outcome": "pass", "note": "Looks right"}
+    body = {"case_id": case_id}
     # Not assigned: the reviewer cannot see the case, so the answer is not found.
-    assert db_client(people["reviewer"]).post(f"/api/v1/cases/{case_id}/reviews", json=body).status_code == 404
+    assert (
+        db_client(people["reviewer"])
+        .post("/api/v1/reviews", headers=idem(), json=body)
+        .status_code
+        == 404
+    )
     # The triager has no reviews:write permission.
-    assert db_client(people["triager"]).post(f"/api/v1/cases/{case_id}/reviews", json=body).status_code == 403
+    assert (
+        db_client(people["triager"])
+        .post("/api/v1/reviews", headers=idem(), json=body)
+        .status_code
+        == 403
+    )
 
     db_client(people["triager"]).post(
-        f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]}
+        f"/api/v1/cases/{case_id}/assignments",
+        json={"user_id": people["reviewer"]},
+        headers=idem(),
     )
-    assert db_client(people["reviewer"]).post(f"/api/v1/cases/{case_id}/reviews", json=body).status_code == 201
+    assert (
+        db_client(people["reviewer"])
+        .post("/api/v1/reviews", headers=idem(), json=body)
+        .status_code
+        == 201
+    )
 
 
 @requires_database
 def test_close_is_refused_without_review_and_with_open_tasks(db_client, people):
     case_id = create_case_via_api(db_client, people["reporter"])
     triager = db_client(people["triager"])
-    triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]})
-    triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["investigator"]})
+    triager.post(
+        f"/api/v1/cases/{case_id}/assignments",
+        json={"user_id": people["reviewer"]},
+        headers=idem(),
+    )
+    triager.post(
+        f"/api/v1/cases/{case_id}/assignments",
+        json={"user_id": people["investigator"]},
+        headers=idem(),
+    )
 
-    refused = triager.post(f"/api/v1/cases/{case_id}/close", json={"reason": "all done"})
+    refused = triager.post(
+        f"/api/v1/cases/{case_id}/close", json={"reason": "all done"}, headers=idem()
+    )
     assert refused.status_code == 409
     assert "no review is recorded" in refused.json()["detail"]
     assert "deadline task affected_customers is open" in refused.json()["detail"]
 
-    db_client(people["reviewer"]).post(
-        f"/api/v1/cases/{case_id}/reviews", json={"outcome": "pass", "note": "Reviewed"}
+    open_and_set_review(
+        db_client(people["reviewer"]), case_id, "fail", reason="Reviewed for this test"
     )
-    refused = triager.post(f"/api/v1/cases/{case_id}/close", json={"reason": "all done"})
+    refused = triager.post(
+        f"/api/v1/cases/{case_id}/close", json={"reason": "all done"}, headers=idem()
+    )
     assert refused.status_code == 409
     assert "no review" not in refused.json()["detail"]
     assert "deadline task affected_customers is open" in refused.json()["detail"]
@@ -721,51 +1107,109 @@ def test_close_is_refused_without_review_and_with_open_tasks(db_client, people):
 def test_close_is_refused_with_an_open_weekly_update(db_client, people):
     case_id = create_case_via_api(db_client, people["reporter"])
     triager = db_client(people["triager"])
-    triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]})
-    db_client(people["reviewer"]).post(f"/api/v1/cases/{case_id}/reviews", json={"outcome": "pass"})
+    triager.post(
+        f"/api/v1/cases/{case_id}/assignments",
+        json={"user_id": people["reviewer"]},
+        headers=idem(),
+    )
+    open_and_set_review(
+        db_client(people["reviewer"]), case_id, "fail", reason="Reviewed for this test"
+    )
     tasks = task_ids(db_client, people["triager"], case_id)
     for kind, task_id in tasks.items():
-        response = triager.patch(f"/api/v1/cases/{case_id}/deadlines/{task_id}", json={"status": "done"})
+        url = f"/api/v1/cases/{case_id}/deadlines/{task_id}"
+        response = triager.patch(
+            url,
+            json={"status": "done"},
+            headers={**idem(), **task_if_match(triager, url)},
+        )
         assert response.status_code == 200, (kind, response.text)
     with connect() as conn:
         conn.execute(
             "INSERT INTO deadline_tasks (case_id, kind, due_at, status) VALUES (%s, 'weekly_update', now(), 'open')",
             (case_id,),
         )
-    refused = triager.post(f"/api/v1/cases/{case_id}/close", json={"reason": "all done"})
+    refused = triager.post(
+        f"/api/v1/cases/{case_id}/close", json={"reason": "all done"}, headers=idem()
+    )
     assert refused.status_code == 409
-    assert refused.json() == {"detail": "case cannot be closed: deadline task weekly_update is open"}
+    assert (
+        refused.json()["detail"]
+        == "case cannot be closed: deadline task weekly_update is open"
+    )
 
 
 @requires_database
-def test_close_succeeds_after_review_and_tasks_done_or_not_applicable(db_client, people):
+def test_close_succeeds_after_review_and_tasks_done_or_not_applicable(
+    db_client, people
+):
     case_id = create_case_via_api(db_client, people["reporter"])
     triager = db_client(people["triager"])
     investigator = db_client(people["investigator"])
-    triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]})
-    triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["investigator"]})
-    db_client(people["reviewer"]).post(f"/api/v1/cases/{case_id}/reviews", json={"outcome": "not_applicable"})
+    triager.post(
+        f"/api/v1/cases/{case_id}/assignments",
+        json={"user_id": people["reviewer"]},
+        headers=idem(),
+    )
+    triager.post(
+        f"/api/v1/cases/{case_id}/assignments",
+        json={"user_id": people["investigator"]},
+        headers=idem(),
+    )
+    open_and_set_review(
+        db_client(people["reviewer"]),
+        case_id,
+        "not_applicable",
+        reason="Not applicable to this case",
+    )
 
     tasks = task_ids(db_client, people["triager"], case_id)
-    # An assigned investigator may mark tasks done, but not not_applicable.
-    for kind in ("affected_customers", "preliminary_safe_report", "broader_advisory", "preliminary_public_report"):
-        assert investigator.patch(
-            f"/api/v1/cases/{case_id}/deadlines/{tasks[kind]}", json={"status": "done"}
-        ).status_code == 200
+    # An assigned investigator may mark tasks done, but not not_applicable. The conditional advisory starts not
+    # applicable, and only a triager may change that, so it is left as it is and closure accepts it.
+    for kind in (
+        "affected_customers",
+        "preliminary_safe_report",
+        "preliminary_public_report",
+    ):
+        url = f"/api/v1/cases/{case_id}/deadlines/{tasks[kind]}"
+        assert (
+            investigator.patch(
+                url,
+                json={"status": "done"},
+                headers={**idem(), **task_if_match(investigator, url)},
+            ).status_code
+            == 200
+        )
+    remediation = f"/api/v1/cases/{case_id}/deadlines/{tasks['remediation_status']}"
     forbidden = investigator.patch(
-        f"/api/v1/cases/{case_id}/deadlines/{tasks['remediation_status']}",
+        remediation,
         json={"status": "not_applicable", "reason": "not in scope"},
+        headers={**idem(), **task_if_match(investigator, remediation)},
     )
     assert forbidden.status_code == 403
     applied = triager.patch(
-        f"/api/v1/cases/{case_id}/deadlines/{tasks['remediation_status']}",
-        json={"status": "not_applicable", "reason": "  Remediation tracked elsewhere  "},
+        remediation,
+        json={
+            "status": "not_applicable",
+            "reason": "  Remediation tracked elsewhere  ",
+        },
+        headers={**idem(), **task_if_match(triager, remediation)},
     )
     assert applied.status_code == 200
-    statuses = {t["kind"]: (t["status"], t["not_applicable_reason"]) for t in applied.json()["deadlines"]}
-    assert statuses["remediation_status"] == ("not_applicable", "Remediation tracked elsewhere")
+    statuses = {
+        t["kind"]: (t["status"], t["not_applicable_reason"])
+        for t in applied.json()["deadlines"]
+    }
+    assert statuses["remediation_status"] == (
+        "not_applicable",
+        "Remediation tracked elsewhere",
+    )
 
-    closed = triager.post(f"/api/v1/cases/{case_id}/close", json={"reason": "Closed after review"})
+    closed = triager.post(
+        f"/api/v1/cases/{case_id}/close",
+        json={"reason": "Closed after review"},
+        headers=idem(),
+    )
     assert closed.status_code == 200, closed.text
     body = closed.json()
     assert body["status"] == "closed"
@@ -777,41 +1221,93 @@ def test_close_succeeds_after_review_and_tasks_done_or_not_applicable(db_client,
 def test_closed_case_refuses_changes_and_reopen_is_audited(db_client, people):
     case_id = create_case_via_api(db_client, people["reporter"])
     triager = db_client(people["triager"])
-    triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]})
-    db_client(people["reviewer"]).post(f"/api/v1/cases/{case_id}/reviews", json={"outcome": "pass"})
+    triager.post(
+        f"/api/v1/cases/{case_id}/assignments",
+        json={"user_id": people["reviewer"]},
+        headers=idem(),
+    )
+    open_and_set_review(
+        db_client(people["reviewer"]), case_id, "fail", reason="Reviewed for this test"
+    )
     tasks = task_ids(db_client, people["triager"], case_id)
     for kind, task_id in tasks.items():
+        url = f"/api/v1/cases/{case_id}/deadlines/{task_id}"
         triager.patch(
-            f"/api/v1/cases/{case_id}/deadlines/{task_id}",
-            json={"status": "not_applicable", "reason": f"{kind} is not applicable here"},
+            url,
+            json={
+                "status": "not_applicable",
+                "reason": f"{kind} is not applicable here",
+            },
+            headers={**idem(), **task_if_match(triager, url)},
         )
-    assert triager.post(f"/api/v1/cases/{case_id}/close", json={"reason": "Closed"}).status_code == 200
+    assert (
+        triager.post(
+            f"/api/v1/cases/{case_id}/close", json={"reason": "Closed"}, headers=idem()
+        ).status_code
+        == 200
+    )
 
     new_investigator = new_user("investigator")
     url = f"/api/v1/cases/{case_id}/assignments"
-    assert triager.post(url, json={"user_id": new_investigator}).json() == {"detail": "case is closed"}
-    assert triager.delete(f"{url}/{people['reviewer']}").json() == {"detail": "case is closed"}
-    assert db_client(people["reviewer"]).post(
-        f"/api/v1/cases/{case_id}/reviews", json={"outcome": "fail"}
-    ).json() == {"detail": "case is closed"}
+    assert (
+        triager.post(url, json={"user_id": new_investigator}, headers=idem()).json()[
+            "detail"
+        ]
+        == "case is closed"
+    )
+    assert (
+        triager.delete(f"{url}/{people['reviewer']}").json()["detail"]
+        == "case is closed"
+    )
+    refused = db_client(people["reviewer"]).post(
+        "/api/v1/reviews", headers=idem(), json={"case_id": case_id}
+    )
+    assert refused.json()["detail"] == "case is closed"
     first_task = next(iter(tasks.values()))
-    assert triager.patch(
-        f"/api/v1/cases/{case_id}/deadlines/{first_task}", json={"status": "open"}
-    ).json() == {"detail": "case is closed"}
-    assert triager.post(f"/api/v1/cases/{case_id}/close", json={"reason": "again"}).json() == {"detail": "case is closed"}
+    first_url = f"/api/v1/cases/{case_id}/deadlines/{first_task}"
+    assert (
+        triager.patch(
+            first_url,
+            json={"status": "open"},
+            headers={**idem(), **task_if_match(triager, first_url)},
+        ).json()["detail"]
+        == "case is closed"
+    )
+    assert (
+        triager.post(
+            f"/api/v1/cases/{case_id}/close", json={"reason": "again"}, headers=idem()
+        ).json()["detail"]
+        == "case is closed"
+    )
 
-    assert db_client(people["reporter"]).post(
-        f"/api/v1/cases/{case_id}/reopen", json={"reason": "new facts"}
-    ).status_code == 403
-    reopened = triager.post(f"/api/v1/cases/{case_id}/reopen", json={"reason": "New facts found"})
+    assert (
+        db_client(people["reporter"])
+        .post(
+            f"/api/v1/cases/{case_id}/reopen",
+            json={"reason": "new facts"},
+            headers=idem(),
+        )
+        .status_code
+        == 403
+    )
+    reopened = triager.post(
+        f"/api/v1/cases/{case_id}/reopen",
+        json={"reason": "New facts found"},
+        headers=idem(),
+    )
     assert reopened.status_code == 200
     assert reopened.json()["status"] == "open"
     assert reopened.json()["closed_at"] is None
     assert reopened.json()["closed_by"] is None
-    assert triager.post(f"/api/v1/cases/{case_id}/reopen", json={"reason": "again"}).json() == {
-        "detail": "case is not closed"
-    }
-    assert triager.post(url, json={"user_id": new_investigator}).status_code == 201
+    assert triager.post(
+        f"/api/v1/cases/{case_id}/reopen", json={"reason": "again"}, headers=idem()
+    ).json()["detail"] == ("case is not closed")
+    assert (
+        triager.post(
+            url, json={"user_id": new_investigator}, headers=idem()
+        ).status_code
+        == 201
+    )
 
     history = triager.get(f"/api/v1/cases/{case_id}/history").json()["items"]
     reopen = next(item for item in history if item["action"] == audit.CASE_REOPEN)
@@ -823,20 +1319,37 @@ def test_closed_case_refuses_changes_and_reopen_is_audited(db_client, people):
 def test_history_shows_details_only_to_the_triager(db_client, people):
     case_id = create_case_via_api(db_client, people["reporter"])
     triager = db_client(people["triager"])
-    triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]})
-    db_client(people["reviewer"]).post(
-        f"/api/v1/cases/{case_id}/reviews", json={"outcome": "pass", "note": "Confidential reviewer note"}
+    triager.post(
+        f"/api/v1/cases/{case_id}/assignments",
+        json={"user_id": people["reviewer"]},
+        headers=idem(),
+    )
+    open_and_set_review(
+        db_client(people["reviewer"]),
+        case_id,
+        "fail",
+        reason="Confidential reviewer note",
     )
 
     full = triager.get(f"/api/v1/cases/{case_id}/history").json()
-    stripped = db_client(people["reporter"]).get(f"/api/v1/cases/{case_id}/history").json()
+    stripped = (
+        db_client(people["reporter"]).get(f"/api/v1/cases/{case_id}/history").json()
+    )
 
     actions = {item["action"] for item in full["items"]}
-    assert {audit.CASE_CREATE, audit.CASE_ASSIGNMENT_ADD, audit.CASE_REVIEW} <= actions
-    assert full["items"][0]["action"] == audit.CASE_REVIEW  # newest first
+    assert {
+        audit.CASE_CREATE,
+        audit.CASE_ASSIGNMENT_ADD,
+        audit.CASE_REVIEW_ROUND_OPENED,
+        audit.CASE_REVIEW_LAYER_SET,
+    } <= actions
+    assert full["items"][0]["action"] == audit.CASE_REVIEW_LAYER_SET  # newest first
     assert all(item["details"] is not None for item in full["items"])
     assert stripped["total"] == full["total"]
-    assert all(item["details"] is None and item["actor_id"] is None for item in stripped["items"])
+    assert all(
+        item["details"] is None and item["actor_id"] is None
+        for item in stripped["items"]
+    )
     assert {item["action"] for item in stripped["items"]} == actions
     # Free text and titles never reach the audit details.
     dumped = json.dumps(full)
@@ -848,19 +1361,46 @@ def test_history_shows_details_only_to_the_triager(db_client, people):
 def test_close_and_reopen_reasons_are_stored_as_text(db_client, people):
     case_id = create_case_via_api(db_client, people["reporter"])
     triager = db_client(people["triager"])
-    triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]})
-    db_client(people["reviewer"]).post(f"/api/v1/cases/{case_id}/reviews", json={"outcome": "pass"})
+    triager.post(
+        f"/api/v1/cases/{case_id}/assignments",
+        json={"user_id": people["reviewer"]},
+        headers=idem(),
+    )
+    open_and_set_review(
+        db_client(people["reviewer"]), case_id, "fail", reason="Reviewed for this test"
+    )
     for kind, task_id in task_ids(db_client, people["triager"], case_id).items():
+        url = f"/api/v1/cases/{case_id}/deadlines/{task_id}"
         triager.patch(
-            f"/api/v1/cases/{case_id}/deadlines/{task_id}",
-            json={"status": "not_applicable", "reason": f"{kind} is not applicable here"},
+            url,
+            json={
+                "status": "not_applicable",
+                "reason": f"{kind} is not applicable here",
+            },
+            headers={**idem(), **task_if_match(triager, url)},
         )
     close_reason = "Confirmed root cause in the vendor patch"
     reopen_reason = "New facts found"
     assert triager.get(f"/api/v1/cases/{case_id}").json()["reopen_reason"] is None
-    assert triager.post(f"/api/v1/cases/{case_id}/close", json={"reason": close_reason}).status_code == 200
-    assert triager.post(f"/api/v1/cases/{case_id}/reopen", json={"reason": reopen_reason}).status_code == 200
-    assert triager.get(f"/api/v1/cases/{case_id}").json()["reopen_reason"] == reopen_reason
+    assert (
+        triager.post(
+            f"/api/v1/cases/{case_id}/close",
+            json={"reason": close_reason},
+            headers=idem(),
+        ).status_code
+        == 200
+    )
+    assert (
+        triager.post(
+            f"/api/v1/cases/{case_id}/reopen",
+            json={"reason": reopen_reason},
+            headers=idem(),
+        ).status_code
+        == 200
+    )
+    assert (
+        triager.get(f"/api/v1/cases/{case_id}").json()["reopen_reason"] == reopen_reason
+    )
     # The assigned reviewer can see the case but not the reason texts.
     reviewer_view = db_client(people["reviewer"]).get(f"/api/v1/cases/{case_id}").json()
     assert reviewer_view["close_reason"] is None
@@ -888,8 +1428,14 @@ def test_close_and_reopen_reasons_are_stored_as_text(db_client, people):
     assert closed["details"]["close_reason"]["new"] == {"length": len(close_reason)}
     assert reopened["details"]["reopen_reason"]["new"] == {"length": len(reopen_reason)}
 
-    stripped = db_client(people["reporter"]).get(f"/api/v1/cases/{case_id}/history").json()["items"]
-    assert all(item["details"] is None and item["actor_id"] is None for item in stripped)
+    stripped = (
+        db_client(people["reporter"])
+        .get(f"/api/v1/cases/{case_id}/history")
+        .json()["items"]
+    )
+    assert all(
+        item["details"] is None and item["actor_id"] is None for item in stripped
+    )
 
 
 @requires_database
@@ -906,11 +1452,17 @@ def test_evidence_history_entries_need_evidence_read(db_client, people):
             details={"case_id": case_id},
         )
 
-    with_read = db_client(people["triager"]).get(f"/api/v1/cases/{case_id}/history").json()
+    with_read = (
+        db_client(people["triager"]).get(f"/api/v1/cases/{case_id}/history").json()
+    )
     # The reporter can see the case but holds no evidence:read.
-    without_read = db_client(people["reporter"]).get(f"/api/v1/cases/{case_id}/history").json()
+    without_read = (
+        db_client(people["reporter"]).get(f"/api/v1/cases/{case_id}/history").json()
+    )
     assert audit.EVIDENCE_UPLOADED in {item["action"] for item in with_read["items"]}
-    assert audit.EVIDENCE_UPLOADED not in {item["action"] for item in without_read["items"]}
+    assert audit.EVIDENCE_UPLOADED not in {
+        item["action"] for item in without_read["items"]
+    }
     assert without_read["total"] == with_read["total"] - 1
 
 
@@ -918,13 +1470,47 @@ def test_evidence_history_entries_need_evidence_read(db_client, people):
 def test_only_triagers_may_mark_a_deadline_not_applicable(db_client, people):
     case_id = create_case_via_api(db_client, people["reporter"])
     triager = db_client(people["triager"])
-    triager.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["investigator"]})
+    triager.post(
+        f"/api/v1/cases/{case_id}/assignments",
+        json={"user_id": people["investigator"]},
+        headers=idem(),
+    )
     task_id = task_ids(db_client, people["triager"], case_id)["broader_advisory"]
     url = f"/api/v1/cases/{case_id}/deadlines/{task_id}"
-    assert db_client(people["investigator"]).patch(url, json={"status": "not_applicable", "reason": "x"}).status_code == 403
-    assert triager.patch(url, json={"status": "not_applicable"}).status_code == 422
-    assert triager.patch(url, json={"status": "not_applicable", "reason": "Not needed"}).status_code == 200
-    assert db_client(people["investigator"]).patch(url, json={"status": "open"}).status_code == 403
+    assert (
+        db_client(people["investigator"])
+        .patch(
+            url,
+            json={"status": "not_applicable", "reason": "x"},
+            headers={**idem(), **task_if_match(db_client(people["investigator"]), url)},
+        )
+        .status_code
+        == 403
+    )
+    assert (
+        triager.patch(
+            url, json={"status": "not_applicable"}, headers=idem()
+        ).status_code
+        == 400
+    )
+    assert (
+        triager.patch(
+            url,
+            json={"status": "not_applicable", "reason": "Not needed"},
+            headers={**idem(), **task_if_match(triager, url)},
+        ).status_code
+        == 200
+    )
+    assert (
+        db_client(people["investigator"])
+        .patch(
+            url,
+            json={"status": "open"},
+            headers={**idem(), **task_if_match(db_client(people["investigator"]), url)},
+        )
+        .status_code
+        == 403
+    )
 
 
 @requires_database
@@ -935,7 +1521,14 @@ def test_admin_and_auditor_have_no_case_access(db_client, people):
         assert client.get("/api/v1/cases").status_code == 403
         assert client.get(f"/api/v1/cases/{case_id}").status_code == 403
         assert client.get(f"/api/v1/cases/{case_id}/history").status_code == 403
-        assert client.post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["reviewer"]}).status_code == 403
+        assert (
+            client.post(
+                f"/api/v1/cases/{case_id}/assignments",
+                json={"user_id": people["reviewer"]},
+                headers=idem(),
+            ).status_code
+            == 403
+        )
 
 
 # --- negative access: a hidden case looks exactly like a missing one -----------------------------------------------
@@ -944,7 +1537,9 @@ EXAMPLES = Path(__file__).resolve().parents[2] / "schemas" / "examples"
 
 
 @requires_database
-def test_unassigned_investigator_and_reviewer_get_the_same_404_as_a_missing_case(db_client, people):
+def test_unassigned_investigator_and_reviewer_get_the_same_404_as_a_missing_case(
+    db_client, people
+):
     case_id = create_case_via_api(db_client, people["reporter"])
     missing_id = str(uuid.uuid4())
     for actor in (people["investigator"], people["reviewer"]):
@@ -953,37 +1548,62 @@ def test_unassigned_investigator_and_reviewer_get_the_same_404_as_a_missing_case
             hidden = client.get(f"/api/v1/cases/{case_id}{path}")
             absent = client.get(f"/api/v1/cases/{missing_id}{path}")
             assert hidden.status_code == absent.status_code == 404
-            assert hidden.json() == absent.json()
-        listed = {item["id"] for item in client.get("/api/v1/cases?limit=200").json()["items"]}
+            assert without_request_id(hidden) == without_request_id(absent)
+        listed = {
+            item["id"] for item in client.get("/api/v1/cases?limit=200").json()["items"]
+        }
         assert case_id not in listed
 
 
 @requires_database
-def test_unassigned_reviewer_gets_404_not_403_when_recording_a_review(db_client, people):
+def test_unassigned_reviewer_gets_404_not_403_when_recording_a_review(
+    db_client, people
+):
     case_id = create_case_via_api(db_client, people["reporter"])
     reviewer = db_client(people["reviewer"])
-    hidden = reviewer.post(f"/api/v1/cases/{case_id}/reviews", json={"outcome": "pass"})
-    absent = reviewer.post(f"/api/v1/cases/{uuid.uuid4()}/reviews", json={"outcome": "pass"})
+    hidden = reviewer.post("/api/v1/reviews", headers=idem(), json={"case_id": case_id})
+    absent = reviewer.post(
+        "/api/v1/reviews", headers=idem(), json={"case_id": str(uuid.uuid4())}
+    )
     # 403 would say "only an assigned reviewer" and so reveal that the case exists.
     assert hidden.status_code == absent.status_code == 404
-    assert hidden.json() == absent.json()
+    assert without_request_id(hidden) == without_request_id(absent)
 
 
 @requires_database
-def test_unassigned_investigator_gets_404_on_deadline_change_and_403_without_permission(db_client, people):
+def test_unassigned_investigator_gets_404_on_deadline_change_and_403_without_permission(
+    db_client, people
+):
     case_id = create_case_via_api(db_client, people["reporter"])
     task_id = task_ids(db_client, people["triager"], case_id)["broader_advisory"]
     investigator = db_client(people["investigator"])
-    hidden = investigator.patch(f"/api/v1/cases/{case_id}/deadlines/{task_id}", json={"status": "done"})
-    absent = investigator.patch(f"/api/v1/cases/{case_id}/deadlines/{uuid.uuid4()}", json={"status": "done"})
+    hidden_url = f"/api/v1/cases/{case_id}/deadlines/{task_id}"
+    hidden = investigator.patch(
+        hidden_url,
+        json={"status": "done"},
+        headers={**idem(), **task_if_match(investigator, hidden_url)},
+    )
+    absent_url = f"/api/v1/cases/{case_id}/deadlines/{uuid.uuid4()}"
+    absent = investigator.patch(
+        absent_url,
+        json={"status": "done"},
+        headers={**idem(), **task_if_match(investigator, absent_url)},
+    )
     assert hidden.status_code == absent.status_code == 404
-    assert hidden.json() == absent.json()
+    assert without_request_id(hidden) == without_request_id(absent)
     # Closing needs cases:close, which the investigator does not hold, so the answer is 403 whatever the case.
-    assert investigator.post(f"/api/v1/cases/{case_id}/close", json={"reason": "done"}).status_code == 403
+    assert (
+        investigator.post(
+            f"/api/v1/cases/{case_id}/close", json={"reason": "done"}, headers=idem()
+        ).status_code
+        == 403
+    )
 
 
 @requires_database
-def test_reporter_cannot_read_another_reporters_assignments_or_history(db_client, people):
+def test_reporter_cannot_read_another_reporters_assignments_or_history(
+    db_client, people
+):
     case_id = create_case_via_api(db_client, people["reporter"])
     missing_id = str(uuid.uuid4())
     other = db_client(people["other_reporter"])
@@ -991,8 +1611,13 @@ def test_reporter_cannot_read_another_reporters_assignments_or_history(db_client
         hidden = other.get(f"/api/v1/cases/{case_id}{path}")
         absent = other.get(f"/api/v1/cases/{missing_id}{path}")
         assert hidden.status_code == absent.status_code == 404
-        assert hidden.json() == absent.json()
-    assert db_client(people["reporter"]).get(f"/api/v1/cases/{case_id}/history").status_code == 200
+        assert without_request_id(hidden) == without_request_id(absent)
+    assert (
+        db_client(people["reporter"])
+        .get(f"/api/v1/cases/{case_id}/history")
+        .status_code
+        == 200
+    )
 
 
 @requires_database
@@ -1000,7 +1625,11 @@ def test_list_filters_cannot_be_used_to_find_another_reporters_title(db_client, 
     marker = "Confidential " + uuid.uuid4().hex
     created = db_client(people["other_reporter"]).post(
         "/api/v1/cases",
-        json={"title": marker, "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat()},
+        json={
+            "title": marker,
+            "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
+        },
+        headers=idem(),
     )
     assert created.status_code == 201
     # The list filters by q only (reference or id prefix; see the q tests below). Other parameters are ignored, so
@@ -1012,9 +1641,12 @@ def test_list_filters_cannot_be_used_to_find_another_reporters_title(db_client, 
         filtered = db_client(people["reporter"]).get(f"/api/v1/cases?limit=200&{query}")
         assert filtered.status_code == 200
         assert marker not in filtered.text
-        assert filtered.json() == plain.json()
+        assert without_request_id(filtered) == without_request_id(plain)
     # The creator still sees its own title, so the checks above would catch a title shown to the wrong caller.
-    assert marker in db_client(people["other_reporter"]).get("/api/v1/cases?limit=200").text
+    assert (
+        marker
+        in db_client(people["other_reporter"]).get("/api/v1/cases?limit=200").text
+    )
 
 
 @requires_database
@@ -1022,14 +1654,20 @@ def test_import_of_another_reporters_source_case_does_not_disclose_it(people):
     record = json.loads((EXAMPLES / "valid-minimal.json").read_text(encoding="utf-8"))
     record["case_id"] = str(uuid.uuid4())
     record["timeline"]["awareness_time"]["value"] = "2026-10-30T09:00:00Z"
-    [created] = case_import.import_records([record], scope_of(people["other_reporter"], "reporter"))
+    [created] = case_import.import_records(
+        [record], scope_of(people["other_reporter"], "reporter")
+    )
     assert created.status == "imported"
-    [result] = case_import.import_records([record], scope_of(people["reporter"], "reporter"))
+    [result] = case_import.import_records(
+        [record], scope_of(people["reporter"], "reporter")
+    )
     assert result.status == "duplicate"
     assert result.case_id is None
     assert result.reference is None
     # The creator of the case still gets its ids on a repeat, so the check above is not an empty answer.
-    [own] = case_import.import_records([record], scope_of(people["other_reporter"], "reporter"))
+    [own] = case_import.import_records(
+        [record], scope_of(people["other_reporter"], "reporter")
+    )
     assert own.status == "duplicate"
     assert own.case_id == created.case_id and own.reference == created.reference
 
@@ -1050,10 +1688,16 @@ def role_holds(role: str, permission: str):
         set_role_permissions(role, before)
 
 
-def open_report_via_api(db_client, reporter: str, title: str = "Reporter channel case") -> str:
+def open_report_via_api(
+    db_client, reporter: str, title: str = "Reporter channel case"
+) -> str:
     response = db_client(reporter).post(
         "/api/v1/reports",
-        json={"title": title, "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat()},
+        json={
+            "title": title,
+            "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
+        },
+        headers=idem(),
     )
     assert response.status_code == 201, response.text
     return response.json()["id"]
@@ -1066,60 +1710,141 @@ def listed_ids(db_client, actor: str, q: str | None = None) -> set[str]:
     return {item["id"] for item in response.json()["items"]}
 
 
-# --- reporter-channel cases are hidden from read_all callers until assigned (D2) -----------------------------------
+# --- reporter-channel cases: a triager sees them before assignment (cases:assign), other roles keep the old rule ----
 
 
 @requires_database
-def test_unassigned_reporter_case_is_hidden_from_a_triager(db_client, people):
-    case_id = open_report_via_api(db_client, people["reporter"])
+def test_unassigned_reporter_case_is_visible_to_a_triager(db_client, people):
+    case_id = open_report_via_api(
+        db_client, people["reporter"], title="Unassigned reporter case"
+    )
     triager = db_client(people["triager"])
-    # In the list, on the case read, and in the history, the triager gets the same answer as for a missing case.
-    assert case_id not in listed_ids(db_client, people["triager"])
-    assert triager.get(f"/api/v1/cases/{case_id}").status_code == 404
-    assert triager.get(f"/api/v1/cases/{case_id}/history").status_code == 404
-    assert triager.get(f"/api/v1/cases/{case_id}/assignments").status_code == 404
-    # The reporter still sees its own case, with no assignment.
+    # In the list, the search, the case read, the history and the assignments, the triager sees it like any other case.
+    assert case_id in listed_ids(db_client, people["triager"])
+    assert case_id in listed_ids(db_client, people["triager"], q=case_id[:8])
+    assert get_case(db_client, people["triager"], case_id).status_code == 200
+    assert triager.get(f"/api/v1/cases/{case_id}/history").status_code == 200
+    assert triager.get(f"/api/v1/cases/{case_id}/assignments").status_code == 200
+    # The reporter still sees its own case.
     assert case_id in listed_ids(db_client, people["reporter"])
     assert get_case(db_client, people["reporter"], case_id).status_code == 200
 
 
 @requires_database
-def test_assigned_reporter_case_is_visible_to_a_triager(db_client, people):
+def test_triager_assigns_an_unassigned_reporter_case_and_the_assignment_is_audited(
+    db_client, people
+):
     case_id = open_report_via_api(db_client, people["reporter"])
-    # The reporting owner assigns it. Assignment needs the case to be visible, so the owner holds reporter_contact:read.
-    with role_holds("triager", "reporter_contact:read"):
-        response = db_client(people["triager"]).post(
-            f"/api/v1/cases/{case_id}/assignments", json={"user_id": people["investigator"]}
-        )
+    response = db_client(people["triager"]).post(
+        f"/api/v1/cases/{case_id}/assignments",
+        json={"user_id": people["investigator"]},
+        headers=idem(),
+    )
     assert response.status_code == 201, response.text
-    # The case now has an active assignment, so the triager without the permission sees it too.
-    assert case_id in listed_ids(db_client, people["triager"])
-    assert get_case(db_client, people["triager"], case_id).status_code == 200
-    assert db_client(people["triager"]).get(f"/api/v1/cases/{case_id}/history").status_code == 200
+    assert response.json()["user_id"] == people["investigator"]
+    # The assignee sees the case; another investigator gets the 404 of a missing case.
+    assert get_case(db_client, people["investigator"], case_id).status_code == 200
+    assert get_case(db_client, people["other_investigator"], case_id).status_code == 404
+    # The audit row names the actor and the assignee, and nothing about the reporter.
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT actor_id::text, details FROM audit_events "
+            "WHERE action = %s AND target_id = %s AND NOT is_deleted",
+            (audit.CASE_ASSIGNMENT_ADD, case_id),
+        ).fetchall()
+    assert len(rows) == 1
+    actor, details = rows[0]
+    assert actor == people["triager"]
+    assert details == {"assignee_id": {"old": None, "new": people["investigator"]}}
+    assert people["reporter"] not in json.dumps(details)
 
 
 @requires_database
-def test_reporter_contact_holder_sees_unassigned_reporter_case(db_client, people):
+def test_unassigned_reporter_case_stays_hidden_from_the_other_roles(db_client, people):
     case_id = open_report_via_api(db_client, people["reporter"])
-    assert case_id not in listed_ids(db_client, people["triager"])
-    # Only the triager role has read_all, so the holder is a triager that has been granted the permission.
+    # An investigator, a reviewer and another reporter get the same 404 as for a missing case, in the list and on
+    # the case read, the history and the assignments.
+    for actor in (people["investigator"], people["reviewer"], people["other_reporter"]):
+        assert case_id not in listed_ids(db_client, actor)
+        for url in ("", "/history", "/assignments"):
+            response = db_client(actor).get(f"/api/v1/cases/{case_id}{url}")
+            assert response.status_code == 404, (actor, url, response.text)
+    # The disclosure approver holds cases:read_all without cases:assign, so the reporter-channel rule still applies.
+    approver = new_user("disclosure_approver")
+    assert case_id not in listed_ids(db_client, approver)
+    assert get_case(db_client, approver, case_id).status_code == 404
+    # The reporter sees its own case, and the other reporter does not.
+    assert case_id in listed_ids(db_client, people["reporter"])
+    assert get_case(db_client, people["reporter"], case_id).status_code == 200
+    assert get_case(db_client, people["other_reporter"], case_id).status_code == 404
+    # Auditor and admin hold no case read permission, so the case read is refused by permission.
+    for role in ("auditor", "admin"):
+        assert get_case(db_client, people[role], case_id).status_code == 403
+
+
+@requires_database
+def test_reporter_contact_stays_with_the_contact_permission_for_an_unassigned_reporter_case(
+    db_client, people
+):
+    case_id = open_report_via_api(db_client, people["reporter"])
+    triager = db_client(people["triager"])
+    # The triager sees the case, but the contact is refused without reporter_contact:read.
+    assert case_id in listed_ids(db_client, people["triager"])
+    assert triager.get(f"/api/v1/reports/{case_id}/contact").status_code == 403
+    # The holder of reporter_contact:read reads it (the reporting owner, in production). The read is audited.
     with role_holds("triager", "reporter_contact:read"):
-        assert case_id in listed_ids(db_client, people["triager"])
-        assert get_case(db_client, people["triager"], case_id).status_code == 200
-        assert db_client(people["triager"]).get(f"/api/v1/cases/{case_id}/history").status_code == 200
         contact = db_client(people["triager"]).get(f"/api/v1/reports/{case_id}/contact")
         assert contact.status_code == 200, contact.text
-    # Without the permission again, the case is hidden again.
-    assert case_id not in listed_ids(db_client, people["triager"])
-    assert get_case(db_client, people["triager"], case_id).status_code == 404
+    with connect() as conn:
+        audited = conn.execute(
+            "SELECT actor_id::text FROM audit_events WHERE action = %s AND target_id = %s AND NOT is_deleted",
+            (REPORTER_CONTACT_READ, case_id),
+        ).fetchall()
+    assert audited == [(people["triager"],)]
 
 
 @requires_database
-def test_hidden_reporter_case_is_not_counted_for_a_triager(db_client, people):
-    before = db_client(people["triager"]).get("/api/v1/cases?limit=1").json()["total"]
-    open_report_via_api(db_client, people["reporter"], title="Hidden from triagers")
-    after = db_client(people["triager"]).get("/api/v1/cases?limit=1").json()["total"]
-    assert after == before
+def test_reporting_owner_still_sees_an_unassigned_reporter_case(db_client, people):
+    case_id = open_report_via_api(db_client, people["reporter"])
+    owner = new_user("reporting_owner")
+    # cases:read_all plus reporter_contact:read: the reporting owner sees the case before assignment, as before.
+    assert case_id in listed_ids(db_client, owner)
+    assert get_case(db_client, owner, case_id).status_code == 200
+    assert db_client(owner).get(f"/api/v1/cases/{case_id}/history").status_code == 200
+    assert db_client(owner).get(f"/api/v1/reports/{case_id}/contact").status_code == 200
+
+
+@requires_database
+def test_case_pages_follow_the_cursor_without_gaps_or_repeats(db_client, people):
+    created = {create_case_via_api(db_client, people["reporter"]) for _ in range(3)}
+    full = [
+        item["id"]
+        for item in db_client(people["reporter"])
+        .get("/api/v1/cases?limit=200")
+        .json()["items"]
+    ]
+    walked = []
+    cursor = None
+    while True:
+        params = {"limit": 2, **({"cursor": cursor} if cursor else {})}
+        body = db_client(people["reporter"]).get("/api/v1/cases", params=params).json()
+        assert set(body) == {"items", "next_cursor"}
+        assert len(body["items"]) <= 2
+        walked.extend(item["id"] for item in body["items"])
+        cursor = body["next_cursor"]
+        if cursor is None:
+            break
+    assert walked == full
+    assert created <= set(walked)
+
+
+@requires_database
+def test_a_cursor_that_is_not_one_of_ours_is_refused(db_client, people):
+    response = db_client(people["reporter"]).get(
+        "/api/v1/cases", params={"cursor": "invalid"}
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == {"status": "invalid_cursor"}
 
 
 # --- q: case-insensitive match on the reference or the id prefix (F1) ----------------------------------------------
@@ -1128,12 +1853,24 @@ def test_hidden_reporter_case_is_not_counted_for_a_triager(db_client, people):
 @requires_database
 def test_q_matches_reference_partially_and_id_prefix_in_any_case(db_client, people):
     case_id = create_case_via_api(db_client, people["reporter"])
-    reference = db_client(people["reporter"]).get(f"/api/v1/cases/{case_id}").json()["reference"]
-    for query in (reference, reference.lower(), reference[5:12], case_id[:8], case_id[:8].upper()):
+    reference = (
+        db_client(people["reporter"])
+        .get(f"/api/v1/cases/{case_id}")
+        .json()["reference"]
+    )
+    for query in (
+        reference,
+        reference.lower(),
+        reference[5:12],
+        case_id[:8],
+        case_id[:8].upper(),
+    ):
         ids = listed_ids(db_client, people["reporter"], query)
         assert case_id in ids, query
     # Every returned case matches q, so nothing unrelated comes through.
-    response = db_client(people["reporter"]).get("/api/v1/cases", params={"limit": 200, "q": reference[5:12]})
+    response = db_client(people["reporter"]).get(
+        "/api/v1/cases", params={"limit": 200, "q": reference[5:12]}
+    )
     for item in response.json()["items"]:
         assert reference[5:12].lower() in item["reference"].lower()
 
@@ -1141,22 +1878,35 @@ def test_q_matches_reference_partially_and_id_prefix_in_any_case(db_client, peop
 @requires_database
 def test_q_is_combined_with_visibility(db_client, people):
     own = create_case_via_api(db_client, people["reporter"])
-    own_reference = db_client(people["reporter"]).get(f"/api/v1/cases/{own}").json()["reference"]
+    own_reference = (
+        db_client(people["reporter"]).get(f"/api/v1/cases/{own}").json()["reference"]
+    )
     # Another reporter searches for the exact reference and the id of a case it may not see.
     assert own not in listed_ids(db_client, people["other_reporter"], own_reference)
     assert own not in listed_ids(db_client, people["other_reporter"], own[:8])
-    other = db_client(people["other_reporter"]).get("/api/v1/cases", params={"limit": 200, "q": own_reference})
-    assert other.status_code == 200 and other.json()["total"] == 0 and other.json()["items"] == []
+    other = db_client(people["other_reporter"]).get(
+        "/api/v1/cases", params={"limit": 200, "q": own_reference}
+    )
+    assert other.status_code == 200 and other.json()["items"] == []
     # The owner finds it.
     assert own in listed_ids(db_client, people["reporter"], own_reference)
 
 
 @requires_database
-def test_q_total_counts_only_the_matches(db_client, people):
+def test_q_returns_only_the_matches(db_client, people):
     case_id = create_case_via_api(db_client, people["reporter"])
-    reference = db_client(people["reporter"]).get(f"/api/v1/cases/{case_id}").json()["reference"]
-    body = db_client(people["triager"]).get("/api/v1/cases", params={"limit": 200, "q": reference}).json()
-    assert body["total"] == len(body["items"]) == 1
+    reference = (
+        db_client(people["reporter"])
+        .get(f"/api/v1/cases/{case_id}")
+        .json()["reference"]
+    )
+    body = (
+        db_client(people["triager"])
+        .get("/api/v1/cases", params={"limit": 200, "q": reference})
+        .json()
+    )
+    assert len(body["items"]) == 1
+    assert body["next_cursor"] is None
     assert body["items"][0]["id"] == case_id
 
 
@@ -1165,15 +1915,24 @@ def test_q_treats_like_wildcards_as_plain_text_and_ignores_titles(db_client, peo
     marker = "Title marker " + uuid.uuid4().hex
     created = db_client(people["reporter"]).post(
         "/api/v1/cases",
-        json={"title": marker, "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat()},
+        json={
+            "title": marker,
+            "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
+        },
+        headers=idem(),
     )
     assert created.status_code == 201
     for query in ("%", "_", "SAFE-%", marker):
-        response = db_client(people["triager"]).get("/api/v1/cases", params={"limit": 200, "q": query})
+        response = db_client(people["triager"]).get(
+            "/api/v1/cases", params={"limit": 200, "q": query}
+        )
         assert response.status_code == 200
-        assert response.json()["total"] == 0, query
+        assert response.json()["items"] == [], query
     # A blank q is no filter at all.
     plain = db_client(people["triager"]).get("/api/v1/cases?limit=200").json()
-    blank = db_client(people["triager"]).get("/api/v1/cases", params={"limit": 200, "q": "  "}).json()
-    assert blank["total"] == plain["total"]
-
+    blank = (
+        db_client(people["triager"])
+        .get("/api/v1/cases", params={"limit": 200, "q": "  "})
+        .json()
+    )
+    assert blank["items"] == plain["items"]

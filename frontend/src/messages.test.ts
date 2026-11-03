@@ -8,6 +8,11 @@ describe("describeCode", () => {
     expect(describeCode("setup_required")).toMatch(/no admin yet/);
   });
 
+  it("explains a validation answer and a body that is too large", () => {
+    expect(describeCode("http_400")).toBe("Check the values you entered.");
+    expect(describeCode("payload_too_large")).toMatch(/larger than the server allows/);
+  });
+
   it("falls back to the raw code for an unknown code", () => {
     expect(describeCode("something_new")).toBe("Request failed (something_new).");
   });

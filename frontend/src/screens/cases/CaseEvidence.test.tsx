@@ -185,4 +185,56 @@ describe("CaseEvidence", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("You do not have permission for this action.");
   });
+
+  it("shows a failed item with its own status and offers no download for it", async () => {
+    list.mockResolvedValue(evidencePage([{ ...ITEM, status: "failed" }]));
+    render(<CaseEvidence caseId="case-1" canRead canWrite />);
+
+    const row = (await screen.findByText("notes.txt")).closest("tr") as HTMLElement;
+    expect(within(row).getByText("Failed")).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Download" })).toBeDisabled();
+    expect(screen.queryByText("No evidence uploaded yet.")).not.toBeInTheDocument();
+  });
+
+  it("shows a pending item as Pending, not as available, and offers no download for it", async () => {
+    list.mockResolvedValue(evidencePage([{ ...ITEM, status: "pending" }]));
+    render(<CaseEvidence caseId="case-1" canRead canWrite />);
+
+    const row = (await screen.findByText("notes.txt")).closest("tr") as HTMLElement;
+    expect(within(row).getByText("Pending")).toBeInTheDocument();
+    expect(within(row).queryByText("Available")).not.toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Download" })).toBeDisabled();
+  });
+
+  it("does not show the empty state when the list cannot be loaded, and names the refusal", async () => {
+    const { ApiError } = await vi.importActual<typeof import("../../api")>("../../api");
+    list.mockRejectedValue(new ApiError(404, "case not found"));
+    render(<CaseEvidence caseId="case-1" canRead canWrite={false} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("No case with that ID is available to your account.");
+    expect(screen.queryByText("No evidence uploaded yet.")).not.toBeInTheDocument();
+  });
+
+  it("never reads an empty case as a pass or a verified result", async () => {
+    list.mockResolvedValue(evidencePage([]));
+    render(<CaseEvidence caseId="case-1" canRead canWrite={false} />);
+
+    expect(await screen.findByText("No evidence uploaded yet.")).toBeInTheDocument();
+    expect(screen.queryByText(/\bpass(ed)?\b|verified|complete/i)).not.toBeInTheDocument();
+  });
+
+  it("says the file is not available when the server refuses a download of an available item", async () => {
+    const { ApiError } = await vi.importActual<typeof import("../../api")>("../../api");
+    list.mockResolvedValue(evidencePage([ITEM]));
+    download.mockRejectedValue(new ApiError(409, "evidence is not available"));
+    const user = userEvent.setup();
+    render(<CaseEvidence caseId="case-1" canRead canWrite />);
+
+    await user.click(await screen.findByRole("button", { name: "Download" }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith("This evidence is not available for download yet."),
+    );
+    expect(save).not.toHaveBeenCalled();
+  });
 });

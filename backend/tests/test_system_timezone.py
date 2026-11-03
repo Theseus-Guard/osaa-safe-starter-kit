@@ -5,7 +5,12 @@ from fastapi.testclient import TestClient
 
 from safe_kit import api, auth
 from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS
-from safe_kit.system_timezone import ChangeOutcome, decide, utc_offset, validate_timezone
+from safe_kit.system_timezone import (
+    ChangeOutcome,
+    decide,
+    utc_offset,
+    validate_timezone,
+)
 from safe_kit.users import User
 
 ADMIN_ID = "33333333-3333-3333-3333-333333333333"
@@ -30,7 +35,11 @@ def make_user(user_id, role):
 def caller(monkeypatch):
     state = {"user": make_user(ADMIN_ID, "admin")}
     api.app.dependency_overrides[auth.current_user] = lambda: state["user"]
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()))
+    monkeypatch.setattr(
+        auth,
+        "permissions_for_role",
+        lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()),
+    )
     yield state
     api.app.dependency_overrides.clear()
 
@@ -53,10 +62,13 @@ def test_valid_iana_names_are_accepted(name):
     assert validate_timezone(name) == name
 
 
-@pytest.mark.parametrize("name", ["Mars/Olympus", "", "Europe", "../etc/passwd", "/etc/passwd", "UTC+3", "x" * 65])
+@pytest.mark.parametrize(
+    "name",
+    ["Mars/Olympus", "", "Europe", "../etc/passwd", "/etc/passwd", "UTC+3", "x" * 65],
+)
 def test_invalid_names_are_rejected_with_422(client, timezone_db, name):
     response = put(client, name, current=None)
-    assert response.status_code == 422
+    assert response.status_code == 400
     assert timezone_db.timezone_rows == []
     assert timezone_db.audit_rows == []
 
@@ -93,7 +105,7 @@ def test_change_without_confirmation_is_rejected_with_422(client, timezone_db):
     put(client, ISTANBUL, current=None)
     response = put(client, AUCKLAND, current=ISTANBUL, confirm=False)
     assert response.status_code == 422
-    assert response.json() == {"detail": "confirmation required"}
+    assert response.json()["detail"] == "confirmation required"
     assert len(timezone_db.timezone_rows) == 1
     assert len(timezone_db.audit_rows) == 1
 
@@ -102,7 +114,7 @@ def test_change_with_a_stale_current_value_is_rejected_with_409(client, timezone
     put(client, ISTANBUL, current=None)
     response = put(client, AUCKLAND, current="Europe/Berlin", confirm=True)
     assert response.status_code == 409
-    assert response.json() == {"detail": "timezone changed by someone else; reload"}
+    assert response.json()["detail"] == "timezone changed by someone else; reload"
     assert len(timezone_db.timezone_rows) == 1
 
 
@@ -111,20 +123,31 @@ def test_stale_check_applies_even_to_a_first_set(client, timezone_db):
     assert put(client, AUCKLAND, current=None, confirm=True).status_code == 409
 
 
-def test_confirmed_change_appends_a_row_and_audits_from_to_and_effective_from(client, timezone_db):
+def test_confirmed_change_appends_a_row_and_audits_from_to_and_effective_from(
+    client, timezone_db
+):
     put(client, ISTANBUL, current=None)
     response = put(client, AUCKLAND, current=ISTANBUL, confirm=True)
     assert response.status_code == 200
     assert response.json()["timezone"] == AUCKLAND
 
-    assert [row["timezone"] for row in timezone_db.timezone_rows] == [ISTANBUL, AUCKLAND]
+    assert [row["timezone"] for row in timezone_db.timezone_rows] == [
+        ISTANBUL,
+        AUCKLAND,
+    ]
     [_, audit_row] = timezone_db.audit_rows
     assert audit_row["action"] == "system.timezone_changed"
     assert audit_row["target_type"] == "system_timezone"
     assert audit_row["details"]["from"] == ISTANBUL
     assert audit_row["details"]["to"] == AUCKLAND
-    assert audit_row["details"]["effective_from"] == timezone_db.timezone_rows[1]["effective_from"].isoformat()
-    assert response.json()["effective_from"].replace("Z", "+00:00") == audit_row["details"]["effective_from"]
+    assert (
+        audit_row["details"]["effective_from"]
+        == timezone_db.timezone_rows[1]["effective_from"].isoformat()
+    )
+    assert (
+        response.json()["effective_from"].replace("Z", "+00:00")
+        == audit_row["details"]["effective_from"]
+    )
 
 
 def test_unchanged_value_writes_no_row_and_no_audit(client, timezone_db):
@@ -137,16 +160,20 @@ def test_unchanged_value_writes_no_row_and_no_audit(client, timezone_db):
 
 
 def test_client_cannot_supply_the_effective_time(client, timezone_db):
-    response = put(client, ISTANBUL, current=None, effective_from="2001-01-01T00:00:00Z")
+    response = put(
+        client, ISTANBUL, current=None, effective_from="2001-01-01T00:00:00Z"
+    )
     assert response.status_code == 200
     stored = timezone_db.timezone_rows[0]["effective_from"]
     assert stored > datetime.now(UTC) - timedelta(minutes=1)
-    assert response.json()["effective_from"].replace("Z", "+00:00") == stored.isoformat()
+    assert (
+        response.json()["effective_from"].replace("Z", "+00:00") == stored.isoformat()
+    )
 
 
 def test_current_is_required_so_the_client_states_what_it_replaces(client):
     response = client.put("/api/v1/system/timezone", json={"timezone": ISTANBUL})
-    assert response.status_code == 422
+    assert response.status_code == 400
 
 
 def test_put_requires_users_manage(client, caller, timezone_db):
@@ -161,11 +188,19 @@ def test_put_requires_users_manage(client, caller, timezone_db):
 def test_get_returns_nulls_while_unset(client):
     response = client.get("/api/v1/system/timezone")
     assert response.status_code == 200
-    assert response.json() == {"timezone": None, "effective_from": None, "utc_offset": None}
+    assert response.json() == {
+        "timezone": None,
+        "effective_from": None,
+        "utc_offset": None,
+    }
 
 
-def test_get_returns_the_timezone_its_effective_time_and_the_offset_now(client, timezone_db):
-    timezone_db.seed_timezone(AUCKLAND, datetime(2026, 10, 1, tzinfo=UTC), set_by=ADMIN_ID)
+def test_get_returns_the_timezone_its_effective_time_and_the_offset_now(
+    client, timezone_db
+):
+    timezone_db.seed_timezone(
+        AUCKLAND, datetime(2026, 10, 1, tzinfo=UTC), set_by=ADMIN_ID
+    )
     body = client.get("/api/v1/system/timezone").json()
     assert body["timezone"] == AUCKLAND
     assert body["effective_from"] == "2026-10-01T00:00:00Z"
@@ -215,4 +250,3 @@ def test_decide(stored, current, timezone, confirm, expected):
 )
 def test_utc_offset_is_formatted_for_the_instant(timezone, instant, expected):
     assert utc_offset(timezone, instant) == expected
-

@@ -15,7 +15,11 @@ from fastapi.testclient import TestClient
 
 from safe_kit import api, auth, system_timezone, users
 from safe_kit.cases import AssignableUser, CaseScope
-from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS, list_role_permissions, set_role_permissions
+from safe_kit.rbac import (
+    DEFAULT_ROLE_PERMISSIONS,
+    list_role_permissions,
+    set_role_permissions,
+)
 from safe_kit.users import User
 
 TRIAGER_ID = "22222222-2222-2222-2222-222222222222"
@@ -26,6 +30,11 @@ requires_database = pytest.mark.skipif(
     os.environ.get("SAFE_TEST_DATABASE") != "1",
     reason="set SAFE_TEST_DATABASE=1 and the SAFE_DB_* settings to run the database tests",
 )
+
+
+def idem() -> dict:
+    """A fresh Idempotency-Key header for one request."""
+    return {"Idempotency-Key": str(uuid.uuid4())}
 
 
 def make_user(user_id, role):
@@ -45,7 +54,11 @@ def make_user(user_id, role):
 def caller(monkeypatch):
     state = {"user": make_user(TRIAGER_ID, "triager")}
     api.app.dependency_overrides[auth.current_user] = lambda: state["user"]
-    monkeypatch.setattr(auth, "permissions_for_role", lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()))
+    monkeypatch.setattr(
+        auth,
+        "permissions_for_role",
+        lambda role: DEFAULT_ROLE_PERMISSIONS.get(role, frozenset()),
+    )
     yield state
     api.app.dependency_overrides.clear()
 
@@ -62,7 +75,9 @@ def url() -> str:
 # --- HTTP mapping without a database -----------------------------------------------------------------------------
 
 
-def test_holder_of_cases_assign_gets_the_listed_users_with_name_and_role_only(client, monkeypatch):
+def test_holder_of_cases_assign_gets_the_listed_users_with_name_and_role_only(
+    client, monkeypatch
+):
     seen = {}
 
     def fake_list(case_id, scope):
@@ -91,13 +106,20 @@ def test_holder_of_cases_assign_gets_the_listed_users_with_name_and_role_only(cl
         }
     ]
     assert seen["case_id"] == CASE_ID
-    assert seen["scope"] == CaseScope(user_id=TRIAGER_ID, read_all=True, read_assigned=True)
+    assert seen["scope"] == CaseScope(
+        user_id=TRIAGER_ID, read_all=True, read_assigned=True, can_assign=True
+    )
 
 
-@pytest.mark.parametrize("role", ["reporter", "investigator", "reviewer", "admin", "auditor", "disclosure_approver"])
+@pytest.mark.parametrize(
+    "role",
+    ["reporter", "investigator", "reviewer", "admin", "auditor", "disclosure_approver"],
+)
 def test_caller_without_cases_assign_gets_403(client, caller, monkeypatch, role):
     def must_not_run(case_id, scope):
-        raise AssertionError("the list must not be built for a caller without cases:assign")
+        raise AssertionError(
+            "the list must not be built for a caller without cases:assign"
+        )
 
     monkeypatch.setattr(api, "list_assignable_users", must_not_run)
     caller["user"] = make_user(TRIAGER_ID, role)
@@ -108,7 +130,7 @@ def test_case_the_caller_cannot_see_is_404(client, monkeypatch):
     monkeypatch.setattr(api, "list_assignable_users", lambda case_id, scope: None)
     response = client.get(url())
     assert response.status_code == 404
-    assert response.json() == {"detail": "case not found"}
+    assert response.json()["detail"] == "case not found"
 
 
 # --- database: which users are listed -----------------------------------------------------------------------------
@@ -160,7 +182,9 @@ def granted(timezone_set):
     admin = new_user("admin")
     original = {}
 
-    def set_permission(role: str, granted_flag: bool, permission: str = "cases:assignable") -> None:
+    def set_permission(
+        role: str, granted_flag: bool, permission: str = "cases:assignable"
+    ) -> None:
         if role not in original:
             original[role] = list_role_permissions()[role]
         wanted = set(original[role])
@@ -182,6 +206,7 @@ def create_case_via_api(reporter: str) -> str:
             "title": "Assignable users case",
             "awareness_time": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
         },
+        headers=idem(),
     )
     assert response.status_code == 201, response.text
     return response.json()["id"]
@@ -194,7 +219,9 @@ def listed_ids(db_client, triager: str, case_id: str) -> set[str]:
 
 
 @requires_database
-def test_only_active_undeleted_assignable_roles_holding_cases_assign_are_listed(db_client, granted):
+def test_only_active_undeleted_assignable_roles_holding_cases_assign_are_listed(
+    db_client, granted
+):
     reporter = new_user("reporter")
     triager = new_user("triager")
     case_id = create_case_via_api(reporter)
@@ -215,7 +242,9 @@ def test_only_active_undeleted_assignable_roles_holding_cases_assign_are_listed(
 
 
 @requires_database
-def test_listing_follows_the_role_grant_and_triagers_are_never_listed(db_client, granted):
+def test_listing_follows_the_role_grant_and_triagers_are_never_listed(
+    db_client, granted
+):
     reporter = new_user("reporter")
     triager = new_user("triager")
     case_id = create_case_via_api(reporter)
@@ -234,7 +263,9 @@ def test_listing_follows_the_role_grant_and_triagers_are_never_listed(db_client,
 
 
 @requires_database
-def test_triager_with_cases_assign_is_not_listed_and_cannot_be_assigned(db_client, granted):
+def test_triager_with_cases_assign_is_not_listed_and_cannot_be_assigned(
+    db_client, granted
+):
     reporter = new_user("reporter")
     triager = new_user("triager")
     case_id = create_case_via_api(reporter)
@@ -242,9 +273,13 @@ def test_triager_with_cases_assign_is_not_listed_and_cannot_be_assigned(db_clien
     assert "cases:assign" in DEFAULT_ROLE_PERMISSIONS["triager"]
     assert "cases:assignable" not in DEFAULT_ROLE_PERMISSIONS["triager"]
     assert triager not in listed_ids(db_client, triager, case_id)
-    response = db_client(triager).post(f"/api/v1/cases/{case_id}/assignments", json={"user_id": triager})
+    response = db_client(triager).post(
+        f"/api/v1/cases/{case_id}/assignments",
+        json={"user_id": triager},
+        headers=idem(),
+    )
     assert response.status_code == 422
-    assert response.json() == {"detail": "assignee must be an investigator or reviewer"}
+    assert response.json()["detail"] == "assignee must be an investigator or reviewer"
 
 
 @requires_database
@@ -255,17 +290,34 @@ def test_assignability_follows_the_grant_not_the_role_name(db_client, granted):
     auditor = new_user("auditor")
     url = f"/api/v1/cases/{case_id}/assignments"
     assert auditor not in listed_ids(db_client, triager, case_id)
-    assert db_client(triager).post(url, json={"user_id": auditor}).status_code == 422
+    assert (
+        db_client(triager)
+        .post(url, json={"user_id": auditor}, headers=idem())
+        .status_code
+        == 422
+    )
     granted("auditor", True)
     assert auditor in listed_ids(db_client, triager, case_id)
-    assert db_client(triager).post(url, json={"user_id": auditor}).status_code == 201
+    assert (
+        db_client(triager)
+        .post(url, json={"user_id": auditor}, headers=idem())
+        .status_code
+        == 201
+    )
     granted("auditor", False)
     assert auditor not in listed_ids(db_client, triager, case_id)
-    assert db_client(triager).post(url, json={"user_id": new_user("auditor")}).status_code == 422
+    assert (
+        db_client(triager)
+        .post(url, json={"user_id": new_user("auditor")}, headers=idem())
+        .status_code
+        == 422
+    )
 
 
 @requires_database
-def test_unassigned_holder_of_cases_assign_gets_404_for_a_case_it_cannot_see(db_client, granted):
+def test_unassigned_holder_of_cases_assign_gets_404_for_a_case_it_cannot_see(
+    db_client, granted
+):
     reporter = new_user("reporter")
     case_id = create_case_via_api(reporter)
     # The endpoint needs cases:assign; the investigator holds it only for this test, so the 404 is about visibility.
@@ -273,4 +325,4 @@ def test_unassigned_holder_of_cases_assign_gets_404_for_a_case_it_cannot_see(db_
     unassigned = new_user("investigator")
     response = db_client(unassigned).get(f"/api/v1/cases/{case_id}/assignable-users")
     assert response.status_code == 404
-    assert response.json() == {"detail": "case not found"}
+    assert response.json()["detail"] == "case not found"

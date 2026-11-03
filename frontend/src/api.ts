@@ -1,5 +1,7 @@
 // Thin client for the existing backend API, called through the gateway at /api/v1.
-// Tokens live in memory only. A page reload requires logging in again.
+// The session is carried by cookies that the server sets: the access and refresh tokens are HttpOnly, so this module
+// never reads or stores them. Every request is sent with credentials. The CSRF cookie is readable by the page, and its
+// value is sent back in the X-CSRF-Token header of every state-changing request.
 
 import { recordActivity } from "./idle";
 
@@ -53,6 +55,8 @@ export interface UserSummary extends UserProfile {
   is_protected: boolean;
   password_change_required: boolean;
   created_at: string;
+  // Starts at 1 and rises with each change to the account. Sent as If-Match when the account is changed.
+  revision: number;
 }
 
 export interface UserPage {
@@ -77,13 +81,6 @@ export interface PermissionSummary {
   description: string;
 }
 
-interface TokenResponse {
-  access_token: string;
-  refresh_token: string;
-  expires_in: number;
-  password_change_required: boolean;
-}
-
 export type Readiness = "ready" | "setup_required" | "unavailable";
 
 export class ApiError extends Error {
@@ -91,19 +88,21 @@ export class ApiError extends Error {
   readonly code: string;
   // Set only on a classification_version_conflict (409): the version the server holds now.
   readonly currentVersion: number | null;
+  // Set only on a precondition_failed (412) of a review round: the revision the server holds now.
+  readonly currentRevision: number | null;
 
-  constructor(status: number, code: string, currentVersion: number | null = null) {
+  constructor(status: number, code: string, currentVersion: number | null = null, currentRevision: number | null = null) {
     super(code);
     this.status = status;
     this.code = code;
     this.currentVersion = currentVersion;
+    this.currentRevision = currentRevision;
   }
 }
 
+// Only the fact that a session started and when its cookies were issued. The tokens themselves are never in the page.
 interface Session {
-  access: string;
-  refresh: string;
-  // When the current token pair was issued. Both tokens start their lifetime at the same moment.
+  // When the current cookie pair was issued. Both cookies start their lifetime at the same moment.
   issuedAt: number;
 }
 
@@ -111,6 +110,15 @@ interface Session {
 // lifetime as the access token, so renewing only after the access token expires would find the refresh token expired
 // too. A session that is not used for the full refresh lifetime ends on its next request.
 const RENEW_AFTER_MS = 5 * 60 * 1000;
+
+const CSRF_HEADER = "X-CSRF-Token";
+const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+// The CSRF cookie is not HttpOnly, so the page can read it. Returns null when the cookie is absent.
+function csrfToken(): string | null {
+  const match = document.cookie.match(/(?:^|;\s*)safe_csrf=([^;]*)/);
+  return match ? match[1] : null;
+}
 
 interface RequestOptions {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -121,6 +129,8 @@ interface RequestOptions {
   responseType?: "json" | "blob";
   // Multipart body for file uploads. The browser sets the Content-Type with the boundary.
   form?: FormData;
+  // Extra request headers, such as Idempotency-Key.
+  headers?: Record<string, string>;
 }
 
 let session: Session | null = null;
@@ -140,33 +150,37 @@ function endSession(): void {
   sessionEndedListener?.();
 }
 
-function storeTokens(body: TokenResponse): void {
-  session = { access: body.access_token, refresh: body.refresh_token, issuedAt: Date.now() };
+// The server has set the cookies on the login response. Only the time is kept here.
+function startSession(): void {
+  session = { issuedAt: Date.now() };
 }
 
+// Every request carries the cookies (credentials: "include"). A state-changing request also carries the CSRF value.
 async function send(path: string, options: RequestOptions): Promise<Response> {
-  const headers = new Headers();
+  const method = options.method ?? "GET";
+  const headers = new Headers(options.headers);
   if (options.json !== undefined) headers.set("Content-Type", "application/json");
-  if (options.auth !== false && session) headers.set("Authorization", `Bearer ${session.access}`);
+  if (UNSAFE_METHODS.has(method)) {
+    const csrf = csrfToken();
+    if (csrf !== null) headers.set(CSRF_HEADER, csrf);
+  }
   let body: BodyInit | undefined;
   if (options.form !== undefined) body = options.form;
   else if (options.json !== undefined) body = JSON.stringify(options.json);
   return fetch(`/api/v1${path}`, {
-    method: options.method ?? "GET",
+    method,
     headers,
     body,
+    credentials: "include",
   });
 }
 
+// The refresh token travels in its HttpOnly cookie, so the request has no body. The server sets new cookies on success.
+// Callers decide whether a refresh is wanted. After a page reload there is no session in memory yet, so this does not check one.
 async function renew(): Promise<boolean> {
-  if (!session) return false;
-  const response = await fetch("/api/v1/auth/refresh", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refresh_token: session.refresh }),
-  });
+  const response = await send("/auth/refresh", { method: "POST" });
   if (!response.ok) return false;
-  storeTokens((await response.json()) as TokenResponse);
+  startSession();
   return true;
 }
 
@@ -182,19 +196,21 @@ function refreshOnce(): Promise<boolean> {
 async function toApiError(response: Response): Promise<ApiError> {
   let code = `http_${response.status}`;
   let currentVersion: number | null = null;
+  let currentRevision: number | null = null;
   try {
     const body = (await response.json()) as { detail?: unknown };
     if (typeof body.detail === "string") {
       code = body.detail;
     } else if (typeof body.detail === "object" && body.detail !== null && "status" in body.detail) {
-      const detail = body.detail as { status: unknown; current_version?: unknown };
+      const detail = body.detail as { status: unknown; current_version?: unknown; current_revision?: unknown };
       code = String(detail.status);
       if (typeof detail.current_version === "number") currentVersion = detail.current_version;
+      if (typeof detail.current_revision === "number") currentRevision = detail.current_revision;
     }
   } catch {
     // Empty or non-JSON error body: keep the HTTP status code.
   }
-  return new ApiError(response.status, code, currentVersion);
+  return new ApiError(response.status, code, currentVersion, currentRevision);
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -220,26 +236,68 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return (await response.json()) as T;
 }
 
+// The login response also carries the tokens for API clients. The page ignores them: the cookies are the session.
 export async function login(username: string, password: string): Promise<void> {
-  const body = await request<TokenResponse>("/auth/token", {
+  await request<unknown>("/auth/token", {
     method: "POST",
     json: { username, password },
     auth: false,
   });
-  storeTokens(body);
+  startSession();
+}
+
+// Demo sign-in: one demo role with its own credential. The server answers 401 for a wrong credential, a wrong username,
+// and a username outside the demo roles alike. The page holds no credential after the request.
+export async function demoSignIn(username: string, credential: string): Promise<void> {
+  await request<unknown>("/demo/sign-in", {
+    method: "POST",
+    json: { username, credential },
+    auth: false,
+  });
+  startSession();
+}
+
+// Public: the server says whether it runs in demo mode with the synthetic dataset, and lists the demo roles that can
+// sign in (names and roles only). The demo banner and the login screen depend on it. Outside demo mode users is empty.
+export interface DemoUser {
+  username: string;
+  name: string;
+  role: string;
+}
+
+export interface DemoStatus {
+  demo: boolean;
+  users: DemoUser[];
+}
+
+export function demoStatus(): Promise<DemoStatus> {
+  return request<DemoStatus>("/demo/status");
 }
 
 export function me(): Promise<Me> {
   return request<Me>("/auth/me");
 }
 
+// Start-up after a page load. The page cannot read the HttpOnly cookies, so it asks the server whether a session exists.
+// A 200 from /auth/me starts the session. A 401 gets one refresh (shared with any refresh already in flight), then one
+// more /auth/me. Any other result, including a failed refresh, resolves to null, which means the login page is shown.
+// It does not end a session or notify the session listener, because no session was running.
+export async function restoreSession(): Promise<Me | null> {
+  let response = await send("/auth/me", { method: "GET" });
+  if (response.status === 401) {
+    if (!(await refreshOnce())) return null;
+    response = await send("/auth/me", { method: "GET" });
+  }
+  if (!response.ok) return null;
+  const current = (await response.json()) as Me;
+  startSession();
+  return current;
+}
+
+// The server clears the session cookies and revokes the session. The local state is cleared even when the request fails.
 export async function logout(): Promise<void> {
-  const refreshToken = session?.refresh;
   try {
-    await request("/auth/logout", {
-      method: "POST",
-      json: refreshToken ? { refresh_token: refreshToken } : {},
-    });
+    await request("/auth/logout", { method: "POST" });
   } finally {
     clearSession();
   }
@@ -287,10 +345,13 @@ export function listUsers(limit: number, offset: number): Promise<UserPage> {
   return request<UserPage>(`/users?limit=${limit}&offset=${offset}`);
 }
 
-export function updateUser(userId: string, changes: UserUpdate): Promise<UserSummary> {
+// revision is the account revision the caller read (UserSummary.revision), sent as If-Match. A stale revision answers
+// 412 with ApiError.currentRevision and changes nothing.
+export function updateUser(userId: string, changes: UserUpdate, revision: number): Promise<UserSummary> {
   return request<UserSummary>(`/users/${encodeURIComponent(userId)}`, {
     method: "PATCH",
     json: changes,
+    headers: { "If-Match": `"${revision}"` },
   });
 }
 
@@ -330,20 +391,40 @@ export interface DeadlineTask {
   due_at: string;
   status: string;
   not_applicable_reason: string | null;
+  // Starts at 1 and rises with each change to this task. Sent as If-Match when the task is changed. Null only for a
+  // task that is not stored yet.
+  revision: number | null;
 }
 
 export type DeadlineStatus = "open" | "done" | "not_applicable";
 
-export interface CaseSummary {
+// Risk. The impact values C (Confidentiality), B (Integrity) and A (Availability) are each 1 to 5, or null when not set.
+// The risk score is their mean to one decimal place, and null until all three are set. Nothing is stored for the score.
+export interface RiskFields {
+  risk_score: number | null;
+  impact_c: number | null;
+  impact_b: number | null;
+  impact_a: number | null;
+}
+
+// The case statuses the backend stores and accepts in the case list status filter (safe_kit.cases.CaseStatus).
+export const CASE_STATUSES = ["open", "closed"] as const;
+export type CaseStatus = (typeof CASE_STATUSES)[number];
+
+export interface CaseSummary extends RiskFields {
   id: string;
   reference: string;
   title: string;
   awareness_time: string;
   status: string;
   created_at: string;
+  // The earliest due date of the case's open deadline tasks, or null when none is open.
+  next_deadline: string | null;
+  // The time of the case's latest change.
+  updated_at: string;
 }
 
-export interface CaseDetail {
+export interface CaseDetail extends RiskFields {
   id: string;
   reference: string;
   title: string;
@@ -360,9 +441,8 @@ export interface CaseDetail {
 
 export interface CasePage {
   items: CaseSummary[];
-  total: number;
-  limit: number;
-  offset: number;
+  // Pass this as the cursor of the next call. Null when there is no further page.
+  next_cursor: string | null;
 }
 
 export interface CaseCreateBody {
@@ -377,72 +457,239 @@ export interface ReportCreateBody extends CaseCreateBody {
 }
 
 // q matches the case reference (partial, case-insensitive) or the case UUID prefix. Omitted or blank q lists every visible case.
-export function listCases(limit: number, offset: number, q?: string): Promise<CasePage> {
+// status narrows the list to one case status. Omitted means every status.
+// cursor is the next_cursor of the previous page. Omitted means the first page.
+export function listCases(limit: number, cursor?: string, q?: string, status?: CaseStatus): Promise<CasePage> {
+  const position = cursor === undefined ? "" : `&cursor=${encodeURIComponent(cursor)}`;
   const term = q?.trim() ?? "";
   const search = term === "" ? "" : `&q=${encodeURIComponent(term)}`;
-  return request<CasePage>(`/cases?limit=${limit}&offset=${offset}${search}`);
+  const filter = status === undefined ? "" : `&status=${encodeURIComponent(status)}`;
+  return request<CasePage>(`/cases?limit=${limit}${position}${search}${filter}`);
 }
 
 export function getCase(caseId: string): Promise<CaseDetail> {
   return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}`);
 }
 
+// Every state-changing request sends a new Idempotency-Key, so a repeated submit returns the first answer.
+function idempotencyHeaders(): Record<string, string> {
+  return { "Idempotency-Key": crypto.randomUUID() };
+}
+
 export function createCase(body: CaseCreateBody): Promise<CaseDetail> {
-  return request<CaseDetail>("/cases", { method: "POST", json: body });
+  return request<CaseDetail>("/cases", { method: "POST", json: body, headers: idempotencyHeaders() });
 }
 
 // Reporter intake. Returns the same shape as createCase. The contact is stored for the independent reporting owner and never returned.
 export function createReport(body: ReportCreateBody): Promise<CaseDetail> {
-  return request<CaseDetail>("/reports", { method: "POST", json: body });
+  return request<CaseDetail>("/reports", { method: "POST", json: body, headers: idempotencyHeaders() });
 }
 
 // The reason is stored on the case and shown after closure.
 export function closeCase(caseId: string, reason: string): Promise<CaseDetail> {
-  return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}/close`, { method: "POST", json: { reason } });
+  return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}/close`, { method: "POST", json: { reason }, headers: idempotencyHeaders() });
 }
 
 // Needs cases:close, the same permission as closing. The reason is required and stored with the case.
 export function reopenCase(caseId: string, reason: string): Promise<CaseDetail> {
-  return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}/reopen`, { method: "POST", json: { reason } });
+  return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}/reopen`, { method: "POST", json: { reason }, headers: idempotencyHeaders() });
 }
 
-// The reason is required for not_applicable and rejected for every other status.
+// The reason is required for not_applicable and rejected for every other status. revision is the task revision the
+// caller read (DeadlineTask.revision), sent as If-Match. A stale revision answers 412 and changes nothing.
 export function updateDeadline(
   caseId: string,
   taskId: string,
   status: DeadlineStatus,
-  reason?: string,
+  reason: string | undefined,
+  revision: number,
 ): Promise<CaseDetail> {
   return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}/deadlines/${encodeURIComponent(taskId)}`, {
     method: "PATCH",
     json: { status, reason },
+    headers: { ...idempotencyHeaders(), "If-Match": `"${revision}"` },
   });
 }
 
-// Review outcomes accepted by the backend.
-export type ReviewOutcome = "pass" | "fail" | "insufficient_evidence" | "not_applicable";
-
-export interface ReviewCreateBody {
-  outcome: ReviewOutcome;
-  // Omitted or null when the reviewer adds no note. The backend trims it and stores blank text as null.
-  note?: string | null;
+// Turns off the not applicable exception of one task: it goes back to the status it had before. Due dates do not change.
+export function restoreDeadline(caseId: string, taskId: string): Promise<CaseDetail> {
+  return request<CaseDetail>(
+    `/cases/${encodeURIComponent(caseId)}/deadlines/${encodeURIComponent(taskId)}/restore`,
+    { method: "POST", headers: idempotencyHeaders() },
+  );
 }
 
-export interface ReviewResponse {
+// The outcome of one review layer, as the backend accepts it. A layer that is not set has no outcome (null).
+export type LayerOutcome = "pass" | "fail" | "insufficient_evidence" | "not_applicable";
+
+// The eleven layers of the review template, in the order the plan lists them. The keys are the API's layer names.
+export const REVIEW_LAYERS: { key: string; label: string }[] = [
+  { key: "model", label: "Model" },
+  { key: "instructions", label: "Instructions" },
+  { key: "safeguards", label: "Safeguards" },
+  { key: "tools", label: "Tools" },
+  { key: "environment", label: "Environment" },
+  { key: "monitoring", label: "Monitoring" },
+  { key: "human-operations", label: "Human operations" },
+  { key: "supply-chain", label: "Supply chain" },
+  { key: "serving-path", label: "Serving path" },
+  { key: "authorization-and-commitment", label: "Authorization and commitment" },
+  { key: "workflow-composition", label: "Workflow composition" },
+];
+
+export interface ReviewLayer {
+  layer: string;
+  outcome: LayerOutcome | null;
+  // Null when the caller may not read free text (cases:read_all), and when the layer has no reason.
+  reason: string | null;
+  evidence_ids: string[];
+  set_at: string | null;
+}
+
+// A review of a case. It has no overall result: only its state, its revision, and its layers.
+export interface ReviewRound {
   id: string;
   case_id: string;
-  outcome: ReviewOutcome;
-  note: string | null;
+  status: "open" | "closed";
+  // Starts at 1 and increases by one for every change to a layer. It is the ETag of the round: send it as If-Match
+  // when changing a layer.
+  revision: number;
+  opened_at: string;
+  closed_at: string | null;
+  layers: ReviewLayer[];
 }
 
-// Needs reviews:write and an active assignment to the case. The case must be open.
-export function createReview(caseId: string, body: ReviewCreateBody): Promise<ReviewResponse> {
-  return request<ReviewResponse>(`/cases/${encodeURIComponent(caseId)}/reviews`, { method: "POST", json: body });
+export interface ReviewLayerBody {
+  outcome: LayerOutcome;
+  // Required for every outcome except pass. Omitted or null otherwise.
+  reason?: string | null;
+  evidence_ids?: string[];
 }
 
-// Every review of the case, newest first and not deleted. Needs case read access. Answers 404 when the caller cannot see the case.
-export function listReviews(caseId: string): Promise<ReviewResponse[]> {
-  return request<ReviewResponse[]>(`/cases/${encodeURIComponent(caseId)}/reviews`);
+// Opens a review round with all eleven layers not set. Needs reviews:write and an active assignment to the case.
+// Sends a new Idempotency-Key, so a repeated submit of the same request returns the first round.
+export function openReviewRound(caseId: string): Promise<ReviewRound> {
+  return request<ReviewRound>("/reviews", {
+    method: "POST",
+    json: { case_id: caseId },
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+  });
+}
+
+// The rounds of a case, newest first. Needs case read access. Answers 404 when the caller cannot see the case.
+export function listReviewRounds(caseId: string): Promise<ReviewRound[]> {
+  return request<ReviewRound[]>(`/reviews?case_id=${encodeURIComponent(caseId)}`);
+}
+
+// Sets one layer of a round. revision is the round revision the caller read, sent as If-Match. A stale revision
+// answers 412 with ApiError.currentRevision and changes nothing.
+export function setReviewLayer(
+  roundId: string,
+  layer: string,
+  body: ReviewLayerBody,
+  revision: number,
+): Promise<ReviewRound> {
+  return request<ReviewRound>(`/reviews/${encodeURIComponent(roundId)}/layers/${encodeURIComponent(layer)}`, {
+    method: "PATCH",
+    json: body,
+    headers: { ...idempotencyHeaders(), "If-Match": `"${revision}"` },
+  });
+}
+
+// A conflict entry of a review round. Entries are never edited: a correction is a new entry that names the entry it
+// supersedes, and the newest entry of a reviewer on the round is the current one. description is null for callers
+// who may not read free text (cases:read_all, or the reviewer concerned).
+export interface ReviewConflict {
+  id: string;
+  round_id: string;
+  reviewer_id: string;
+  kind: "declared" | "withdrawn";
+  description: string | null;
+  supersedes_id: string | null;
+  created_at: string;
+  current: boolean;
+}
+
+export interface ReviewConflictBody {
+  kind: "declared" | "withdrawn";
+  description?: string | null;
+  supersedes_id?: string | null;
+}
+
+// A recusal of a reviewer from a round, with the replacement the reviewer names. reason is null for callers who may
+// not read free text.
+export interface ReviewRecusal {
+  id: string;
+  round_id: string;
+  reviewer_id: string;
+  replacement_id: string;
+  reason: string | null;
+  supersedes_id: string | null;
+  created_at: string;
+  current: boolean;
+}
+
+export interface ReviewRecusalBody {
+  replacement_id: string;
+  reason?: string | null;
+  supersedes_id?: string | null;
+}
+
+// An appeal against a round. The product does not decide it. grounds is null for callers who may not read free text.
+export interface ReviewAppeal {
+  id: string;
+  round_id: string;
+  filed_by: string;
+  independent_reviewer_id: string;
+  grounds: string | null;
+  created_at: string;
+}
+
+// The filer names no reviewer: the system names the independent reviewer.
+export interface ReviewAppealBody {
+  grounds: string;
+}
+
+// The conflict entries of a round, newest first. Answers 404 when the caller cannot see the round.
+export function listReviewConflicts(roundId: string): Promise<ReviewConflict[]> {
+  return request<ReviewConflict[]>(`/reviews/${encodeURIComponent(roundId)}/conflicts`);
+}
+
+// Declares, withdraws or corrects the caller's own conflict on a round. Sends a new Idempotency-Key.
+export function declareReviewConflict(roundId: string, body: ReviewConflictBody): Promise<ReviewConflict> {
+  return request<ReviewConflict>(`/reviews/${encodeURIComponent(roundId)}/conflicts`, {
+    method: "POST",
+    json: body,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+  });
+}
+
+// The recusals of a round, newest first. Answers 404 when the caller cannot see the round.
+export function listReviewRecusals(roundId: string): Promise<ReviewRecusal[]> {
+  return request<ReviewRecusal[]>(`/reviews/${encodeURIComponent(roundId)}/recusals`);
+}
+
+// Withdraws the caller from a round and names the replacement. Sends a new Idempotency-Key.
+export function recuseFromReviewRound(roundId: string, body: ReviewRecusalBody): Promise<ReviewRecusal> {
+  return request<ReviewRecusal>(`/reviews/${encodeURIComponent(roundId)}/recusals`, {
+    method: "POST",
+    json: body,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+  });
+}
+
+// The appeals against a round, newest first. Answers 404 when the caller cannot see the round.
+export function listReviewAppeals(roundId: string): Promise<ReviewAppeal[]> {
+  return request<ReviewAppeal[]>(`/reviews/${encodeURIComponent(roundId)}/appeals`);
+}
+
+// Files an appeal against a round for an independent reviewer. Sends a new Idempotency-Key.
+export function fileReviewAppeal(roundId: string, body: ReviewAppealBody): Promise<ReviewAppeal> {
+  return request<ReviewAppeal>(`/reviews/${encodeURIComponent(roundId)}/appeals`, {
+    method: "POST",
+    json: body,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+  });
 }
 
 export interface Assignment {
@@ -463,6 +710,7 @@ export function addAssignment(caseId: string, userId: string): Promise<Assignmen
   return request<Assignment>(`/cases/${encodeURIComponent(caseId)}/assignments`, {
     method: "POST",
     json: { user_id: userId },
+    headers: idempotencyHeaders(),
   });
 }
 
@@ -503,6 +751,7 @@ export function addCaseLink(caseId: string, linkedCaseId: string): Promise<CaseL
   return request<CaseLink>(`/cases/${encodeURIComponent(caseId)}/links`, {
     method: "POST",
     json: { linked_case_id: linkedCaseId },
+    headers: idempotencyHeaders(),
   });
 }
 
@@ -560,6 +809,54 @@ export interface EvidenceItem {
   sha256_plaintext: string | null;
   status: string;
   created_at: string;
+  // The TLP audience label. Null for an uploaded original, which has no TLP rule.
+  tlp_label?: string | null;
+}
+
+// TLP audience labels, from the narrowest to the widest. A redacted copy may not be labelled less restrictively than its original.
+export const TLP_LABELS = ["RED", "AMBER", "AMBER+STRICT", "GREEN", "CLEAR"] as const;
+export type TlpLabel = (typeof TLP_LABELS)[number];
+
+export interface RemovedRange {
+  from_line: number;
+  to_line: number;
+  // The number of lines in the range, from 1-based inclusive line numbers.
+  lines: number;
+  reason: string;
+}
+
+// The manifest of a redacted copy. It names the removed ranges and the reasons, never the removed text.
+export interface RedactionManifest {
+  method: string;
+  replacement: string;
+  source_sha256: string | null;
+  tlp_label: string;
+  lines_total: number;
+  removed_lines: number;
+  removed: RemovedRange[];
+}
+
+// A review layer that cites the original. On the redacted copy it is insufficient_evidence.
+export interface ClaimAssessment {
+  review_layer_id: string;
+  round_id: string;
+  layer: string;
+  outcome: string;
+  reason: string;
+}
+
+export interface Derivation {
+  redaction_id: string;
+  original_evidence_id: string;
+  derived: EvidenceItem;
+  manifest: RedactionManifest;
+  claim_assessments: ClaimAssessment[];
+}
+
+export interface RedactionRangeBody {
+  from_line: number;
+  to_line: number;
+  reason: string;
 }
 
 export interface EvidencePage {
@@ -584,7 +881,7 @@ export function listEvidence(caseId: string, limit: number, offset: number): Pro
 export function uploadEvidence(caseId: string, file: File): Promise<EvidenceItem> {
   const form = new FormData();
   form.append("file", file);
-  return request<EvidenceItem>(`/cases/${encodeURIComponent(caseId)}/evidence`, { method: "POST", form });
+  return request<EvidenceItem>(`/cases/${encodeURIComponent(caseId)}/evidence`, { method: "POST", form, headers: idempotencyHeaders() });
 }
 
 // Each successful download is recorded in the custody log before the bytes are returned.
@@ -594,6 +891,33 @@ export function downloadEvidence(evidenceId: string): Promise<Blob> {
 
 export function listCustodyEvents(evidenceId: string): Promise<CustodyEvent[]> {
   return request<CustodyEvent[]>(`/evidence/${encodeURIComponent(evidenceId)}/custody`);
+}
+
+// One item, with its TLP label. Needs evidence:read and a visible case. A TLP-hidden item answers the same 404 as a missing one.
+export function getEvidence(evidenceId: string): Promise<EvidenceItem> {
+  return request<EvidenceItem>(`/evidence/${encodeURIComponent(evidenceId)}`);
+}
+
+// The redacted copies of an original that the caller may see under the TLP rule.
+export function listDerivatives(evidenceId: string): Promise<EvidenceItem[]> {
+  return request<EvidenceItem[]>(`/evidence/${encodeURIComponent(evidenceId)}/derivatives`);
+}
+
+// The manifest and claim assessments of a redacted copy. An original answers 404.
+export function getRedaction(derivedEvidenceId: string): Promise<Derivation> {
+  return request<Derivation>(`/evidence/${encodeURIComponent(derivedEvidenceId)}/redaction`);
+}
+
+// Needs evidence:read and evidence:write. The original is unchanged; the copy is a new item with its own ID.
+export function redactEvidence(
+  evidenceId: string,
+  body: { removed: RedactionRangeBody[]; tlp_label: TlpLabel },
+): Promise<Derivation> {
+  return request<Derivation>(`/evidence/${encodeURIComponent(evidenceId)}/derivatives`, {
+    method: "POST",
+    json: body,
+    headers: idempotencyHeaders(),
+  });
 }
 
 // Case record: awareness events, impacts, legal duties, classification and the preliminary report.
@@ -635,6 +959,7 @@ export function addAwarenessEvent(caseId: string, body: AwarenessEventCreateBody
   return request<AwarenessEvent>(`/cases/${encodeURIComponent(caseId)}/awareness-events`, {
     method: "POST",
     json: body,
+    headers: idempotencyHeaders(),
   });
 }
 
@@ -674,6 +999,7 @@ export function setImpact(
   return request<ImpactAssessment>(`/cases/${encodeURIComponent(caseId)}/impacts/${encodeURIComponent(area)}`, {
     method: "PUT",
     json: body,
+    headers: idempotencyHeaders(),
   });
 }
 
@@ -694,6 +1020,8 @@ export interface LegalDuty {
   status: DutyStatus;
   created_by: string;
   created_at: string;
+  // Starts at 1 and rises with each change to the duty. Sent as If-Match when the duty is changed.
+  revision: number;
 }
 
 export interface LegalDutyCreateBody {
@@ -719,13 +1047,20 @@ export function listLegalDuties(caseId: string): Promise<LegalDuty[]> {
 }
 
 export function addLegalDuty(caseId: string, body: LegalDutyCreateBody): Promise<LegalDuty> {
-  return request<LegalDuty>(`/cases/${encodeURIComponent(caseId)}/legal-duties`, { method: "POST", json: body });
+  return request<LegalDuty>(`/cases/${encodeURIComponent(caseId)}/legal-duties`, { method: "POST", json: body, headers: idempotencyHeaders() });
 }
 
-export function updateLegalDuty(caseId: string, dutyId: string, changes: LegalDutyChanges): Promise<LegalDuty> {
+// revision is the duty revision the caller read (LegalDuty.revision), sent as If-Match. A stale revision answers 412
+// and changes nothing.
+export function updateLegalDuty(
+  caseId: string,
+  dutyId: string,
+  changes: LegalDutyChanges,
+  revision: number,
+): Promise<LegalDuty> {
   return request<LegalDuty>(
     `/cases/${encodeURIComponent(caseId)}/legal-duties/${encodeURIComponent(dutyId)}`,
-    { method: "PATCH", json: changes },
+    { method: "PATCH", json: changes, headers: { "If-Match": `"${revision}"` } },
   );
 }
 
@@ -758,7 +1093,6 @@ export interface Classification extends ClassificationText {
   version: number;
   triggers: Trigger[];
   event_kind: RecordEventKind | null;
-  internal_incident_option: boolean;
   next_update_due_at: string | null;
   created_by: string | null;
   created_at: string | null;
@@ -770,7 +1104,6 @@ export type ClassificationUpdateBody = ClassificationText & {
   expected_version: number;
   triggers: Trigger[];
   event_kind: RecordEventKind | null;
-  internal_incident_option: boolean;
   next_update_due_at: string | null;
 };
 
@@ -779,7 +1112,44 @@ export function getClassification(caseId: string): Promise<Classification> {
 }
 
 export function updateClassification(caseId: string, body: ClassificationUpdateBody): Promise<Classification> {
-  return request<Classification>(`/cases/${encodeURIComponent(caseId)}/classification`, { method: "PUT", json: body });
+  return request<Classification>(`/cases/${encodeURIComponent(caseId)}/classification`, { method: "PUT", json: body, headers: idempotencyHeaders() });
+}
+
+// Risk impact values. Reads need a case-read permission. A save needs cases:triage and an open case (409 when closed).
+export type ImpactValue = 1 | 2 | 3 | 4 | 5;
+
+// Version 0 means no values are recorded. A value that is not set is null.
+export interface ImpactScores {
+  case_id: string;
+  version: number;
+  c: ImpactValue | null;
+  b: ImpactValue | null;
+  a: ImpactValue | null;
+  risk_score: number | null;
+  created_by: string | null;
+  created_at: string | null;
+}
+
+// Every value is sent. The backend stores the body as the next version, and a value that is null is cleared.
+export interface ImpactScoresUpdateBody {
+  // The version the editor read. A different current version is refused with 409.
+  expected_version: number;
+  c: ImpactValue | null;
+  b: ImpactValue | null;
+  a: ImpactValue | null;
+}
+
+export function getImpactScores(caseId: string): Promise<ImpactScores> {
+  return request<ImpactScores>(`/cases/${encodeURIComponent(caseId)}/impact-scores`);
+}
+
+// Sends a new Idempotency-Key, so a repeated submit of the same save returns the first answer.
+export function updateImpactScores(caseId: string, body: ImpactScoresUpdateBody): Promise<ImpactScores> {
+  return request<ImpactScores>(`/cases/${encodeURIComponent(caseId)}/impact-scores`, {
+    method: "POST",
+    json: body,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+  });
 }
 
 // The report lists what is still missing and never refuses for it. The contact is reported as recorded or missing only.
@@ -797,7 +1167,6 @@ export interface PreliminaryReport {
     version: number;
     triggers: Trigger[];
     event_kind: RecordEventKind | null;
-    internal_incident_option: boolean;
     next_update_due_at: string | null;
   };
   awareness_events: {
@@ -868,6 +1237,8 @@ export interface PrivacyInventoryItem {
 
 export interface PrivacyInventory {
   generated_at: string;
+  // Provisional retention period in years for every table, from SAFE_RETENTION_YEARS. Awaiting legal review.
+  retention_years: number;
   items: PrivacyInventoryItem[];
 }
 
@@ -877,7 +1248,7 @@ export function getPrivacyInventory(): Promise<PrivacyInventory> {
   return request<PrivacyInventory>("/privacy/inventory");
 }
 
-// Downloads the inventory as a file. The bytes come through request(), so bearer auth and refresh apply.
+// Downloads the inventory as a file. The bytes come through request(), so the session cookies and refresh apply.
 export async function downloadPrivacyExport(format: PrivacyExportFormat): Promise<void> {
   const blob = await request<Blob>(`/privacy/inventory/export?format=${format}`, { responseType: "blob" });
   saveBlob(blob, `privacy-inventory.${format}`);
@@ -896,8 +1267,394 @@ export function saveBlob(blob: Blob, filename: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+// Overview dashboard (F2). Counts and dates only. Every response is role-gated by the backend.
+export const OVERVIEW_RANGES = [7, 30, 90] as const;
+export type OverviewRange = (typeof OVERVIEW_RANGES)[number];
+export const DEFAULT_OVERVIEW_RANGE: OverviewRange = 30;
+
+export interface OwnCaseCards {
+  open_cases: number;
+  opened_in_period: number;
+  deadlines_due_72h: number;
+  deadlines_overdue: number;
+}
+
+export interface CaseCards {
+  open_cases: number;
+  opened_in_period: number;
+}
+
+export type WorkerState = "ok" | "stale" | "no_data";
+
+export interface OpsCards {
+  failed_outbox_jobs: number;
+  status: WorkerState;
+  heartbeat_age_seconds: number | null;
+}
+
+// Disclosure versions waiting for approval (disclosure approver only). Counts and ages, no package content.
+export interface ApprovalTemplateCounts {
+  template: string;
+  pending: number;
+  oldest_pending_age_days: number | null;
+}
+
+export interface ApprovalCards {
+  pending: number;
+  oldest_pending_age_days: number | null;
+  by_template: ApprovalTemplateCounts[];
+}
+
+export interface WeeklyStatusCounts {
+  status: "open" | "closed";
+  cases_with_significant_risk: number;
+  cases_with_weekly_update: number;
+  // YYYY-MM-DD in the system timezone, or null when no weekly update exists.
+  latest_update_date: string | null;
+}
+
+// Investigator and reviewer only. A significant risk is an impact of high or critical severity.
+export interface WeeklyUpdateCards {
+  open_significant_risk_cases: number;
+  latest_update_date: string | null;
+  by_status: WeeklyStatusCounts[];
+}
+
+export interface OverviewSummary {
+  days: number;
+  timezone: string;
+  own_cases: OwnCaseCards | null;
+  case_activity: CaseCards | null;
+  users: { pending_password_change: number } | null;
+  ops: OpsCards | null;
+  approvals: ApprovalCards | null;
+  weekly_updates: WeeklyUpdateCards | null;
+}
+
+// The caller's own series: cases by status at the end of each day, and own audit actions per day.
+export type SeriesMetric =
+  | "cases_created"
+  | "audit_events"
+  | "logins_success"
+  | "logins_failed"
+  | "outbox_completed"
+  | "outbox_failed"
+  | "my_cases_open"
+  | "my_cases_closed"
+  | "my_actions_cases_opened"
+  | "my_actions_assignments"
+  | "my_actions_reviews"
+  | "my_actions_cases_closed";
+
+export interface SeriesPoint {
+  date: string;
+  count: number;
+}
+
+export interface SeriesResponse {
+  metric: SeriesMetric;
+  days: number;
+  timezone: string;
+  points: SeriesPoint[];
+}
+
+export interface DeadlineKindCounts {
+  kind: string;
+  open: number;
+  overdue: number;
+  done: number;
+  not_applicable: number;
+}
+
+export interface DeadlineSummary {
+  items: DeadlineKindCounts[];
+}
+
+export interface AuditSummary {
+  days: number;
+  timezone: string;
+  // The top five actions, then "other" when there are more.
+  actions: string[];
+  points: { date: string; counts: Record<string, number> }[];
+}
+
+export interface UsersSummary {
+  total: number;
+  pending_password_change: number;
+  roles: { role: string; active: number; inactive: number }[];
+}
+
+export interface OutboxSummary {
+  counts: Record<string, number>;
+  oldest_pending_age_seconds: number | null;
+}
+
+export function getOverviewSummary(days: OverviewRange): Promise<OverviewSummary> {
+  return request<OverviewSummary>(`/overview/summary?days=${days}`);
+}
+
+export function getMetricSeries(metric: SeriesMetric, days: OverviewRange): Promise<SeriesResponse> {
+  return request<SeriesResponse>(`/metrics/timeseries?metric=${metric}&days=${days}`);
+}
+
+export function getDeadlineSummary(): Promise<DeadlineSummary> {
+  return request<DeadlineSummary>("/cases/deadlines/summary");
+}
+
+export function getAuditSummary(days: OverviewRange): Promise<AuditSummary> {
+  return request<AuditSummary>(`/audit/summary?days=${days}`);
+}
+
+export function getUsersSummary(): Promise<UsersSummary> {
+  return request<UsersSummary>("/users/summary");
+}
+
+export function getOutboxSummary(): Promise<OutboxSummary> {
+  return request<OutboxSummary>("/ops/outbox-summary");
+}
+
+// Disclosure packages (plans/f0/api-draft.md section 2.5). Needs disclosures:read to read and disclosures:approve to approve,
+// and the case must be visible. A version is never changed: a changed package is a new version.
+export type DisclosureApprovalState = "approved" | "not_approved" | "revoked_by_change";
+
+export interface DisclosureEvidence {
+  // False for an item the caller may not see under the TLP rule. Its details are then absent.
+  withheld: boolean;
+  evidence_id?: string;
+  media_type?: string;
+  size_bytes?: number;
+  tlp_label?: string;
+  removed_lines?: number | null;
+}
+
+export interface DisclosureApproval {
+  id: string;
+  recipient: string;
+  // The identifier of the approved recipient kept outside SAFE. Null for an approval made before it was recorded.
+  recipient_ref: string | null;
+  purpose: string;
+  digest: string;
+  preparer_id: string;
+  approved_by: string;
+  approved_at: string;
+  separation_rule: string;
+}
+
+export interface DisclosureVersion {
+  id: string;
+  package_id: string;
+  case_id: string;
+  version: number;
+  is_latest: boolean;
+  template: string;
+  tlp_audience: string;
+  recipient: string;
+  purpose: string;
+  digest: string;
+  approval_state: DisclosureApprovalState;
+  approval: DisclosureApproval | null;
+  evidence: DisclosureEvidence[];
+  withheld_count: number;
+  created_by: string;
+  created_at: string;
+}
+
+export interface DisclosureSection {
+  title: string;
+  contains: string;
+}
+
+// The structure of one version. It holds no evidence content, no file name, and no redaction reason.
+export interface DisclosurePreview {
+  version_id: string;
+  package_id: string;
+  case_id: string;
+  version: number;
+  template: { key: string; title: string; sections: DisclosureSection[] };
+  recipient: string;
+  purpose: string;
+  tlp_audience: string;
+  digest: string;
+  approval_state: DisclosureApprovalState;
+  evidence: DisclosureEvidence[];
+  withheld_count: number;
+  notice: string;
+}
+
+export interface DisclosureList {
+  items: DisclosureVersion[];
+}
+
+export interface DisclosureApprovalBody {
+  recipient: string;
+  purpose: string;
+  digest: string;
+  recipient_ref: string;
+}
+
+export function listDisclosures(caseId: string): Promise<DisclosureList> {
+  return request<DisclosureList>(`/cases/${encodeURIComponent(caseId)}/disclosures`);
+}
+
+export function getDisclosurePreview(caseId: string, versionId: string): Promise<DisclosurePreview> {
+  return request<DisclosurePreview>(
+    `/cases/${encodeURIComponent(caseId)}/disclosures/${encodeURIComponent(versionId)}/preview`,
+  );
+}
+
+// The versioned export of one approved version (schemas/disclosure-export.v0.json). The API refuses a version that has
+// no approval. The body holds no evidence content and is saved as a file by the caller.
+export function exportDisclosure(caseId: string, versionId: string): Promise<Blob> {
+  return request<Blob>(
+    `/cases/${encodeURIComponent(caseId)}/disclosures/${encodeURIComponent(versionId)}/export`,
+    { responseType: "blob" },
+  );
+}
+
+// The approver confirms the recipient, purpose and digest of the version. The API refuses any other value.
+export function approveDisclosure(
+  caseId: string,
+  versionId: string,
+  body: DisclosureApprovalBody,
+): Promise<DisclosureVersion> {
+  return request<DisclosureVersion>(
+    `/cases/${encodeURIComponent(caseId)}/disclosures/${encodeURIComponent(versionId)}/approvals`,
+    { method: "POST", json: body, headers: idempotencyHeaders() },
+  );
+}
+
+// External notices of a disclosure version (safe_kit.external_notices). A notice records a send that a person made. Nothing
+// is sent from here, and a notice is never resent automatically. Recording needs disclosures:approve, or disclosures:prepare
+// on the manual path with a reason. A receipt, follow-up or cancel is recorded from the same list, with a new Idempotency-Key.
+export type NoticeChannel = "email" | "postal" | "webhook" | "secure_manual" | "other";
+export type NoticeState =
+  | "sent"
+  | "receipt_received"
+  | "receipt_unknown"
+  | "follow_up_required"
+  | "follow_up_done"
+  | "cancelled";
+
+export interface ExternalNotice {
+  id: string;
+  revision: number;
+  case_id: string;
+  package_id: string;
+  version_id: string;
+  version: number;
+  channel: NoticeChannel;
+  channel_other: string | null;
+  // An identifier of the recipient kept outside SAFE. Not a name or an address.
+  recipient_ref: string;
+  sent_at: string;
+  recorded_at: string;
+  recorded_by: string;
+  manual_fallback: boolean;
+  fallback_reason: string | null;
+  repeat_reason: string | null;
+  state: NoticeState;
+  state_reason_code: string | null;
+  state_reason: string | null;
+  received_at: string | null;
+  changed_by: string;
+  changed_at: string;
+}
+
+export interface ExternalNoticeList {
+  items: ExternalNotice[];
+}
+
+export interface ExternalNoticeBody {
+  channel: NoticeChannel;
+  channel_other: string | null;
+  recipient_ref: string;
+  sent_at: string;
+  manual_fallback: boolean;
+  fallback_reason: string | null;
+  repeat_reason: string | null;
+}
+
+export function listNotices(caseId: string, versionId: string): Promise<ExternalNoticeList> {
+  return request<ExternalNoticeList>(
+    `/cases/${encodeURIComponent(caseId)}/disclosures/${encodeURIComponent(versionId)}/notices`,
+  );
+}
+
+export function recordNotice(caseId: string, versionId: string, body: ExternalNoticeBody): Promise<ExternalNotice> {
+  return request<ExternalNotice>(
+    `/cases/${encodeURIComponent(caseId)}/disclosures/${encodeURIComponent(versionId)}/notices`,
+    { method: "POST", json: body, headers: idempotencyHeaders() },
+  );
+}
+
+// The reason codes of a receipt that is unknown. They are the codes the API accepts.
+export type NoticeUnknownReason = "provider_accepted_no_receipt" | "timeout" | "no_answer";
+
+// A receipt: outcome received needs received_at and no reason_code; outcome unknown needs reason_code and no received_at.
+// An unknown receipt also needs follow_up_reason: the follow-up is recorded with it, in the same change.
+export interface ExternalNoticeReceiptBody {
+  outcome: "received" | "unknown";
+  received_at: string | null;
+  reason_code: NoticeUnknownReason | null;
+  reason: string | null;
+  follow_up_reason: string | null;
+}
+
+export interface ExternalNoticeFollowUpBody {
+  action: "require" | "complete";
+  reason: string;
+}
+
+export interface ExternalNoticeCancelBody {
+  reason: string;
+}
+
+// The notice actions of one notice. Each sends a new Idempotency-Key. The server decides whether the state allows it.
+function noticePath(caseId: string, versionId: string, noticeId: string): string {
+  return `/cases/${encodeURIComponent(caseId)}/disclosures/${encodeURIComponent(versionId)}/notices/${encodeURIComponent(noticeId)}`;
+}
+
+export function recordNoticeReceipt(
+  caseId: string,
+  versionId: string,
+  noticeId: string,
+  body: ExternalNoticeReceiptBody,
+): Promise<ExternalNotice> {
+  return request<ExternalNotice>(`${noticePath(caseId, versionId, noticeId)}/receipt`, {
+    method: "POST",
+    json: body,
+    headers: idempotencyHeaders(),
+  });
+}
+
+export function recordNoticeFollowUp(
+  caseId: string,
+  versionId: string,
+  noticeId: string,
+  body: ExternalNoticeFollowUpBody,
+): Promise<ExternalNotice> {
+  return request<ExternalNotice>(`${noticePath(caseId, versionId, noticeId)}/follow-up`, {
+    method: "POST",
+    json: body,
+    headers: idempotencyHeaders(),
+  });
+}
+
+export function cancelNotice(
+  caseId: string,
+  versionId: string,
+  noticeId: string,
+  body: ExternalNoticeCancelBody,
+): Promise<ExternalNotice> {
+  return request<ExternalNotice>(`${noticePath(caseId, versionId, noticeId)}/cancel`, {
+    method: "POST",
+    json: body,
+    headers: idempotencyHeaders(),
+  });
+}
+
 export async function readiness(): Promise<Readiness> {
-  const response = await fetch("/api/v1/health/ready");
+  const response = await fetch("/api/v1/health/ready", { credentials: "include" });
   if (response.ok) return "ready";
   try {
     const body = (await response.json()) as { detail?: { status?: string } };
@@ -906,4 +1663,209 @@ export async function readiness(): Promise<Readiness> {
     // Fall through to unavailable.
   }
   return "unavailable";
+}
+
+// Catalog. Reads need catalog:read; writes need catalog:write. A restricted reference and its digest are returned only
+// with catalog:read_restricted. A withdrawn or superseded entry accepts no further change (409 entry_closed).
+export const CATALOG_RESULTS = ["pass", "fail", "inconclusive"] as const;
+export type CatalogResult = (typeof CATALOG_RESULTS)[number];
+
+// What a catalog version shows of its verification run. The checker and the evidence path stay internal.
+export interface VerificationSummary {
+  run_id: string;
+  subject: string;
+  method: string;
+  result: CatalogResult;
+  verified_at: string;
+}
+
+export interface CatalogVersion {
+  version: number;
+  operation: "create" | "version" | "correction" | "dispute" | "withdrawal" | "supersession";
+  status: string;
+  title: string;
+  body: string;
+  reason: string | null;
+  replacement_entry_id: string | null;
+  created_by: string;
+  created_at: string;
+  verification: VerificationSummary | null;
+  // True only for a passing run. A recommendation alone never makes an entry verified.
+  verified: boolean;
+  // Present only for a caller with catalog:read_restricted. Null when the version has none.
+  restricted?: { reference: string; digest: string } | null;
+}
+
+export interface CatalogEntry {
+  id: string;
+  created_by: string;
+  created_at: string;
+  status: string;
+  version: number;
+  current: CatalogVersion;
+  // The full history, oldest first. Present on the detail read only.
+  versions?: CatalogVersion[];
+}
+
+export interface CatalogEntryPage {
+  items: CatalogEntry[];
+  next_cursor: string | null;
+}
+
+export interface Recommendation {
+  id: string;
+  failure_or_system: string;
+  required_defence_outcome: string;
+  minimum_control: string;
+  control_alternative: string | null;
+  responsible: string;
+  due_at: string;
+  evidence_to_keep: string;
+  created_by: string;
+  created_at: string;
+}
+
+export interface RecommendationPage {
+  items: Recommendation[];
+  next_cursor: string | null;
+}
+
+export interface RecommendationBody {
+  failure_or_system: string;
+  required_defence_outcome: string;
+  minimum_control: string;
+  control_alternative: string | null;
+  responsible: string;
+  due_at: string;
+  evidence_to_keep: string;
+}
+
+export interface VerificationRunBody {
+  subject: string;
+  scope: string;
+  assumptions: string;
+  evidence_path: string;
+  failure_behavior: string;
+  error_class: string;
+  uncertainty: string;
+  method: string;
+  result: CatalogResult;
+}
+
+export interface VerificationRun extends VerificationRunBody {
+  id: string;
+  recommendation_id: string;
+  verified_by: string;
+  verified_at: string;
+}
+
+// The fields of a new version or a correction. The expected version is the one the editor read.
+export interface CatalogContentBody {
+  title: string;
+  body: string;
+  verification_run_id?: string | null;
+  restricted_reference?: string | null;
+}
+
+export function listCatalogEntries(cursor: string | null = null): Promise<CatalogEntryPage> {
+  const query = cursor === null ? "" : `&cursor=${encodeURIComponent(cursor)}`;
+  return request<CatalogEntryPage>(`/catalog/entries?limit=50${query}`);
+}
+
+export function getCatalogEntry(entryId: string): Promise<CatalogEntry> {
+  return request<CatalogEntry>(`/catalog/entries/${encodeURIComponent(entryId)}`);
+}
+
+export function createCatalogEntry(body: CatalogContentBody): Promise<CatalogEntry> {
+  return request<CatalogEntry>("/catalog/entries", { method: "POST", json: body, headers: idempotencyHeaders() });
+}
+
+export function addCatalogVersion(
+  entryId: string,
+  expectedVersion: number,
+  body: CatalogContentBody,
+): Promise<CatalogEntry> {
+  return request<CatalogEntry>(`/catalog/entries/${encodeURIComponent(entryId)}/versions`, {
+    method: "POST",
+    json: { expected_version: expectedVersion, ...body },
+    headers: idempotencyHeaders(),
+  });
+}
+
+export function correctCatalogEntry(
+  entryId: string,
+  expectedVersion: number,
+  body: CatalogContentBody & { reason: string },
+): Promise<CatalogEntry> {
+  return request<CatalogEntry>(`/catalog/entries/${encodeURIComponent(entryId)}/corrections`, {
+    method: "POST",
+    json: { expected_version: expectedVersion, ...body },
+    headers: idempotencyHeaders(),
+  });
+}
+
+// A dispute, or a withdrawal. Both keep the content and need a reason.
+export function disputeCatalogEntry(entryId: string, expectedVersion: number, reason: string): Promise<CatalogEntry> {
+  return request<CatalogEntry>(`/catalog/entries/${encodeURIComponent(entryId)}/disputes`, {
+    method: "POST",
+    json: { expected_version: expectedVersion, reason },
+    headers: idempotencyHeaders(),
+  });
+}
+
+export function withdrawCatalogEntry(entryId: string, expectedVersion: number, reason: string): Promise<CatalogEntry> {
+  return request<CatalogEntry>(`/catalog/entries/${encodeURIComponent(entryId)}/withdrawals`, {
+    method: "POST",
+    json: { expected_version: expectedVersion, reason },
+    headers: idempotencyHeaders(),
+  });
+}
+
+export function supersedeCatalogEntry(
+  entryId: string,
+  expectedVersion: number,
+  replacementEntryId: string,
+  reason: string | null,
+): Promise<CatalogEntry> {
+  return request<CatalogEntry>(`/catalog/entries/${encodeURIComponent(entryId)}/supersessions`, {
+    method: "POST",
+    json: { expected_version: expectedVersion, replacement_entry_id: replacementEntryId, reason },
+    headers: idempotencyHeaders(),
+  });
+}
+
+export function listRecommendations(cursor: string | null = null): Promise<RecommendationPage> {
+  const query = cursor === null ? "" : `&cursor=${encodeURIComponent(cursor)}`;
+  return request<RecommendationPage>(`/catalog/recommendations?limit=50${query}`);
+}
+
+export function createRecommendation(body: RecommendationBody): Promise<Recommendation> {
+  return request<Recommendation>("/catalog/recommendations", {
+    method: "POST",
+    json: body,
+    headers: idempotencyHeaders(),
+  });
+}
+
+export function recordVerificationRun(recommendationId: string, body: VerificationRunBody): Promise<VerificationRun> {
+  return request<VerificationRun>(`/catalog/recommendations/${encodeURIComponent(recommendationId)}/verification-runs`, {
+    method: "POST",
+    json: body,
+    headers: idempotencyHeaders(),
+  });
+}
+
+// The verification of an entry, as the CLI does it: record the run, then save a version with the same content that
+// names the run. The entry shows as verified only when the run passed. A failing run is attached too, so the history shows it.
+export async function verifyCatalogEntry(
+  entry: CatalogEntry,
+  recommendationId: string,
+  run: VerificationRunBody,
+): Promise<CatalogEntry> {
+  const recorded = await recordVerificationRun(recommendationId, run);
+  return addCatalogVersion(entry.id, entry.version, {
+    title: entry.current.title,
+    body: entry.current.body,
+    verification_run_id: recorded.id,
+  });
 }
