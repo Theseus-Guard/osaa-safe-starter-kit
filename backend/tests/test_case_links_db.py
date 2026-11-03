@@ -16,6 +16,21 @@ from fastapi.testclient import TestClient
 from safe_kit import api, audit, auth, users
 from safe_kit.db import connect
 from safe_kit.rbac import list_role_permissions, set_role_permissions
+from safe_kit.reviews import TEMPLATE_LAYERS
+from test_evidence import db_user
+# Fixtures are requested by name, which ruff reports as a redefinition. That is the intended use here.
+# ruff: noqa: F401, F811
+from test_fixture_p6_disclosure import dworld  # dworld: fixture
+from test_evidence_lifecycle import provider  # provider: fixture
+from test_fixture_t06a_redaction import world  # world: fixture
+from test_fixture_t12_notices import (  # the notice helpers of the disclosure world
+    approved_version,
+    notice_action,
+    payload,
+    record,
+    with_independent_triager,
+)
+from test_fixture_t12a_records import escalate, escalation_values, review
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("SAFE_TEST_DATABASE") != "1",
@@ -137,9 +152,27 @@ def close_case_in_database(case_id: str, actor_id: str) -> None:
         )
 
 
-def settle_for_closure(people: dict, case_id: str) -> None:
+def finish_review_layers(people: dict, round_id: str, revision: int) -> None:
+    """Set every layer of the round that is not set yet to not_applicable, with a reason.
+
+    A pass needs an evidence item of the case, which these tests do not create, so not_applicable is used.
+    """
+    for layer in TEMPLATE_LAYERS:
+        if layer == "model":  # set by settle_for_closure
+            continue
+        response = people["reviewer"].patch(
+            f"/api/v1/reviews/{round_id}/layers/{layer}",
+            json={"outcome": "not_applicable", "reason": "Not applicable to this test case"},
+            headers={**idem(), "If-Match": f'"{revision}"'},
+        )
+        assert response.status_code == 200, response.text
+        revision = response.json()["revision"]
+
+
+def settle_for_closure(people: dict, case_id: str, *, review_layers: bool = True) -> None:
     """Make a case closable: a reviewer is assigned and reviews it, and every open deadline task is done.
 
+    With review_layers every layer of the round is set, so no review record is open. Without it only one layer is set.
     The task rows are set directly; the tests then check that nothing else about the tasks changed.
     """
     assigned = people["triager"].post(
@@ -158,6 +191,8 @@ def settle_for_closure(people: dict, case_id: str) -> None:
         headers={**idem(), "If-Match": f'"{opened.json()["revision"]}"'},
     )
     assert reviewed.status_code == 200, reviewed.text
+    if review_layers:
+        finish_review_layers(people, opened.json()["id"], reviewed.json()["revision"])
     with connect() as conn:
         conn.execute(
             "UPDATE deadline_tasks SET status = 'done' WHERE case_id = %s AND NOT is_deleted AND status = 'open'",
@@ -503,6 +538,7 @@ def test_a_link_to_a_case_the_reader_cannot_see_has_no_id_and_no_title(people):
         "reason",
         "share_visibility",
         "primary_side",
+        "primary_case_id",
         "created_at",
     }
 
@@ -595,6 +631,7 @@ def test_a_duplicate_link_closes_the_duplicate_and_points_to_the_main_case(
     created = add_link(triager, page, other, link_type="duplicate", primary=main)
     assert created.status_code == 201, created.text
     assert created.json()["link_type"] == "duplicate"
+    assert created.json()["primary_case_id"] == main
     # From the main page the main case is "this"; from the duplicate page it is "linked".
     assert created.json()["primary_side"] == ("linked" if from_duplicate_page else "this")
 
@@ -608,6 +645,7 @@ def test_a_duplicate_link_closes_the_duplicate_and_points_to_the_main_case(
     from_dup = triager.get(f"/api/v1/cases/{duplicate}/links").json()
     assert from_dup[0]["linked_case_id"] == main
     assert from_dup[0]["primary_side"] == "linked"
+    assert from_dup[0]["primary_case_id"] == main
     # One closure audit row for the duplicate, by the actor; one link audit row on the page case.
     closed = audit_rows(audit.CASE_CLOSE, duplicate)
     assert len(closed) == 1
@@ -645,6 +683,117 @@ def test_open_tasks_of_the_main_case_do_not_block_the_duplicate_closure(people):
     )
     assert created.status_code == 201, created.text
     assert case_status(duplicate) == "closed"
+
+
+def test_an_unset_review_layer_refuses_the_duplicate_closure_and_nothing_changes(people):
+    main = new_case(people["reporter"], "Main")
+    duplicate = new_case(people["reporter"], "Duplicate")
+    settle_for_closure(people, duplicate, review_layers=False)
+    before_tasks = task_snapshot(duplicate)
+
+    refused = add_link(
+        people["triager"], main, duplicate, link_type="duplicate", primary=main
+    )
+    assert refused.status_code == 409
+    assert "review layer(s) are not set" in refused.json()["detail"]
+    assert case_status(duplicate) == "open"
+    assert task_snapshot(duplicate) == before_tasks
+    assert link_rows(main, duplicate) == []
+
+    # Once every layer is set (a pass, or a reason), the same link is accepted.
+    with connect() as conn:
+        round_id, revision = conn.execute(
+            "SELECT rr.id::text, rr.revision FROM review_rounds rr "
+            "WHERE rr.case_id = %s AND NOT rr.is_deleted ORDER BY rr.opened_at DESC LIMIT 1",
+            (duplicate,),
+        ).fetchone()
+    finish_review_layers(people, round_id, revision)
+    created = add_link(
+        people["triager"], main, duplicate, link_type="duplicate", primary=main
+    )
+    assert created.status_code == 201, created.text
+    assert case_status(duplicate) == "closed"
+
+
+def test_an_open_notice_refuses_the_duplicate_closure_until_it_is_cancelled(
+    people, dworld
+):
+    settle_for_closure(people, dworld["case_id"])
+    version, _ = approved_version(dworld)
+    recorded = record(dworld, "approver", version["id"], payload())
+    assert recorded.status_code == 201, recorded.text
+    notice = recorded.json()
+    main = new_case(people["reporter"], "Main")
+
+    refused = add_link(
+        people["triager"], main, dworld["case_id"], link_type="duplicate", primary=main
+    )
+    assert refused.status_code == 409
+    assert "external notice(s) are open" in refused.json()["detail"]
+    assert case_status(dworld["case_id"]) == "open"
+
+    cancelled = notice_action(
+        dworld,
+        "approver",
+        version["id"],
+        notice["id"],
+        "cancel",
+        {"reason": "Withdrawn for the test"},
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    created = add_link(
+        people["triager"], main, dworld["case_id"], link_type="duplicate", primary=main
+    )
+    assert created.status_code == 201, created.text
+    assert case_status(dworld["case_id"]) == "closed"
+
+
+def test_an_escalation_and_a_notice_review_are_open_until_a_notice_is_recorded(
+    people, dworld
+):
+    dw = with_independent_triager(dworld)
+    settle_for_closure(people, dw["case_id"])
+    version, _ = approved_version(dw)
+    escalated = escalate(
+        dw, "independent", version["id"], escalation_values(db_user("disclosure_approver"))
+    )
+    assert escalated.status_code == 201, escalated.text
+    package = review(dw, "approver", version["id"], "package")
+    assert package.status_code == 201, package.text
+    main = new_case(people["reporter"], "Main")
+
+    refused = add_link(
+        people["triager"], main, dw["case_id"], link_type="duplicate", primary=main
+    )
+    assert refused.status_code == 409
+    assert "escalation(s) have no notice recorded yet" in refused.json()["detail"]
+    assert "notice review(s) have no notice recorded yet" in refused.json()["detail"]
+    assert case_status(dw["case_id"]) == "open"
+
+    # A notice for the version clears both records; the notice itself is open until it is cancelled.
+    recorded = record(dw, "approver", version["id"], payload())
+    assert recorded.status_code == 201, recorded.text
+    notice = recorded.json()
+    refused = add_link(
+        people["triager"], main, dw["case_id"], link_type="duplicate", primary=main
+    )
+    assert refused.status_code == 409
+    detail = refused.json()["detail"]
+    assert "external notice(s) are open" in detail
+    assert "have no notice recorded yet" not in detail
+    cancelled = notice_action(
+        dw,
+        "approver",
+        version["id"],
+        notice["id"],
+        "cancel",
+        {"reason": "Withdrawn for the test"},
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    assert add_link(
+        people["triager"], main, dw["case_id"], link_type="duplicate", primary=main
+    ).status_code == 201
+    assert case_status(dw["case_id"]) == "closed"
 
 
 # --- root and sub-case: read only through the link ----------------------------------------------------------------
@@ -771,7 +920,99 @@ def test_the_visibility_checkbox_lets_users_of_one_case_see_the_other_and_nothin
     assert reader.get(f"/api/v1/cases/{b}").status_code == 404
 
 
-# --- audit ----------------------------------------------------------------------------------------------------------
+def test_a_case_read_through_a_root_link_shows_no_further_link_of_the_root(people):
+    # The investigator owns the sub-case. The root is one step away; a related link on the root is a second step.
+    root = new_case(people["other_reporter"], "Root")
+    sub = new_case(people["reporter"], "Sub")
+    other = new_case(people["other_reporter"], "Other")
+    investigator = new_user("investigator")
+    assert people["triager"].post(
+        f"/api/v1/cases/{sub}/assignments", json={"user_id": investigator}, headers=idem()
+    ).status_code == 201
+    assert add_link(people["triager"], sub, root, link_type="root_sub", primary=root).status_code == 201
+    assert add_link(people["triager"], root, other, share=True).status_code == 201
+
+    reader = ActingClient(investigator)
+    assert reader.get(f"/api/v1/cases/{root}").status_code == 200
+    assert reader.get(f"/api/v1/cases/{other}").status_code == 404
+
+
+def test_a_case_read_through_a_share_link_shows_neither_its_root_nor_a_second_share(
+    people,
+):
+    own = new_case(people["reporter"], "Own")
+    shared = new_case(people["other_reporter"], "Shared")
+    root = new_case(people["other_reporter"], "Root")
+    second = new_case(people["other_reporter"], "Second")
+    investigator = new_user("investigator")
+    assert people["triager"].post(
+        f"/api/v1/cases/{own}/assignments", json={"user_id": investigator}, headers=idem()
+    ).status_code == 201
+    assert add_link(people["triager"], own, shared, share=True).status_code == 201
+    # The shared case is the sub-case of a root_sub link, and it shares a second case. Neither is a step the reader takes.
+    assert add_link(people["triager"], shared, root, link_type="root_sub", primary=root).status_code == 201
+    assert add_link(people["triager"], shared, second, share=True).status_code == 201
+
+    reader = ActingClient(investigator)
+    assert reader.get(f"/api/v1/cases/{shared}").status_code == 200
+    assert reader.get(f"/api/v1/cases/{root}").status_code == 404
+    assert reader.get(f"/api/v1/cases/{second}").status_code == 404
+
+
+def test_the_reason_is_shown_only_when_the_reader_can_see_the_other_case(people):
+    mine = new_case(people["reporter"], "Mine")
+    theirs = new_case(people["other_reporter"], "Theirs")
+    investigator = new_user("investigator")
+    assert people["triager"].post(
+        f"/api/v1/cases/{mine}/assignments", json={"user_id": investigator}, headers=idem()
+    ).status_code == 201
+    reader = ActingClient(investigator)
+
+    # Checkbox off: the reader sees one case, so the link shows no reason and no other case.
+    assert add_link(
+        people["triager"], mine, theirs, reason="Confidential detail"
+    ).status_code == 201
+    hidden = reader.get(f"/api/v1/cases/{mine}/links").json()[0]
+    assert hidden["linked_case_id"] is None
+    assert hidden["reason"] is None
+    assert "Confidential detail" not in str(hidden)
+
+    # Checkbox on: the reader sees the other case, so the reason is shown too.
+    assert people["triager"].delete(f"/api/v1/cases/{mine}/links/{theirs}").status_code == 204
+    assert add_link(
+        people["triager"], mine, theirs, reason="Confidential detail", share=True
+    ).status_code == 201
+    shown = reader.get(f"/api/v1/cases/{mine}/links").json()[0]
+    assert shown["linked_case_id"] == theirs
+    assert shown["reason"] == "Confidential detail"
+
+    # The triager sees both cases, so the reason is shown from both sides.
+    both = people["triager"].get(f"/api/v1/cases/{theirs}/links").json()[0]
+    assert both["reason"] == "Confidential detail"
+
+
+def test_the_main_case_id_is_shown_to_a_reader_of_the_root_and_not_of_a_hidden_sub(
+    people,
+):
+    root = new_case(people["reporter"], "Root")
+    sub = new_case(people["other_reporter"], "Sub")
+    investigator = new_user("investigator")
+    assert people["triager"].post(
+        f"/api/v1/cases/{root}/assignments", json={"user_id": investigator}, headers=idem()
+    ).status_code == 201
+    assert add_link(
+        people["triager"], sub, root, link_type="root_sub", primary=root
+    ).status_code == 201
+
+    # The root is the reader's own case, so its ID is shown. The sub-case is not visible, so its title and reason are not.
+    listed = ActingClient(investigator).get(f"/api/v1/cases/{root}/links").json()[0]
+    assert listed["primary_side"] == "this"
+    assert listed["primary_case_id"] == root
+    assert listed["linked_case_id"] is None
+    assert listed["reason"] is None
+
+
+# --- audit----------------------------------------------------------------------------------------------------------
 
 
 def test_each_add_and_remove_writes_one_audit_row_with_the_actor_and_no_free_text(

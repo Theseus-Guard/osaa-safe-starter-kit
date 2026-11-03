@@ -750,9 +750,10 @@ export function removeAssignment(caseId: string, userId: string): Promise<void> 
 // only; a root_sub link lets a reader of the sub-case read the root case (read only).
 export type CaseLinkType = "duplicate" | "related" | "root_sub";
 
-// A link between two cases. linked_case_id and linked_case_title are null when the caller cannot see the other case.
+// A link between two cases. linked_case_id, linked_case_title and reason are null when the caller cannot see the other
+// case. reason is also null for a link made before link types existed.
 // primary_side says which case is the main case of a duplicate or the root case of a root_sub link: "this" or "linked".
-// It is null for a related link. reason is null only for a link made before link types existed.
+// It is null for a related link. primary_case_id is that case's ID; it is null when the caller cannot see it.
 export interface CaseLink {
   linked_case_id: string | null;
   linked_case_title: string | null;
@@ -760,6 +761,7 @@ export interface CaseLink {
   reason: string | null;
   share_visibility: boolean;
   primary_side: "this" | "linked" | null;
+  primary_case_id: string | null;
   created_at: string;
 }
 
