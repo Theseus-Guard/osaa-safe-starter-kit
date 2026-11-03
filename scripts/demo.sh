@@ -80,6 +80,12 @@ demo_ready() {
   [ -n "$(compose ps --status running -q gateway 2>/dev/null)" ] && gateway_ready
 }
 
+# Live means the gateway and the API behind it answer; it does not need the first administrator.
+demo_live() {
+  [ -n "$(compose ps --status running -q gateway 2>/dev/null)" ] &&
+    curl -ksf --max-time 5 -o /dev/null "$url/api/v1/health/live"
+}
+
 # The seed runs as the container user (uid 10001) and writes into the operator's directory. The directory and its
 # files are handed to that user for the seed, and back to the operator afterwards, so the operator can read them.
 # This one-off run uses the api image as root with only the CHOWN capability added (the service drops all capabilities).
@@ -126,14 +132,16 @@ cmd_start() {
   echo "demo: building and starting the stack (project $project)"
   compose up -d --build
 
+  # Before the seed the API is up but reports setup_required (no first administrator yet), so the wait before the seed
+  # checks liveness only. Readiness is checked again after the seed creates that administrator.
   deadline=$(( $(date +%s) + timeout ))
-  until demo_ready; do
+  until demo_live; do
     if [ "$(date +%s)" -ge "$deadline" ]; then
-      fail "the demo did not report ready within $timeout seconds; run scripts/demo.sh status"
+      fail "the demo gateway did not answer within $timeout seconds; run scripts/demo.sh status"
     fi
     sleep 2
   done
-  echo "demo: gateway and API report ready"
+  echo "demo: gateway and API are up; seeding"
 
   seed_status=0
   hand_over 10001:10001 || fail "the credential directory could not be handed to the container user"
@@ -144,6 +152,15 @@ cmd_start() {
   if [ "$seed_status" -ne 0 ]; then
     fail "the demo seed failed (see the message above); the credential directory may need attention, then run start again"
   fi
+
+  deadline=$(( $(date +%s) + timeout ))
+  until demo_ready; do
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      fail "the demo did not report ready within $timeout seconds after the seed; run scripts/demo.sh status"
+    fi
+    sleep 2
+  done
+  echo "demo: gateway and API report ready"
 
   echo "demo: ready. Open $url in a browser on this machine, accept the development certificate,"
   echo "demo: and sign in as a demo role. The credentials are in the credentials directory under SAFE_DEMO_DIR;"
