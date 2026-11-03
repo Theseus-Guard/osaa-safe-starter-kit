@@ -2111,4 +2111,10 @@ from safe_kit.external_notices_api import notice_router  # noqa: E402
 
 app.include_router(notice_router)
 
+# T12-A records of a disclosure version: escalation to a backup, recipient review, package review (see
+# safe_kit.external_notice_records_api).
+from safe_kit.external_notice_records_api import record_router  # noqa: E402
+
+app.include_router(record_router)
+
 app.include_router(profile_router)

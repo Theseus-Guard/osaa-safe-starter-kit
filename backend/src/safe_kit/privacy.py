@@ -805,6 +805,38 @@ CATALOG: tuple[TableEntry, ...] = (
         deletion_mode="Soft delete (is_deleted, deleted_at). The application never removes rows.",
         created_column="created_at",
     ),
+    TableEntry(
+        table="external_notice_escalations",
+        description="An escalation of an external notice that the named approver cannot send (unreachable or in a conflict of interest): the authority basis, the missing facts, the next update, and the independent backup named.",
+        category="disclosure",
+        contains_personal_data=True,
+        personal_fields=(
+            "backup_user_id and escalated_by (link to people)",
+            "authority_basis, missing_facts, next_update (free text, up to 500 characters each, may name people)",
+        ),
+        purpose="Showing that an urgent notice was escalated to an independent authorised backup, why, and what was still missing, so that the decision is auditable.",
+        retention="Kept with its case and version, for the period set by SAFE_RETENTION_YEARS (provisional, legal review pending).",
+        retention_defined=True,
+        security="Insert-only: a trigger rejects every change. Listed through the version (disclosures:read, case ACL). Written by holders of disclosures:approve or disclosures:prepare; the backup must hold disclosures:approve. Free text is audited with lengths only.",
+        deletion_mode="Soft delete (is_deleted, deleted_at). The application never removes rows.",
+        created_column="created_at",
+    ),
+    TableEntry(
+        table="external_notice_reviews",
+        description="A review of the recipient or of the package of one approved or prepared disclosure version, bound to the version digest.",
+        category="disclosure",
+        contains_personal_data=True,
+        personal_fields=(
+            "reviewed_by (links to the person who reviewed)",
+            "recipient_ref (an identifier of the recipient, kept outside SAFE; only for a recipient review)",
+        ),
+        purpose="Showing which person reviewed the recipient or the package of which exact content, before a notice is sent.",
+        retention="Kept with its case and version, for the period set by SAFE_RETENTION_YEARS (provisional, legal review pending).",
+        retention_defined=True,
+        security="Insert-only: a trigger rejects every change. Listed through the version (disclosures:read, case ACL). Written by holders of disclosures:approve; the reviewer may not have prepared the version. Audited with identifiers and the digest only.",
+        deletion_mode="Soft delete (is_deleted, deleted_at). The application never removes rows.",
+        created_column="created_at",
+    ),
 )
 
 

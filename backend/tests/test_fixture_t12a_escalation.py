@@ -10,9 +10,9 @@ prepared the version cannot send it; the escalation is audited with its flag and
 the escalated notice can be followed through (receipt, follow-up) by the same person; a superseded version is refused on
 the escalation path too; the case record may be incomplete, and the notice is still recorded.
 
-Not built, so not asserted here: a separate escalation record, a recipient review record and a package review record. The
-manual notice, its reason and its audit row are the only record of an escalation. No veto field exists anywhere in the
-notice or approval path.
+The separate escalation record, recipient review record and package review record are tested in
+test_fixture_t12a_records.py. This module covers the notice path only: the manual notice, its reason and its audit row.
+No veto field exists anywhere in the notice or approval path.
 
 These need PostgreSQL: they run with SAFE_TEST_DATABASE=1 and the SAFE_DB_* settings (scripts/test-backend.sh --db).
 """
