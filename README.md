@@ -84,7 +84,7 @@ To run other Compose commands against the demo stack, pass both files: `docker c
 - Each demo role has its own credential. The login screen lists the demo roles when the server runs in demo mode, and a banner shows the demo mode.
 - The demo application and worker have no route out. `scripts/demo-egress-check.sh` checks this from inside the API container.
 - Only one stack can use `127.0.0.1:8443` and the fixed Docker networks at a time. Stop any other stack first.
-- The three-step check (start, browser sign-in, `cli-show`) has not yet been run end to end on a live stack.
+- The start and `cli-show` steps were run on the owner's live stack on 2026-11-03. The browser sign-in step has not been recorded yet.
 
 ## Tests
 
@@ -95,13 +95,13 @@ cd frontend && npm install && npm run build
 
 ## Test coverage
 
-Measured on 2026-11-01 with the commands below. Figures are statement coverage of owned code; generated and third-party code is excluded.
+Measured on 2026-11-04 with the commands below. Figures are statement coverage of owned code; generated and third-party code is excluded.
 
 | Part | Command | Tests | Coverage |
 |---|---|---|---|
-| Backend, without database | `scripts/test-backend.sh` | 935 passed, 225 skipped, 1 xfailed | 81% |
-| Backend, with database | `scripts/test-backend.sh --db` | 1159 passed, 1 skipped, 1 xfailed | 97% |
-| Frontend | `cd frontend && npm run test:coverage` | 348 passed | 72% statements |
+| Backend, without database | `scripts/test-backend.sh` | 2176 passed, 622 skipped | 77% |
+| Backend, with database | `scripts/test-backend.sh --db` | 2798 passed | 96% |
+| Frontend | `cd frontend && npm run test:coverage` | 583 passed | 77% statements |
 
 The backend `--db` mode starts a throwaway PostgreSQL container and removes it afterwards. Database-backed tests are skipped unless `SAFE_TEST_DATABASE=1` is set, which the script does for you.
 
@@ -113,7 +113,7 @@ The backend `--db` mode starts a throwaway PostgreSQL container and removes it a
 - Passwords expire after 180 days. A new password may not match any of the account's last three passwords, nor any temporary password issued to the account.
 - Browser sessions use HttpOnly cookies that page scripts cannot read. A state-changing browser request must also send the CSRF header. Access tokens last 60 minutes. Refresh tokens are rotated on every use and also last 60 minutes, so a session ends after 60 minutes without activity. Whatever the activity, a session ends 12 hours after login. The browser renews the token pair before the access token expires.
 - The application roles cannot change the schema. The bootstrap superuser password is random and not stored.
-- Not yet implemented: a production certificate, OIDC/SSO, encryption at rest for the database volume, the rest of the disclosure workflow (see [CHANGELOG.md](CHANGELOG.md)), a Vault Transit key provider, and backup/restore procedures.
+- Not yet implemented: a production certificate, OIDC/SSO, encryption at rest for the database volume, sending a disclosure or a notice from the application (a notice records a send that a person made), a Vault Transit key provider, and backup/restore procedures.
 
 ## Export formats
 
