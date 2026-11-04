@@ -8,6 +8,8 @@ const MESSAGES: Record<string, string> = {
   csrf_token_invalid: "The request could not be verified. Reload the page and try again.",
   "password change required": "You must change your password before continuing.",
   "current password is incorrect": "The current password is incorrect.",
+  demo_account_password_unchangeable:
+    "Demo accounts sign in with their demo credential, so their password cannot be changed here.",
   password_reused:
     "Choose a password you have not used recently. It must differ from your temporary password and your last three passwords.",
   "username already exists": "That username is already taken.",

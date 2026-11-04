@@ -169,7 +169,7 @@ async def _startup_guard(_app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="SAFE-Starter-Kit API", version="0.2.0", lifespan=_startup_guard)
+app = FastAPI(title="SAFE-Starter-Kit API", version="0.2.1", lifespan=_startup_guard)
 
 # Error contract (plans/f0/api-draft.md sections 3.3 and 3.6). Every error response has the same body: the existing
 # "detail" field, which the web UI and the CLI read, and an "error" object with a stable code, a safe message, the
@@ -583,6 +583,9 @@ PROTECTED_DETAIL = "the protected admin account cannot be disabled, deleted, or 
 PASSWORD_REUSED_DETAIL = "password_reused"
 # Detail code of the 409 when an administrator tries to reset the password of a reporter account.
 REPORTER_RESET_REFUSED_DETAIL = "reporter_account_reset_refused"
+# Detail code of the 409 when a demo account asks to change its password. A demo account signs in only with its demo
+# credential (safe_kit.demo_auth), so its stored password is not one the user knows and cannot be the one it checks.
+DEMO_ACCOUNT_PASSWORD_DETAIL = "demo_account_password_unchangeable"
 
 
 def _summary(user: User) -> UserSummary:
@@ -790,6 +793,8 @@ def change_password(
 ) -> Response:
     # Used both for the forced change at first login and for voluntary changes.
     # The current password is required, so a stolen access token alone cannot change it.
+    if demo_credential_hash(user.id) is not None:
+        raise HTTPException(status_code=409, detail=DEMO_ACCOUNT_PASSWORD_DETAIL)
     if not verify_password(user.password_hash, body.current_password):
         raise HTTPException(status_code=401, detail="current password is incorrect")
     try:

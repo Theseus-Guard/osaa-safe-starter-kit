@@ -11,8 +11,8 @@ Reading policy, as the project chose it for F2 (plans/f0/api-draft.md sections 3
 - Namespace duplicate: the same ID twice in one document (two catalog entries, or two visible disclosure items) is
   refused.
 
-The reader below is a test helper. The import side for these documents is not built: the import dry-run reads case
-records only (safe_kit.case_import), so an export file is refused there as a file. The database half of the roundtrip
+The reader below is a test helper. Exports are not imported: the import dry-run reads case records only
+(safe_kit.case_import), and it refuses an export document by name. The database half of the roundtrip
 (real exports from the API, the CLI and the approval flow) is in test_fixture_t14_export_roundtrip_db.py.
 """
 
@@ -250,6 +250,8 @@ def test_withheld_items_are_not_counted_as_duplicates():
 @pytest.mark.parametrize("kind", sorted(KINDS))
 def test_an_export_file_is_never_read_as_a_case_import_file(kind):
     raw = example_bytes(kind)
-    with pytest.raises(ImportFileError):
+    with pytest.raises(
+        ImportFileError, match="export document, not a case import file"
+    ):
         parse_import_file(raw)
     assert received_format_version(raw) is None

@@ -6,14 +6,24 @@ Every release entry states the **SAFE compatibility baseline**: the SAFE version
 
 ## Unreleased
 
-Changes after 0.2.0 go here.
+Changes after 0.2.1 go here.
+
+## 0.2.1 - 2026-11-04
+
+**SAFE compatibility baseline:** SAFE v1.0 (2026-10-21), wg-safe commit `08c0d6a11163d10ac878a15dc9f53b5b322fd7cb`. Same baseline as 0.2.0.
+
+This release closes F2 (the disclosure, notice, export and demo phase).
 
 ### Changed
 - The default stack (`compose.yaml`) runs in production mode: `SAFE_MODE=production` for `api` and `worker`, with no demo dataset, so the sign-in page takes a username and password. The demo is an overlay: `scripts/demo.sh` starts it with `compose.demo.yaml`, which sets demo mode and the synthetic dataset for `api` and `worker`.
 
+### Fixed
+- A demo account cannot change its password. It signs in only with its demo credential, and its stored password is not one the user knows, so the change always failed with "The current password is incorrect". The change is now refused with `demo_account_password_unchangeable`, and the Account screen says why.
+- The case import reader refuses an export document by name ("this file is an export document, not a case import file") instead of reporting an unsupported `import_format_version`. Exports are not imported: the import format stays at version 1 and carries case records only. This settles the open question on importing exports in `plans/f0/api-draft.md`, section 6.
+
 ## 0.2.0 - 2026-11-03
 
-**SAFE compatibility baseline:** SAFE v1.0 (2026-10-21), wg-safe commit `08c0d6a11163d10ac878a15dc9f53b5b322fd7cb`. This version is not tagged in git yet.
+**SAFE compatibility baseline:** SAFE v1.0 (2026-10-21), wg-safe commit `08c0d6a11163d10ac878a15dc9f53b5b322fd7cb`. Tagged `v0.2.0` on commit `5ca8b22`.
 
 ### Added
 - Single-organization self-hosted stack (Docker Compose): PostgreSQL, one-shot migrations, API, worker, nginx gateway, container CLI.
