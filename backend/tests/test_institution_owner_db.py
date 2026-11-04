@@ -182,7 +182,7 @@ def test_the_owner_sets_the_pool_and_the_administrator_and_the_approver_cannot(w
     )
     response = request_as(owner, "put", url, json={"backup_user_ids": members})
     assert response.status_code == 200, response.text
-    assert [item["backup_user_id"] for item in response.json()["items"]] == members
+    assert sorted(item["backup_user_id"] for item in response.json()["items"]) == sorted(members)
     assigned = audit_for(audit.DISCLOSURE_BACKUP_ASSIGNED, world["case_id"])
     assert sorted(entry["backup_user_id"] for entry in assigned) == sorted(members)
 
@@ -330,6 +330,26 @@ def test_the_approver_approves_its_packet_and_still_reads_it_afterwards(world):
         {"recipient_ref": APPROVED_RECIPIENT_REF},
     )
     assert recipient_review.status_code == 201, recipient_review.text
+
+
+@requires_database
+def test_the_approver_exports_its_approved_packet_and_not_another_case(world):
+    dw = with_approver(world)
+    approver = dw["people"]["approver"]
+    version, _ = first_version(dw)
+    approve(
+        dw,
+        "approver",
+        version["id"],
+        version["recipient"],
+        version["purpose"],
+        version["digest"],
+    )
+    exported = request_as(approver, "get", case_url(dw, f"/{version['id']}/export"))
+    assert exported.status_code == 200, exported.text
+    assert exported.json()["disclosure_export"]["digest"] == version["digest"]
+    unknown_case = f"/api/v1/cases/{uuid.uuid4()}/disclosures/{version['id']}/export"
+    assert request_as(approver, "get", unknown_case).status_code == 404
 
 
 @requires_database

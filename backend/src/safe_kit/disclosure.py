@@ -1316,20 +1316,14 @@ def export_version(
     """The export of one version, and its audit row, in one transaction.
 
     The export is a release: it opens a release attempt (purpose export) before the release check, and closes it with
-    the outcome in the same transaction. Refused: a case the caller cannot see (NOT_FOUND), a version of another case
-    (VERSION_NOT_FOUND), and any failed release rule (NOT_APPROVED, INTEGRITY_FAILED, APPROVAL_MISMATCH,
-    RELEASE_APPROVAL_MISSING, or RELEASE_TRACE_MISSING). A refused export is recorded as a refused attempt. The audit row
-    holds the identifiers, the digest, and the status; the export itself is never written to the log.
+    the outcome in the same transaction. Refused: a case or version the caller cannot read (NOT_FOUND), where an approver
+    reads only its own packet (see _case_access_on), a version of another case (VERSION_NOT_FOUND), and any failed
+    release rule (NOT_APPROVED, INTEGRITY_FAILED, APPROVAL_MISMATCH, RELEASE_APPROVAL_MISSING, or RELEASE_TRACE_MISSING).
+    A refused export is recorded as a refused attempt. The audit row holds the identifiers, the digest, and the status;
+    the export itself is never written to the log.
     """
     with connect() as conn:
-        visibility, params = scope.visibility_sql()
-        if (
-            conn.execute(
-                f"SELECT 1 FROM cases WHERE id = %s AND NOT is_deleted AND {visibility}",
-                (case_id, *params),
-            ).fetchone()
-            is None
-        ):
+        if _case_access_on(conn, case_id, scope, version_id) is None:
             return Result(Outcome.NOT_FOUND)
         version = load_version_on(conn, case_id, version_id)
         if version is None:
