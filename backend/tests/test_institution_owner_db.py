@@ -19,7 +19,9 @@ from datetime import datetime, timedelta
 from safe_kit import audit
 from safe_kit import external_notice_backup as backup
 from safe_kit import rbac
+from safe_kit import users
 from safe_kit.db import connect
+from safe_kit.users import OwnerOutcome, change_institution_owner
 from test_evidence import db_user, request_as
 from test_evidence_lifecycle import provider, requires_database  # provider: fixture
 from test_fixture_a6_backup import (
@@ -581,3 +583,56 @@ def test_a_recipient_change_needs_a_new_version_and_a_new_approval(world):
         {"recipient_ref": APPROVED_RECIPIENT_REF},
     )
     assert accepted.status_code == 201, accepted.text
+
+
+# --- the operator's grant and revoke ----------------------------------------------------------------------------------
+
+
+@requires_database
+def test_the_operator_grants_and_revokes_the_owner_role_with_a_reason_and_an_audit_row(world):
+    user = db_user("triager")
+    granted = change_institution_owner(
+        user, grant=True, role=None, reason="Runs the notice process"
+    )
+    assert granted is OwnerOutcome.OK
+    assert users.find_user_by_id(user).role == "institution_owner"
+    assert (
+        change_institution_owner(user, grant=True, role=None, reason="again")
+        is OwnerOutcome.ALREADY_OWNER
+    )
+    revoked = change_institution_owner(user, grant=False, role="auditor", reason="Moves to audit")
+    assert revoked is OwnerOutcome.OK
+    assert users.find_user_by_id(user).role == "auditor"
+    assert (
+        change_institution_owner(user, grant=False, role="auditor", reason="again")
+        is OwnerOutcome.NOT_OWNER
+    )
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT action, details FROM audit_events
+            WHERE target_id = %s AND action IN ('user.owner_granted', 'user.owner_revoked') AND NOT is_deleted
+            ORDER BY created_at, id
+            """,
+            (user,),
+        ).fetchall()
+    assert [row[0] for row in rows] == ["user.owner_granted", "user.owner_revoked"]
+    assert rows[0][1] == {
+        "from": "triager",
+        "to": "institution_owner",
+        "reason": "Runs the notice process",
+        "source": "cli",
+    }
+    assert rows[1][1]["to"] == "auditor"
+
+
+@requires_database
+def test_the_operator_cannot_revoke_a_role_that_is_not_the_owner_role_or_grant_an_inactive_account(world):
+    user = db_user("triager")
+    assert change_institution_owner(user, grant=False, role="auditor", reason="x") is OwnerOutcome.NOT_OWNER
+    assert users.find_user_by_id(user).role == "triager"
+    assert change_institution_owner(user, grant=False, role="institution_owner", reason="x") is OwnerOutcome.NOT_OWNER
+    disabled = db_user("triager")
+    assert users.update_user(disabled, is_active=False) is users.UpdateOutcome.OK
+    assert change_institution_owner(disabled, grant=True, role=None, reason="x") is OwnerOutcome.INACTIVE
+    assert users.find_user_by_id(disabled).role == "triager"

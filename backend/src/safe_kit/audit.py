@@ -23,6 +23,10 @@ USER_UPDATE = "user.update"
 USER_DELETE = "user.delete"
 USER_PASSWORD_RESET = "user.password_reset"
 USER_PASSWORD_CHANGE = "user.password_change"
+# The operator grants or revokes the institution_owner role (safe_kit.users.change_institution_owner). Details hold the
+# roles before and after, and the reason the operator gave.
+USER_OWNER_GRANT = "user.owner_granted"
+USER_OWNER_REVOKE = "user.owner_revoked"
 # Details hold the changed field names only, never the values of the profile fields.
 USER_PROFILE_UPDATE = "user.profile_updated"
 ROLE_PERMISSIONS_CHANGE = "role.permissions_change"

@@ -26,7 +26,7 @@ These rules are enforced by the application. An administrator cannot change them
 - The `admin` role never holds a case permission (`cases:`, `evidence:`, `reviews:`, `disclosures:`, `reporter_contact:`).
 - The `reporting_owner` role cannot be changed. No other role can hold `reporter_contact:read`.
 - The `institution_owner` role keeps `disclosures:assign_backup` and `disclosures:set_backup_wait`. No other role can hold these two permissions.
-- No account can be created, given, removed, or changed through the application with the `institution_owner` role. An administrator cannot reset the password of an `institution_owner` account. The password is reset by the operator in the container, with `safe-kit-admin reset-password`.
+- No account can be created, given, removed, or changed through the application with the `institution_owner` role. An administrator cannot reset the password of an `institution_owner` account. The password is reset by the operator in the container, with `python -m safe_kit.admin reset-password`.
 - The preparer of a disclosure version cannot approve it.
 - A backup approver cannot be the primary approver of the same version, and nobody can name themselves as a backup.
 
@@ -49,6 +49,9 @@ The table below is a recommendation. The organisation decides who holds each rol
 ## How roles are assigned
 
 - An administrator creates accounts on the **Users** page and gives each account one role. The administrator cannot give the `institution_owner` role.
-- The `institution_owner` role is assigned in the database by a database administrator. No screen or command does this yet.
+- The `institution_owner` role is granted and revoked by the operator in the container, not in the application. Run these commands inside the API container:
+  - Grant: `python -m safe_kit.admin owner grant --username <name> --reason "<why>"`
+  - Revoke: `python -m safe_kit.admin owner revoke --username <name> --role <role> --reason "<why>"`
+- Each command needs a reason of at most 500 characters. It writes an audit row with the roles before and after, and ends the account's sessions. The account must be active and must not be the first administrator.
+- To disable or delete an account that holds `institution_owner`, revoke the role first. The application refuses both actions for that role.
 - Each holder of a role uses a personal account. Do not share an account: the application records who made each change, and a shared account hides it.
-- An account that holds `institution_owner` can be disabled only by a database administrator.

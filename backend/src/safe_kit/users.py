@@ -528,6 +528,75 @@ def soft_delete_user(user_id: str, actor_id: str | None = None) -> UpdateOutcome
     return UpdateOutcome.OK
 
 
+class OwnerOutcome(Enum):
+    OK = "ok"
+    NOT_FOUND = "not_found"
+    INACTIVE = "inactive"
+    PROTECTED = "protected"
+    ALREADY_OWNER = "already_owner"
+    NOT_OWNER = "not_owner"
+    INVALID_ROLE = "invalid_role"
+
+
+# The institution_owner role name. users.py cannot import safe_kit.rbac, because rbac imports this module.
+_INSTITUTION_OWNER = "institution_owner"
+
+
+def change_institution_owner(
+    user_id: str, *, grant: bool, role: str | None, reason: str
+) -> OwnerOutcome:
+    """Grant the institution_owner role, or revoke it by giving the account `role`. Only the operator in the container
+    calls this (safe_kit.admin). The change, its audit row, and the end of the account's sessions commit together.
+
+    The change is refused when the account is protected (the first admin), inactive, or already in the state asked for.
+    Revoking gives the account a role other than institution_owner. Its sessions end, so the next sign-in carries the
+    new role.
+    """
+    with connect() as conn:
+        conn.execute("SELECT pg_advisory_xact_lock(%s)", (ADMIN_SET_LOCK_KEY,))
+        current = conn.execute(
+            "SELECT role, is_active, is_protected FROM users WHERE id = %s AND NOT is_deleted FOR UPDATE",
+            (user_id,),
+        ).fetchone()
+        if current is None:
+            return OwnerOutcome.NOT_FOUND
+        current_role, active, protected = current
+        if protected:
+            return OwnerOutcome.PROTECTED
+        if not active:
+            return OwnerOutcome.INACTIVE
+        if grant:
+            if current_role == _INSTITUTION_OWNER:
+                return OwnerOutcome.ALREADY_OWNER
+            new_role = _INSTITUTION_OWNER
+            action = audit.USER_OWNER_GRANT
+        else:
+            if current_role != _INSTITUTION_OWNER:
+                return OwnerOutcome.NOT_OWNER
+            if role is None or role not in ROLES or role == _INSTITUTION_OWNER:
+                return OwnerOutcome.INVALID_ROLE
+            new_role = role
+            action = audit.USER_OWNER_REVOKE
+        conn.execute(
+            "UPDATE users SET role = %s, revision = revision + 1 WHERE id = %s",
+            (new_role, user_id),
+        )
+        _end_sessions(conn, user_id)
+        audit.record(
+            conn,
+            action,
+            "user",
+            user_id,
+            details={
+                "from": current_role,
+                "to": new_role,
+                "reason": reason,
+                "source": "cli",
+            },
+        )
+    return OwnerOutcome.OK
+
+
 def list_users(limit: int, after: tuple[str, str] | None = None) -> list[User]:
     """One page of users in (username, id) order. after is the (username, id) position of the last row of the
     previous page; None starts at the first user."""

@@ -882,9 +882,9 @@ def admin_list_users(
 
 def _refuse_owner_change(*roles: str | None) -> None:
     """The one check for the institution_owner role in the user administration: no request creates an account with it,
-    gives it, takes it away, or changes or removes an account that holds it. The role is set outside the application by a
-    database administrator, as the first administrator is. Otherwise the administrator, who holds the user rights, could
-    make an account that holds the owner rights (the administrator may not hold them, migration 0055)."""
+    gives it, takes it away, or changes or removes an account that holds it. The role is set outside the application, by the
+    operator with `python -m safe_kit.admin owner grant` or `owner revoke`. Otherwise the administrator, who holds the user
+    rights, could make an account that holds the owner rights (the administrator may not hold them, migration 0055)."""
     if INSTITUTION_OWNER_ROLE in roles:
         raise HTTPException(
             status_code=403, detail={"status": "institution_owner_not_assignable"}
