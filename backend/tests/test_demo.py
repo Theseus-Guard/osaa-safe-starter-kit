@@ -755,6 +755,26 @@ def test_each_demo_role_signs_in_with_its_own_credential(demo_dataset):
 
 
 @requires_database
+def test_a_demo_account_cannot_change_its_password_and_still_signs_in_with_its_credential(
+    demo_dataset,
+):
+    username = "demo-admin"
+    credential = _credential(demo_dataset, username)
+    client = _signed_in(demo_dataset, username)
+    with patch.dict(os.environ, demo_dataset["env"], clear=False):
+        response = client.post(
+            "/api/v1/auth/password",
+            json={
+                "current_password": credential,
+                "new_password": "a brand new passphrase",
+            },
+        )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "demo_account_password_unchangeable"
+    assert _demo_sign_in(demo_dataset, username, credential).status_code == 200
+
+
+@requires_database
 def test_another_roles_credential_is_refused(demo_dataset):
     response = _demo_sign_in(
         demo_dataset, "demo-investigator", _credential(demo_dataset, "demo-triager")
