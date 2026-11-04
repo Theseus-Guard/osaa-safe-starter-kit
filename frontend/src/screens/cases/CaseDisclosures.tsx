@@ -11,7 +11,9 @@ import {
   cancelNotice,
   exportDisclosure,
   getDisclosurePreview,
+  Escalation,
   listDisclosures,
+  listEscalations,
   recordNoticeFollowUp,
   recordNoticeReceipt,
   saveBlob,
@@ -133,6 +135,9 @@ export function CaseDisclosures({ caseId, closed, canApprove, canRecordNotices }
   const [notices, setNotices] = useState<ExternalNotice[] | null>(null);
   const [noticesError, setNoticesError] = useState<string | null>(null);
   const [noticeRevision, setNoticeRevision] = useState(0);
+  // The escalations of the chosen version, with the missing facts each one records.
+  const [escalations, setEscalations] = useState<Escalation[] | null>(null);
+  const [escalationsError, setEscalationsError] = useState<string | null>(null);
   const [initialSent] = useState(() => zonedParts(new Date(), zone));
   const [noticeChannel, setNoticeChannel] = useState<NoticeChannel>("email");
   const [noticeChannelOther, setNoticeChannelOther] = useState("");
@@ -206,6 +211,23 @@ export function CaseDisclosures({ caseId, closed, canApprove, canRecordNotices }
       stale = true;
     };
   }, [caseId, selectedId, revision, noticeRevision]);
+
+  useEffect(() => {
+    let stale = false;
+    setEscalations(null);
+    setEscalationsError(null);
+    if (selectedId === null) return;
+    listEscalations(caseId, selectedId)
+      .then((result) => {
+        if (!stale) setEscalations(result.items);
+      })
+      .catch((caught: unknown) => {
+        if (!stale) setEscalationsError(describeError(caught));
+      });
+    return () => {
+      stale = true;
+    };
+  }, [caseId, selectedId, revision]);
 
   const selected = versions?.find((item) => item.id === selectedId) ?? null;
   // Only the latest version can be approved, and an approved version needs no second approval.
@@ -619,6 +641,38 @@ export function CaseDisclosures({ caseId, closed, canApprove, canRecordNotices }
                 </p>
               )}
             </div>
+          </section>
+        )}
+
+        {selected !== null && (
+          <section aria-label="Missing facts" className="flex flex-col gap-3 border-t pt-4">
+            <h3 className="text-sm font-medium">Missing facts of this version</h3>
+            <p className="text-sm text-muted-foreground">
+              The facts the preparer recorded as missing when this version was escalated to a backup approver.
+            </p>
+            {escalationsError && (
+              <Alert variant="destructive">
+                <AlertDescription>{escalationsError}</AlertDescription>
+              </Alert>
+            )}
+            {escalations === null && escalationsError === null && (
+              <p className="text-sm text-muted-foreground">Loading the missing facts…</p>
+            )}
+            {escalations !== null && escalations.length === 0 && (
+              <p className="text-sm text-muted-foreground">No escalation is recorded for this version.</p>
+            )}
+            {escalations !== null && escalations.length > 0 && (
+              <ul className="grid gap-3 text-sm">
+                {escalations.map((item) => (
+                  <li key={item.id} className="grid gap-1">
+                    <span className="text-xs text-muted-foreground">
+                      Escalated <Timestamp value={item.escalated_at} />
+                    </span>
+                    <p className="whitespace-pre-line">{item.missing_facts}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
         )}
 

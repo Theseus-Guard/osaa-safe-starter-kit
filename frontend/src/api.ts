@@ -1616,6 +1616,25 @@ export function listNotices(caseId: string, versionId: string): Promise<External
   );
 }
 
+// An escalation of one version to a backup approver. The API gives a reader with only its packet the missing facts and
+// the time, and gives every other reader the full record. The screen shows only these two fields.
+export interface Escalation {
+  id: string;
+  version_id: string;
+  missing_facts: string;
+  escalated_at: string;
+}
+
+export interface EscalationList {
+  items: Escalation[];
+}
+
+export function listEscalations(caseId: string, versionId: string): Promise<EscalationList> {
+  return request<EscalationList>(
+    `/cases/${encodeURIComponent(caseId)}/disclosures/${encodeURIComponent(versionId)}/escalations`,
+  );
+}
+
 export function recordNotice(caseId: string, versionId: string, body: ExternalNoticeBody): Promise<ExternalNotice> {
   return request<ExternalNotice>(
     `/cases/${encodeURIComponent(caseId)}/disclosures/${encodeURIComponent(versionId)}/notices`,
