@@ -45,12 +45,12 @@ What the cards count:
 Shown to roles with a case read permission. The administrator and auditor roles see a message instead of the list.
 
 - **New case** (only with the permission to submit cases, which the reporter role has). The dialog asks for a **Title**, the **Awareness date and time** in the system timezone, and an optional **Contact for follow-up**. The case is created with the deadlines calculated from that time.
-- **Search by reference**: matches part of the case reference or of the case ID. The search starts after a short pause in typing and returns to the first page.
+- **Search by reference**: matches part of the case reference or of the case ID. The search starts after a short pause in typing and returns to the first page. The status filter still applies: choose All statuses to find open and closed cases, Open, or Closed.
 - **Status filter**: All statuses, Open or Closed.
 - **Table**: Reference (a link to the case), Title, Status, Risk score (the value and its level, or "Not assessed"), Awareness time, Next deadline (with an **Overdue** badge when it has passed), Last updated, Created.
 - **Previous** and **Next** page through the list, 20 cases at a time.
 
-The header search box finds a case by reference or ID from any page.
+The header search box finds a case by reference or ID from any page. It searches open cases only, so a closed case is never shown there. To find a closed case, use the search on the Cases page with the status filter set to All statuses or Closed. The results of the header search end with a note that says so.
 
 ## Case detail
 

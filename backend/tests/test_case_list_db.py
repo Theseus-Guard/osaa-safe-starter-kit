@@ -385,3 +385,24 @@ def test_evidence_changes_count_only_for_a_caller_with_evidence_read():
 def task_id_of(client: ActingClient, case_id: str, kind: str) -> str:
     detail = client.get(f"/api/v1/cases/{case_id}").json()
     return next(task["id"] for task in detail["deadlines"] if task["kind"] == kind)
+
+
+def test_the_header_search_asks_for_open_cases_and_the_cases_page_search_keeps_its_filter():
+    reporter = ActingClient(new_user("reporter"))
+    closed = new_case(reporter, "Leak A")
+    close_in_database(closed["id"], reporter.user_id)
+    wanted = new_case(reporter, "Leak B")
+
+    # The header search asks for open cases, so a matching closed case is not returned.
+    open_only = reporter.get(
+        f"/api/v1/cases?status=open&q={closed['reference']}"
+    ).json()
+    assert open_only["items"] == []
+    open_match = reporter.get(
+        f"/api/v1/cases?status=open&q={wanted['reference']}"
+    ).json()
+    assert [item["id"] for item in open_match["items"]] == [wanted["id"]]
+
+    # The Cases page search without a status keeps every status, so the closed case is found.
+    all_statuses = reporter.get(f"/api/v1/cases?q={closed['reference']}").json()
+    assert [item["id"] for item in all_statuses["items"]] == [closed["id"]]

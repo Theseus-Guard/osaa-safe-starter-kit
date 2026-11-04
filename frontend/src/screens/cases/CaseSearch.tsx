@@ -37,7 +37,8 @@ export function CaseSearch() {
     }
     let stale = false;
     setLoading(true);
-    listCases(MAX_RESULTS, undefined, term)
+    // The header search finds open cases only. The Cases page search keeps its status filter.
+    listCases(MAX_RESULTS, undefined, term, "open")
       .then((page) => {
         if (stale) return;
         setItems(page.items);
@@ -131,6 +132,7 @@ export function CaseSearch() {
               ))}
             </ul>
           )}
+          <p role="note" className="px-2 py-1.5 text-xs text-muted-foreground">Only open cases are searched. Closed cases are not shown.</p>
         </div>
       )}
     </div>

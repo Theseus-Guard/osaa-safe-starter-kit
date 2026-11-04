@@ -9,6 +9,7 @@ Every release entry states the **SAFE compatibility baseline**: the SAFE version
 Changes after 0.2.0 go here.
 
 ### Added
+- The header case search finds open cases only, so closed cases are not shown there. The Cases page search keeps its status filter (All statuses, Open, Closed).
 - Case links have a type (duplicate, related or root and sub-case), a required reason and a visibility checkbox that is off by default (migration 0052; links made before it read as related with no reason). A duplicate link closes the duplicate case in the same step and is refused while that case has an open deadline task. A root and sub-case link lets a reader of the sub-case read the root case, read only. With the checkbox on, the users of either case can see both cases. The API, the CLI and the case page take the new fields.
 - Deadlines: the 30-day analysis obligation is a deadline task of its own, `preliminary_control_failure_analysis`. It is due 30 elapsed days after t0, at the same time as the preliminary public report task, so a weekend or a holiday does not move it. Each new case gets it with its other tasks, and it moves with t0 like them. It is not an external notice, so the internal incident option does not change it. Migration 0051 adds it to the cases that already exist, once per case.
 
