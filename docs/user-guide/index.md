@@ -6,20 +6,7 @@ This is early development software. It is not a production system, it has no sin
 
 ## Who uses it
 
-Each account has one role. The table shows what each role can see and do with the permissions that a new installation grants. An administrator can change these permissions on the **Roles and permissions** page, except for the fixed rows described below.
-
-| Role | Used for | Can see | Main actions |
-|---|---|---|---|
-| `reporter` | Reporting an incident | Only the cases the reporter opened | Open a case |
-| `triager` | Triage of cases | Every case, including reporter-channel cases before assignment (the reporter identity and contact stay hidden) | Record impacts, classification, awareness events, legal duties and links; assign investigators and reviewers; close and reopen cases; mark deadlines not applicable; prepare disclosure versions |
-| `investigator` | Work on assigned cases | Cases it is assigned to, their evidence and the catalog | Upload evidence; change the status of deadline tasks |
-| `reviewer` | Review of assigned cases | Cases it is assigned to, their evidence and the catalog | Open review rounds and set review layers; declare conflicts; file appeals; write catalog entries |
-| `disclosure_approver` | Approval of disclosure versions | Every case, except reporter-channel cases that have no assignment yet, and the disclosure versions | Approve a version; record notices of an approved version; export an approved version |
-| `auditor` | Oversight of the installation | Overview counts and the catalog | Read only |
-| `reporting_owner` | Holding the reporter contact | Every case, and the reporter contact | Read the reporter contact; every read is audited |
-| `admin` | Running the installation | Users, roles, the privacy inventory and the system timezone. Not case content | Manage accounts, roles and permissions, the timezone and the privacy export |
-
-Two rows are fixed. The `admin` role always keeps the permissions to manage users, reset passwords and manage roles, so administrators cannot lock themselves out. The `reporting_owner` role cannot be changed on the Roles page. No role can be given the reporter contact permission except this one.
+Each account has one role. The [Roles and permissions](./roles-and-permissions.md) page lists what each role can see and do, the fixed rules, and the suggested holder of each role.
 
 Times are shown in the system timezone that an administrator chose. Stored times are always UTC.
 

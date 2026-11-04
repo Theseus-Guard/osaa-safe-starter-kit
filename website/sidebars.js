@@ -13,6 +13,7 @@ const sidebars = {
       items: [
         "user-guide/quick-start",
         "user-guide/screens",
+        "user-guide/roles-and-permissions",
         "user-guide/workflows",
         "user-guide/demo",
         "user-guide/faq",
