@@ -23,7 +23,7 @@ This release closes F2 (the disclosure, notice, export and demo phase). The F2 g
 
 ## 0.2.0 - 2026-11-03
 
-**SAFE compatibility baseline:** SAFE v1.0 (2026-10-21), wg-safe commit `08c0d6a11163d10ac878a15dc9f53b5b322fd7cb`. This version is not tagged in git yet.
+**SAFE compatibility baseline:** SAFE v1.0 (2026-10-21), wg-safe commit `08c0d6a11163d10ac878a15dc9f53b5b322fd7cb`. Tagged `v0.2.0` on commit `5ca8b22`.
 
 ### Added
 - Single-organization self-hosted stack (Docker Compose): PostgreSQL, one-shot migrations, API, worker, nginx gateway, container CLI.
