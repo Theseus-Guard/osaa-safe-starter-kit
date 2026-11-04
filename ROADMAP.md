@@ -16,13 +16,13 @@ This phase builds the minimal working system: a containerized stack with Postgre
 
 This phase completes the review and disclosure workflow: the eleven-layer review framework, conflict and recusal handling, recommendations and a versioned catalog, redaction and approval before any export, and manual recording of external notices. It also adds a synthetic demo dataset and a guided demo that uses both the web interface and the command-line client, with external network access and notifications disabled.
 
-Status: engineering and tests complete on the integration branch (not yet merged to `main`). Not done: the independent and human review gates, the live three-step demo run (only parts were run on the local stack), and the items deferred to F3 (escalation and alert records, recipient and package review records, backup approver, cursor paging for the other list endpoints, the 30-day analysis task, and the official holiday calendar).
+Status: complete, released as v0.2.1 (PR #7 into `main`). Engineering and tests are complete. The owner ran the start and `cli-show` steps of the demo on a live stack on 2026-11-03. Items moved to F3: escalation and alert records, recipient and package review records, backup approver, cursor paging for the other list endpoints, the 30-day analysis task, and the official holiday calendar.
 
 ## F3 — Hardening and Release
 
 This phase prepares the project for real use. It covers synthetic exercises and a limited, approved pilot, backup and restore procedures with measured recovery objectives, migration and rollback rehearsals, accessibility work, pinned multi-architecture images with a software bill of materials and provenance, and security and license reviews. A release is made only after these gates pass and the maintainers approve it.
 
-Status: next. It also takes the F2 items deferred above.
+Status: next. Work on the F3 items has started on a local branch and is not merged. The phase also takes the F2 items deferred above.
 
 ## F4 — Evidence-Driven Expansion
 

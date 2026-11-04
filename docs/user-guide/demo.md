@@ -62,4 +62,4 @@ The output has one line per check and ends with `PASS`, or `FAIL` when a check h
 ## What has been run
 
 - Run live on the owner's stack on 2026-11-03: sign-in, the case list, the case detail (`cli-show`) and the egress check.
-- Not run: the three-step flow (`start`, browser sign-in, `cli-show`) against a separate project. Treat that flow as not yet verified end to end.
+- The `start` and `cli-show` steps were run on the owner's live stack on 2026-11-03. The browser sign-in step has not been recorded yet.

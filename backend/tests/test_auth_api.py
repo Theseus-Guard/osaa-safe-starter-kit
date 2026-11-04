@@ -225,6 +225,8 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "reset_password", fake.reset_password)
     monkeypatch.setattr(api, "record_login_failure", fake.record_login_failure)
     monkeypatch.setattr(api, "change_own_password", fake.change_own_password)
+    # The fake store has no demo accounts, so the demo check never reaches the database.
+    monkeypatch.setattr(api, "demo_credential_hash", lambda user_id: None)
     monkeypatch.setattr(api, "hit_rate_limit", fake.hit)
     monkeypatch.setattr(api, "clear_rate_limit", fake.clear)
     monkeypatch.setattr(api, "open_session", fake.open_session)
