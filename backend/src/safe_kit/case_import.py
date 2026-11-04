@@ -47,6 +47,11 @@ MAX_ERRORS_PER_RECORD = 20
 MAX_MESSAGE_LENGTH = 300
 TITLE_LIMIT = 200
 ENVELOPE_FIELDS = frozenset({"import_format_version", "records"})
+# The export documents (schemas/*-export.v0.json) carry one of these keys. They are not import files: an export is
+# read by its own reader, and the import reader refuses it by name, so the operator is not told the version is wrong.
+EXPORT_DOCUMENT_KEYS = frozenset(
+    {"catalog_export_schema_version", "disclosure_export_schema_version"}
+)
 
 SCHEMA_PATH = (
     Path(__file__).resolve().parent / "schemas" / "case-minimum-record.v0.json"
@@ -97,6 +102,10 @@ def parse_import_file(raw: bytes) -> list[Any]:
         raise ImportFileError("the request body is not valid JSON") from None
     if not isinstance(document, dict):
         raise ImportFileError("the import file must be a JSON object")
+    if EXPORT_DOCUMENT_KEYS & set(document):
+        raise ImportFileError(
+            "this file is an export document, not a case import file. Exports cannot be imported"
+        )
     if not set(document) <= ENVELOPE_FIELDS:
         raise ImportFileError(
             "the import file has a field that this version does not accept"
