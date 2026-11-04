@@ -126,13 +126,23 @@ A reviewer (`catalog:write`) adds entries and versions on the **Catalog** page, 
 
 Administrators use the **Users**, **Roles and permissions** and **Settings** pages. These pages are described in [Screens](./screens.md). Each change is audited.
 
+## 14. Backup approval (API only)
+
+When the approver who should send an urgent notice cannot do it, the preparer of the version opens an escalation and names a backup. No screen offers these steps yet; they are API calls, sent with the access token from `POST /api/v1/auth/login` as a `Bearer` header.
+
+1. An institution owner sets the backup pool of the case: `PUT /api/v1/cases/{case_id}/notice-backups` with `{"backup_user_ids": [...]}`. The pool holds at least two distinct active users with `disclosures:approve`. Nobody can name themselves, and the approver of the version cannot choose the pool.
+2. The preparer of the version opens an escalation: `POST /api/v1/cases/{case_id}/disclosures/{version_id}/escalations`. Only the preparer may open one. The body holds the reason code (`unreachable` or `conflict_of_interest`), the authority basis, the missing facts, the next update, and the backup, who must be in the pool and must not be the primary approver of the version.
+3. The backup reads the packet to send and the missing facts: `GET /api/v1/cases/{case_id}/disclosures/{version_id}/escalations/{escalation_id}/backup-packet`.
+4. After the waiting time, the backup decides once: `POST .../escalations/{escalation_id}/backup-decision`. The decision is `approve` (with the approval values, as on the normal path), `reject` (with a reason), or `emergency_manual_notice`. The last one records the decision only: it writes no approval and no notice, and changes no deadline. The application refuses a decision before the time in `backup_may_act_at`.
+5. An institution owner changes the waiting time with `PUT /api/v1/notice-settings/backup-wait` and a reason. The waiting time is 4 hours by default and must be between 1 and 168 hours. An escalation copies the time that applies when it is opened; a change does not move the time of an open escalation.
+
+Each step is audited.
+
 ## Not built yet
 
 These features are not in the application yet. The screens and the API do not offer them.
 
-- Escalation and alert records.
-- Recipient review records and package review records.
-- A backup approver for approvals.
+- Alerts for watched persons. The overdue deadline alert exists.
 - The 30-day analysis task. Only the preliminary public report deadline (30 days) exists.
 - An official holiday calendar. Business days exclude weekends only.
 - Sending a disclosure. Notices record a send made by a person.

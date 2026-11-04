@@ -27,8 +27,17 @@ A user who opens an administrator page without the admin role is sent to the Ove
 
 ## Where to go next
 
-- [Quick start](./quick-start.md): from a clean machine to the first sign-in.
+If you are new to the application, read these in this order:
+
+1. [Concepts](./concepts.md): the terms the screens use, and how deadlines and approvals work.
+2. [Quick start](./quick-start.md): from a clean machine to the first sign-in.
+3. [First day as an administrator](./administrator-first-day.md): the checklist for the first accounts, roles and test case.
+4. [Roles and permissions](./roles-and-permissions.md): what each role can see and do, and who should hold it.
+
+Then, by task:
+
 - [Screens](./screens.md): each screen, its tabs, who can change what, and what is audited.
-- [Workflows](./workflows.md): the steps of the main workflows, and what is not built yet.
+- [Workflows](./workflows.md): the steps of the main workflows, including backup approval, and what is not built yet.
+- [Operator guide](./operator-guide.md): running the stack, secrets, upgrades, operator commands, and troubleshooting.
 - [Demo](./demo.md): the synthetic demo and its sign-in roles.
 - [FAQ](./faq.md): short answers to common questions.
