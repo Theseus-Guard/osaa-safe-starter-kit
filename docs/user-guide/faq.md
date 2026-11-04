@@ -88,3 +88,39 @@ A session ends after 60 minutes without activity, and in any case 12 hours after
 ## Why does the sign-in page ask for a demo role?
 
 Only the demo does. The stack from `compose.yaml` runs in production mode, and its sign-in page takes a username and password. The demo is started with `scripts/demo.sh`, which adds the overlay `compose.demo.yaml`; with the overlay, the sign-in page offers demo sign-in only. See the [Demo](./demo.md) page.
+
+## Why can't I change the password of a demo account?
+
+Demo accounts sign in only with their demo credential, which is kept separately from the account password. The Account screen refuses a password change for them with "Demo accounts sign in with their demo credential, so their password cannot be changed here." Sign in again with the credential from the demo's credential folder.
+
+## Why does the export of a version fail?
+
+Only an approved version can be exported. The application refuses an export in these cases:
+
+- The version is not approved. Approve the latest version first.
+- The stored content does not match its digest. Nothing is exported. Tell an administrator.
+- The approval does not match the version. Tell an administrator.
+- A CLEAR item has no release approval. Record the release approval first.
+- The release has no trace record. Tell an administrator.
+
+A successful export is written to the audit log without its content. A refused export is recorded as a refused release attempt.
+
+## Why does the Restricted label appear?
+
+The label replaces an actor name or a detail that your role may not see. The event itself is still shown. See [Roles and permissions](./roles-and-permissions.md) for what each role can see.
+
+## Why does the Missing facts section say no escalation is recorded?
+
+The section lists the facts that the preparer recorded as missing when a version was escalated to a backup approver. If no escalation was opened for the version, it stays empty. Opening and deciding an escalation is an API-only step; see [Workflows, section 14](./workflows.md#14-backup-approval-api-only).
+
+## Why is there no button to set the backup approvers?
+
+The backup pool, the escalation, the backup decision and the waiting time have no screen yet. They are API calls for an institution owner or the preparer. See [Workflows, section 14](./workflows.md#14-backup-approval-api-only).
+
+## Running the installation
+
+The stack does not start, the browser shows a certificate warning, or a command fails? These problems belong to the person who runs the installation, not to the people who use it. The [Operator guide](./operator-guide.md#troubleshooting) lists what to check for each symptom. In short:
+
+- Start with `docker compose ps`, then the logs of the service that is not healthy.
+- The browser warns about the certificate until you trust the local CA. See [gateway/README-TLS.md](../../gateway/README-TLS.md).
+- A second stack on port 8443 blocks the first one. Stop it first.
