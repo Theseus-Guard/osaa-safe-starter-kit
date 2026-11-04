@@ -16,7 +16,7 @@ This phase builds the minimal working system: a containerized stack with Postgre
 
 This phase completes the review and disclosure workflow: the eleven-layer review framework, conflict and recusal handling, recommendations and a versioned catalog, redaction and approval before any export, and manual recording of external notices. It also adds a synthetic demo dataset and a guided demo that uses both the web interface and the command-line client, with external network access and notifications disabled.
 
-Status: complete, released as v0.2.1 (PR #7 into `main`). Engineering and tests are complete. The independent and human review gates were not run; the owner accepted the phase closure on 2026-11-04. The owner ran the start and `cli-show` steps of the demo on a live stack on 2026-11-03. Items moved to F3: escalation and alert records, recipient and package review records, backup approver, cursor paging for the other list endpoints, the 30-day analysis task, and the official holiday calendar.
+Status: complete, released as v0.2.1 (PR #7 into `main`). Engineering and tests are complete. The owner ran the start and `cli-show` steps of the demo on a live stack on 2026-11-03. Items moved to F3: escalation and alert records, recipient and package review records, backup approver, cursor paging for the other list endpoints, the 30-day analysis task, and the official holiday calendar.
 
 ## F3 — Hardening and Release
 

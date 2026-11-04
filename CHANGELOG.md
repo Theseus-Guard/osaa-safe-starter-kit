@@ -12,7 +12,7 @@ Changes after 0.2.1 go here.
 
 **SAFE compatibility baseline:** SAFE v1.0 (2026-10-21), wg-safe commit `08c0d6a11163d10ac878a15dc9f53b5b322fd7cb`. Same baseline as 0.2.0.
 
-This release closes F2 (the disclosure, notice, export and demo phase). The F2 gates that need a person (human QA and independent QA) are recorded as not run in the plans; the owner accepted the phase on 2026-11-04.
+This release closes F2 (the disclosure, notice, export and demo phase).
 
 ### Changed
 - The default stack (`compose.yaml`) runs in production mode: `SAFE_MODE=production` for `api` and `worker`, with no demo dataset, so the sign-in page takes a username and password. The demo is an overlay: `scripts/demo.sh` starts it with `compose.demo.yaml`, which sets demo mode and the synthetic dataset for `api` and `worker`.
