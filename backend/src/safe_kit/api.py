@@ -586,6 +586,9 @@ PROTECTED_DETAIL = "the protected admin account cannot be disabled, deleted, or 
 PASSWORD_REUSED_DETAIL = "password_reused"
 # Detail code of the 409 when an administrator tries to reset the password of a reporter account.
 REPORTER_RESET_REFUSED_DETAIL = "reporter_account_reset_refused"
+# Detail code of the 409 when an administrator tries to reset the password of an institution_owner account. The owner's
+# rights would pass to whoever sets the password, so only the operator in the container resets it (admin.py).
+OWNER_RESET_REFUSED_DETAIL = "institution_owner_reset_refused"
 
 
 def _summary(user: User) -> UserSummary:
@@ -1007,6 +1010,9 @@ def admin_reset_password(
 ) -> Response:
     # Self-service reset is intentionally not offered. The admin sets a temporary password
     # and the user must replace it at next login.
+    target = find_user_by_id(str(user_id))
+    if target is not None and target.role == INSTITUTION_OWNER_ROLE:
+        raise HTTPException(status_code=409, detail=OWNER_RESET_REFUSED_DETAIL)
     try:
         found = reset_password(str(user_id), body.temporary_password, actor_id=actor.id)
     except PasswordReused:
