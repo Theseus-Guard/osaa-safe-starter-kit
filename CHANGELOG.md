@@ -14,6 +14,7 @@ Changes after 0.2.0 go here.
 - Deadlines: the 30-day analysis obligation is a deadline task of its own, `preliminary_control_failure_analysis`. It is due 30 elapsed days after t0, at the same time as the preliminary public report task, so a weekend or a holiday does not move it. Each new case gets it with its other tasks, and it moves with t0 like them. It is not an external notice, so the internal incident option does not change it. Migration 0051 adds it to the cases that already exist, once per case.
 
 ### Changed
+- The sign-in page marks an empty username, password or demo credential on the page, with the field marked invalid and a message beside it. Before, only the browser's own prompt appeared.
 - The default stack (`compose.yaml`) runs in production mode: `SAFE_MODE=production` for `api` and `worker`, with no demo dataset, so the sign-in page takes a username and password. The demo is an overlay: `scripts/demo.sh` starts it with `compose.demo.yaml`, which sets demo mode and the synthetic dataset for `api` and `worker`.
 
 ## 0.2.0 - 2026-11-03

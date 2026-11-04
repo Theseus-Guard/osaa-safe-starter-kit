@@ -61,6 +61,33 @@ describe("Login", () => {
     expect(onLogin).toHaveBeenCalledWith("example-user", "example-password");
   });
 
+  it("marks an empty username and password on the page and does not send the login", async () => {
+    const user = userEvent.setup();
+    const { onLogin } = renderLogin();
+
+    await user.click(await screen.findByRole("button", { name: "Log in" }));
+
+    const username = screen.getByLabelText(/^Username/);
+    expect(username).toHaveAttribute("aria-invalid", "true");
+    expect(username).toHaveAccessibleDescription("Enter your username.");
+    expect(screen.getByLabelText(/^Password/)).toHaveAccessibleDescription("Enter your password.");
+    expect(username).toHaveFocus();
+    expect(onLogin).not.toHaveBeenCalled();
+  });
+
+  it("marks an empty demo credential on the page and does not sign in", async () => {
+    const user = userEvent.setup();
+    demo.mockResolvedValue(DEMO_ROLES);
+    const { onDemoSignIn } = renderLogin();
+
+    await user.click(await screen.findByRole("button", { name: "Log in" }));
+
+    const credential = screen.getByLabelText(/^Demo credential/);
+    expect(credential).toHaveAttribute("aria-invalid", "true");
+    expect(credential).toHaveAccessibleDescription("Enter the demo credential for this role.");
+    expect(onDemoSignIn).not.toHaveBeenCalled();
+  });
+
   it("shows the error alert for a rejected login", async () => {
     const user = userEvent.setup();
     renderLogin(vi.fn().mockRejectedValue(new ApiError(401, "invalid credentials")));
