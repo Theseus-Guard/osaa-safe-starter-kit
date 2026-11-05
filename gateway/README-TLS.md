@@ -62,6 +62,10 @@ openssl pkey -in secrets/tls/server.key -pubout | openssl sha256
 The two hashes must be equal. Then recreate the gateway with the command in section 1.
 To use files from another location, change the `file:` paths of `gateway_tls_cert` and `gateway_tls_key` in `compose.yaml`.
 
+The API and the worker mount the same two files, read-only, as `/run/secrets/tls_cert` and `/run/secrets/tls_key`. In production
+mode each of them refuses to start unless both files exist and are readable. The check does not read the key. Demo mode does not
+check them. A file that is missing or not readable stops the start with a message that names the setting.
+
 ## 4. Reverse-proxy offload (supported alternative)
 
 An external reverse proxy or load balancer may terminate TLS for the public name. The gateway still expects TLS,

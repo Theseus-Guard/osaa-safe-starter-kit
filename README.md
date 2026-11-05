@@ -95,13 +95,13 @@ cd frontend && npm install && npm run build
 
 ## Test coverage
 
-Measured on 2026-11-04 with the commands below. Figures are statement coverage of owned code; generated and third-party code is excluded.
+Measured on 2026-11-05 with the commands below. Figures are statement coverage of owned code; generated and third-party code is excluded.
 
 | Part | Command | Tests | Coverage |
 |---|---|---|---|
-| Backend, without database | `scripts/test-backend.sh` | 2176 passed, 622 skipped | 77% |
-| Backend, with database | `scripts/test-backend.sh --db` | 2798 passed | 96% |
-| Frontend | `cd frontend && npm run test:coverage` | 583 passed | 77% statements |
+| Backend, without database | `scripts/test-backend.sh` | 2300 passed, 734 skipped | 75% |
+| Backend, with database | `scripts/test-backend.sh --db` | 3034 passed | 96% |
+| Frontend | `cd frontend && npm run test:coverage` | 609 passed | 78% statements |
 
 The backend `--db` mode starts a throwaway PostgreSQL container and removes it afterwards. Database-backed tests are skipped unless `SAFE_TEST_DATABASE=1` is set, which the script does for you.
 
