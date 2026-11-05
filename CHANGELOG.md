@@ -6,7 +6,13 @@ Every release entry states the **SAFE compatibility baseline**: the SAFE version
 
 ## Unreleased
 
-Changes after 0.2.1 go here.
+Changes after 0.3.0 go here.
+
+## 0.3.0 - 2026-11-05
+
+**SAFE compatibility baseline:** SAFE v1.0 (2026-10-21), wg-safe commit `08c0d6a11163d10ac878a15dc9f53b5b322fd7cb`. Same baseline as 0.2.0 and 0.2.1.
+
+This release completes phase F3 (hardening and release preparation). It contains a breaking API change: the paged list endpoints return a cursor only, and `offset` and `total` are removed.
 
 ### Added
 - The header case search finds open cases only, so closed cases are not shown there. The Cases page search keeps its status filter (All statuses, Open, Closed).

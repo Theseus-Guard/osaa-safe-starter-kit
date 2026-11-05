@@ -175,7 +175,7 @@ async def _startup_guard(_app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="SAFE-Starter-Kit API", version="0.2.1", lifespan=_startup_guard)
+app = FastAPI(title="SAFE-Starter-Kit API", version="0.3.0", lifespan=_startup_guard)
 
 # Error contract (plans/f0/api-draft.md sections 3.3 and 3.6). Every error response has the same body: the existing
 # "detail" field, which the web UI and the CLI read, and an "error" object with a stable code, a safe message, the
