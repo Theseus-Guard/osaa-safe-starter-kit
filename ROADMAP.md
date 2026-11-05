@@ -22,7 +22,7 @@ Status: complete, released as v0.2.1 (PR #7 into `main`). Engineering and tests 
 
 This phase prepares the project for real use. It covers synthetic exercises and a limited, approved pilot, backup and restore procedures with measured recovery objectives, migration and rollback rehearsals, accessibility work, pinned multi-architecture images with a software bill of materials and provenance, and security and license reviews. A release is made only after these gates pass and the maintainers approve it.
 
-Status: next. Work on the F3 items has started on a local branch and is not merged. The phase also takes the F2 items deferred above.
+Status: in progress on the local branch `feature/phase-3`. It is not merged to `main`, and no F3 release has been made. Built on the branch: the institution owner role; the disclosure approver's packet-only view and export; backup approval, escalation, and recipient and package review records (API only); the missing facts view; cursor paging for users, case history and evidence; the 30-day control-failure analysis task; typed case links; evidence upload to closed cases; open-case header search; the sign-in check for empty fields; the production check for TLS files; and accessibility fixes in the forms. A receipt delay check exists in the backend only, with no screen, API or CLI. Deferred, not done: the watched-contact alarm, palette and dark-theme validation, and the screens for the approver and backup steps. The official holiday calendar is not built.
 
 ## F4 — Evidence-Driven Expansion
 

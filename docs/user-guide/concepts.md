@@ -6,9 +6,10 @@ The application follows the SAFE workflow for AI incidents and near misses. The 
 
 ## The main objects
 
-- **Case.** One incident or near miss. A case holds its record, its deadline tasks, its evidence, its reviews, its links to other cases, and its disclosure packages. A closed case cannot be changed, except that it can be reopened.
+- **Case.** One incident or near miss. A case holds its record, its deadline tasks, its evidence, its reviews, its links to other cases, and its disclosure packages. A closed case cannot be changed, except that it can be reopened, and evidence can still be uploaded to it.
 - **Reporter channel.** A case opened by a reporter. The reporter sees its own cases. A triager sees the case before it is assigned, and never sees the reporter identity or the reporter contact.
 - **Assignment.** An investigator or a reviewer assigned to a case. Only assigned people can work on the case's evidence and reviews.
+- **Case link.** A typed link between two cases: duplicate, related, or root and sub-case. Each link has a reason. A duplicate link closes the duplicate case. A root and sub-case link lets a reader of the sub-case read the root case, read only.
 - **Evidence.** Files attached to a case. The application keeps a custody log of every upload, download and check. Each item has a TLP label that limits who may see it.
 - **Catalog.** A versioned list of defences, with their verification history. It is separate from the cases.
 
@@ -47,7 +48,9 @@ The disclosure steps are in [Workflows, sections 8 to 11](./workflows.md#8-prepa
 
 ## Backup approval
 
-When the approver who should send an urgent notice cannot do it, the preparer opens an escalation and names a backup approver from a pool. The pool belongs to one case and is set by an institution owner. A backup may decide only after the waiting time has passed. The waiting time is 4 hours by default, and an institution owner can change it, with a reason.
+When the approver who should send an urgent notice cannot do it, the preparer opens an escalation, with the reason (unreachable, or a conflict of interest), and names a backup approver from a pool. The pool belongs to one case, holds at least two people, and is set by an institution owner. A backup may decide only after the waiting time has passed. The waiting time is 4 hours by default, and an institution owner can change it, with a reason.
+
+An escalation records the **missing facts**: the facts that the preparer records as missing for the version. The Disclosure tab shows them, read only. Recipient reviews and package reviews are recorded against a version as well. None of these records sends a notice or changes a deadline.
 
 Backup approval is available through the API only. See [Workflows, section 14](./workflows.md#14-backup-approval-api-only).
 

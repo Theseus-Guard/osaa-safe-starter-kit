@@ -7,7 +7,7 @@ The list shows only the cases your role may see:
 - A reporter sees only the cases it opened. With none, the list says "You have not opened any cases yet."
 - An investigator or a reviewer sees only the cases it is assigned to.
 - A triager sees every case, including a reporter-channel case that has no assignment yet, so it can assign one. It never sees the reporter or the reporter contact.
-- A disclosure approver does not see the case list. It sees only the disclosure packet it is assigned to approve. See [Roles and permissions](./roles-and-permissions.md).
+- A disclosure approver does not see the case list. It sees only its packet: the latest version of a package that has no approval, and each version it approved. See [Roles and permissions](./roles-and-permissions.md).
 - The administrator and auditor roles have no case access. The Cases page says so. An institution owner sees every case, so it can assign the backup approvers of a case.
 - A search or a status filter narrows the list. The list then says "No cases match this search." or "No cases have this status."
 - The header search does not show closed cases. Use the search on the Cases page with the status filter set to All statuses or Closed to find them.
@@ -46,7 +46,7 @@ Each control appears only when the role has the permission for it. Some examples
 - The **Disclosure** tab needs `disclosures:read`. The triager and the disclosure approver have it by default.
 - **Catalog** in the navigation needs `catalog:read`.
 - **Users**, **Data privacy**, **Roles and permissions** and **Settings** are for administrators only.
-- A closed case is read only. Its change buttons are disabled.
+- A closed case is read only. Its change buttons are disabled, except the evidence upload.
 
 The server checks every change again, whatever the screen shows.
 

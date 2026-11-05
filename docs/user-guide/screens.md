@@ -6,7 +6,7 @@ Every signed-in page has the navigation, a search box for cases (for roles that 
 
 ## Sign-in
 
-The sign-in page asks for a username and password. In demo mode it asks for a demo role and its demo credential instead (see [Demo](./demo.md)). A session lasts 60 minutes without activity and at most 12 hours from the sign-in.
+The sign-in page asks for a username and password. In demo mode it asks for a demo role and its demo credential instead (see [Demo](./demo.md)). A session lasts 60 minutes without activity and at most 12 hours from the sign-in. An empty username, password or demo credential is marked on the page, with a message beside the field, when you submit.
 
 ## Overview
 
@@ -56,7 +56,7 @@ The header search box finds a case by reference or ID from any page. It searches
 
 ![Case detail, Overview tab, with the risk score and impact values](images/investigator-case-detail-SAFE-DEMO-000002.png)
 
-Opened from a case reference. The header shows the reference, the title, the status and the risk score. **Edit impact values** changes the impact values (C, B and A); each save stores a new version and keeps the earlier ones. **Edit title** changes the case title; it is offered to a triager (`cases:triage`). If someone else changed the title after the case was loaded, the save is refused and nothing changes: reload the case and edit it again. A closed case is read only: every change is disabled.
+Opened from a case reference. The header shows the reference, the title, the status and the risk score. **Edit impact values** changes the impact values (C, B and A); each save stores a new version and keeps the earlier ones. **Edit title** changes the case title; it is offered to a triager (`cases:triage`). If someone else changed the title after the case was loaded, the save is refused and nothing changes: reload the case and edit it again. A closed case is read only: every change is disabled, except that evidence can still be uploaded to it (see the Evidence tab).
 
 The tabs are listed below in the order the screen shows them. The **Evidence** tab appears only for roles that can read or write evidence. The **Disclosure** tab appears only for roles that can read disclosures. Inside **Links and reporting**, the reporter contact appears only for the reporting owner, and the preliminary report only for roles that can read the full case.
 
@@ -80,7 +80,7 @@ Shows the **Deadline tasks** of the case (status, due time, reason), the **Aware
 
 Lists the evidence of the case with its status (Pending, Available or Failed) and the upload date. For each item: **Download**, **Details** and **Custody**. **Upload** accepts PDF, PNG, JPEG, plain text and JSON. **Make a redacted copy** creates a redacted copy of a text original.
 
-- Who can change it: reading and downloading needs `evidence:read`. Uploading needs `evidence:write` (investigator by default). A redacted copy needs both.
+- Who can change it: reading and downloading needs `evidence:read`. Uploading needs `evidence:write` (investigator by default). A redacted copy needs both. Upload stays available on a closed case, with no extra permission; the upload's audit entry records that the case was closed.
 - The custody log records each upload, download and integrity check.
 - Audited: `evidence.uploaded`, `evidence.downloaded`, `evidence.redacted`.
 
@@ -99,7 +99,7 @@ Shows **Linked cases**, the **Reporter contact** and the **Preliminary report**.
 
 - **Link case**: links this case to another case by its ID. Needs `cases:triage`. Choose the link type and give a short reason:
   - **Related**: reference only. Neither case's status, tasks or deadlines change.
-  - **Duplicate**: the duplicate case is closed when you link. Choose the main case. Linking is refused while the duplicate has an open deadline task, an open review layer or an open external notice record; complete, set or close each of them first. The tasks are not moved to the main case, and the evidence and records are kept.
+  - **Duplicate**: the duplicate case is closed when you link. Choose the main case. Linking is refused while the duplicate cannot be closed under the rules in [Workflows, section 6](./workflows.md#6-close-and-reopen-the-case). It is also refused while the duplicate has a review layer that is not set, an external notice that is still open, or an escalation or notice review that has no notice yet. The tasks are not moved to the main case, and the evidence and records are kept.
   - **Root and sub-case**: a user who can read the sub-case can read the root case through the link, for analysis. It is read only. The root case's own links do not open up through this link.
   - The checkbox **Users who can see one of the two cases can see the other case too** is off by default. When it is on, the users of either case see both cases. The reason and the other case are shown only to users who can see the other case.
 - **Show reporter contact** (reporting owner only): shows the follow-up contact the reporter gave. It is read only when the user clicks the button. The contact can be read while the case is open, and for 72 hours after it was closed. Every read is audited.
@@ -113,6 +113,9 @@ Shows the disclosure package versions of the case, each with its preview. For th
 - Who can change it: reading versions, previews and exports needs `disclosures:read` (triager and disclosure approver by default). **Approve this version** needs `disclosures:approve`. The form asks for the recipient, the approved recipient reference, the purpose and the digest. Type the digest exactly as the preview shows it. A preparer cannot approve a version they prepared.
 - **Record notice** needs `disclosures:approve`. Without it, the role needs `disclosures:prepare` and must give a reason: the notice is then recorded on the manual path. The recipient reference of the notice must match the approved one.
 - The notice actions are **Record receipt**, **Mark follow-up**, **Complete follow-up** and **Cancel notice**.
+- A disclosure approver without a case read sees only its packet: the latest version that has no approval, and each version it approved. The tab then shows that packet and no other part of the case.
+- **Missing facts of this version** (read only, for every reader of the tab) lists the facts that the preparer recorded when the version was escalated to a backup approver. An approver who sees only its packet gets the missing facts and the escalation time only.
+- Escalations, backup decisions, recipient reviews and package reviews have no buttons on this tab. They are API calls (see [Workflows, section 14](./workflows.md#14-backup-approval-api-only)).
 - Creating a disclosure version has no button on this screen. It is done through the API (see [Workflows](./workflows.md)).
 - The application does not send anything. A notice records a send that a person made.
 - Audited: `disclosure.approved`, `disclosure.exported`, `disclosure.notice_recorded`, `disclosure.notice_state_changed`, `disclosure.release_refused`.
@@ -145,6 +148,7 @@ Admin only.
 - **Create user**: Username, Email, First name, Last name, Title, Role and Temporary password. The new account must change its password at the first sign-in.
 - Per user: **Edit** (profile), **Enable** or **Disable**, **Reset password** (sets a temporary password and ends the user's sessions), and **Delete**. Delete deactivates the account and hides it from the list. The record is kept.
 - You cannot change your own role or status. Protected accounts keep their role and status.
+- No account can be given the `institution_owner` role here, and an account that holds it cannot be changed, disabled, deleted or given a password reset here. The operator grants and revokes the role (see the [Operator guide](./operator-guide.md#operator-commands)).
 
 Audited: `user.create`, `user.update`, `user.profile_updated`, `user.password_reset`, `user.delete`.
 
@@ -162,6 +166,7 @@ Admin only. It shows a grid of roles and permissions. Each role has a **Save** b
 
 - The three permissions of the admin role are checked and locked.
 - The `reporting_owner` row is read only.
+- The `institution_owner` row can be edited, but a save that removes `disclosures:assign_backup` or `disclosures:set_backup_wait` is refused.
 - The reporter contact permission cannot be granted to any role.
 
 Audited: `role.permissions_change`, with the granted and revoked permissions.

@@ -45,7 +45,7 @@ Use an account that is not used for real incidents. Follow [Workflows](./workflo
 
 The backup approvers of a case are not set on a screen yet. An institution owner sets them through the API, and an administrator cannot do this step:
 
-- A case needs a pool of at least two distinct, active disclosure approvers, and the pool is replaced in one request: `PUT /api/v1/cases/{case_id}/notice-backups` with `{"backup_user_ids": [...]}`.
+- A case needs a pool of at least two and at most 20 distinct, active disclosure approvers, and the pool is replaced in one request: `PUT /api/v1/cases/{case_id}/notice-backups` with `{"backup_user_ids": [...]}`.
 - The waiting time before a backup may act is 4 hours by default, between 1 and 168 hours. An institution owner changes it with `PUT /api/v1/notice-settings/backup-wait` and a reason.
 
 See [Workflows, section 14](./workflows.md#14-backup-approval-api-only) for the escalation steps. Send the requests with the access token from `POST /api/v1/auth/login`, as a `Bearer` header.

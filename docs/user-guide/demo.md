@@ -44,7 +44,7 @@ Each demo role has its own credential. The sign-in page lists the roles, and a b
 | `demo-triager` | `triager` | Every case, including reporter-channel cases with no assignment |
 | `demo-investigator` | `investigator` | Its assigned cases and their evidence |
 | `demo-reviewer` | `reviewer` | Its assigned cases and their reviews |
-| `demo-approver` | `disclosure_approver` | Disclosure versions and approval |
+| `demo-approver` | `disclosure_approver` | Its packet: the versions it may approve, and the versions it approved |
 | `demo-auditor` | `auditor` | Overview counts and the catalog |
 
 To sign in, pick the role in the sign-in page and type the credential from its file in `SAFE_DEMO_DIR/credentials`. Open the file, copy the value, and close the file. The script never prints it.
