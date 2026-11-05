@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
-import { ApiError, CaseLink, addCaseLink, listCaseLinks, removeCaseLink } from "../../api";
+import { ApiError, CaseLink, CaseSummary, addCaseLink, listCaseLinks, listCases, removeCaseLink } from "../../api";
 import { CaseLinks } from "./CaseLinks";
 
 vi.mock("../../api", async (importOriginal) => {
@@ -12,6 +12,7 @@ vi.mock("../../api", async (importOriginal) => {
     listCaseLinks: vi.fn(),
     addCaseLink: vi.fn(),
     removeCaseLink: vi.fn(),
+    listCases: vi.fn(),
   };
 });
 
@@ -24,6 +25,7 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 const list = vi.mocked(listCaseLinks);
 const add = vi.mocked(addCaseLink);
 const remove = vi.mocked(removeCaseLink);
+const findCases = vi.mocked(listCases);
 
 const OTHER_ID = "3f2a9c1e-4b7d-4e8a-9c2f-1a2b3c4d5e6f";
 const CASE_ID = "case-1";
@@ -53,6 +55,7 @@ const HIDDEN: CaseLink = {
 
 beforeEach(() => {
   list.mockReset();
+  findCases.mockReset();
   add.mockReset();
   remove.mockReset();
   vi.mocked(toast.success).mockClear();
@@ -349,4 +352,22 @@ describe("CaseLinks", () => {
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("These two cases are not linked."));
   });
+});
+
+it("fills the case ID from a case found by reference", async () => {
+  list.mockResolvedValue([]);
+  findCases.mockResolvedValue({
+    items: [{ id: OTHER_ID, reference: "SAFE-2026-0042", title: "Ministry portal exposure", status: "open" } as CaseSummary],
+    next_cursor: null,
+  });
+  render(<CaseLinks caseId={CASE_ID} closed={false} canWrite />);
+
+  const user = userEvent.setup();
+  await user.type(await screen.findByLabelText(/find the case by reference/i), "0042");
+  await user.click(screen.getByRole("button", { name: "Find" }));
+  await user.click(await screen.findByRole("button", { name: "Use this case" }));
+
+  expect(findCases).toHaveBeenCalledWith(10, undefined, "0042");
+  expect(screen.getByLabelText(/case id to link/i)).toHaveValue(OTHER_ID);
+  expect(screen.getByText("Selected case: SAFE-2026-0042")).toBeInTheDocument();
 });

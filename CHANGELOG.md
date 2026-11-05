@@ -17,6 +17,7 @@ Changes after 0.2.1 go here.
 - Escalation, recipient review and package review records of a disclosure version, through the API only. The Disclosure tab shows the missing facts of the version's escalations, read only.
 
 ### Changed
+- Linking cases: the link form has a finder that searches by case reference and fills in the case ID from the result, so the ID does not need to be copied by hand.
 - The data privacy inventory marks the deadline task table as **Potential personal data**: its not-applicable reason is free text that may hold personal data. The catalog entry does not confirm personal data until the owner decides. The duplicate-link help text lists the open work that refuses the link.
 - In production mode the API and the worker refuse to start unless `SAFE_TLS_CERT_FILE` and `SAFE_TLS_KEY_FILE` name readable files. Compose mounts the gateway's certificate and key into both services, so the key is now present in the API and worker containers as well as the gateway. Demo mode does not check them.
 - The sign-in page marks an empty username, password or demo credential on the page, with the field marked invalid and a message beside it. Before, only the browser's own prompt appeared.

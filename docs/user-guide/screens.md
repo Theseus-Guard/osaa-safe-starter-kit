@@ -97,7 +97,7 @@ Shows the review rounds of the case. A round has eleven layers, and each layer h
 
 Shows **Linked cases**, the **Reporter contact** and the **Preliminary report**.
 
-- **Link case**: links this case to another case by its ID. Needs `cases:triage`. Choose the link type and give a short reason:
+- **Link case**: links this case to another case. Needs `cases:triage`. Find the other case with **Find the case by reference**, which matches part of its reference (the case ID is not shown on screen), then choose **Use this case**. The form fills in the case ID and shows the selected reference. You can also paste a case ID directly. Choose the link type and give a short reason:
   - **Related**: reference only. Neither case's status, tasks or deadlines change.
   - **Duplicate**: the duplicate case is closed when you link. Choose the main case. Linking is refused while the duplicate cannot be closed under the rules in [Workflows, section 6](./workflows.md#6-close-and-reopen-the-case). It is also refused while the duplicate has a review layer that is not set, an external notice that is still open, or an escalation or notice review that has no notice yet. The tasks are not moved to the main case, and the evidence and records are kept.
   - **Root and sub-case**: a user who can read the sub-case can read the root case through the link, for analysis. It is read only. The root case's own links do not open up through this link.

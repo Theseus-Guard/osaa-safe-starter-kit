@@ -1,9 +1,19 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { AddCaseLinkRequest, CaseLink, CaseLinkType, addCaseLink, listCaseLinks, removeCaseLink } from "../../api";
+import {
+  AddCaseLinkRequest,
+  CaseLink,
+  CaseLinkType,
+  CaseSummary,
+  addCaseLink,
+  listCaseLinks,
+  listCases,
+  removeCaseLink,
+} from "../../api";
 import { describeError } from "../../messages";
 import { DisabledHint } from "@/components/disabled-hint";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -62,6 +72,11 @@ export function CaseLinks({ caseId, closed, canWrite }: Props) {
   // Bumped after an add or a removal so the list reloads from the server.
   const [version, setVersion] = useState(0);
   const [linkedCaseId, setLinkedCaseId] = useState("");
+  // The case finder: search by case reference, then use a result to fill the case ID.
+  const [findText, setFindText] = useState("");
+  const [findResults, setFindResults] = useState<CaseSummary[] | null>(null);
+  const [findError, setFindError] = useState<string | null>(null);
+  const [chosenReference, setChosenReference] = useState<string | null>(null);
   const [linkType, setLinkType] = useState<CaseLinkType>("related");
   const [mainChoice, setMainChoice] = useState<MainChoice | "">("");
   const [reason, setReason] = useState("");
@@ -87,6 +102,24 @@ export function CaseLinks({ caseId, closed, canWrite }: Props) {
       stale = true;
     };
   }, [caseId, version]);
+
+  async function find() {
+    const text = findText.trim();
+    if (text === "") return;
+    setFindError(null);
+    try {
+      const page = await listCases(10, undefined, text);
+      setFindResults(page.items.filter((item) => item.id !== caseId));
+    } catch (caught: unknown) {
+      setFindError(describeError(caught));
+    }
+  }
+
+  function useCase(item: CaseSummary) {
+    setLinkedCaseId(item.id);
+    setChosenReference(item.reference);
+    setFormError(null);
+  }
 
   function validate(): { request: AddCaseLinkRequest } | { error: FormError } {
     const value = linkedCaseId.trim();
@@ -144,6 +177,9 @@ export function CaseLinks({ caseId, closed, canWrite }: Props) {
           : "Cases linked. Linking changes no task, deadline or status.",
       );
       setLinkedCaseId("");
+      setChosenReference(null);
+      setFindResults(null);
+      setFindText("");
       setReason("");
       setShareVisibility(false);
       setMainChoice("");
@@ -259,6 +295,48 @@ export function CaseLinks({ caseId, closed, canWrite }: Props) {
             }}
           >
             <Field>
+              <FieldLabel htmlFor="link-case-find">
+                Find the case by reference <span className="font-normal text-muted-foreground">(optional)</span>
+              </FieldLabel>
+              <div className="flex flex-wrap gap-2">
+                <Input
+                  id="link-case-find"
+                  className="min-w-64 flex-1"
+                  placeholder="Case reference, or part of it"
+                  value={findText}
+                  onChange={(event) => setFindText(event.target.value)}
+                />
+                <Button type="button" variant="outline" onClick={() => void find()} disabled={findText.trim() === ""}>
+                  Find
+                </Button>
+              </div>
+            </Field>
+            {findError !== null && (
+              <Alert variant="destructive">
+                <AlertDescription>{findError}</AlertDescription>
+              </Alert>
+            )}
+            {findResults !== null && (
+              <div className="flex flex-col gap-2 text-sm">
+                {findResults.length === 0 ? (
+                  <p className="text-muted-foreground">No other visible case matches that reference.</p>
+                ) : (
+                  <ul className="flex flex-col gap-1">
+                    {findResults.map((item) => (
+                      <li key={item.id} className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono text-xs">{item.reference}</span>
+                        <span className="flex-1">{item.title}</span>
+                        <Badge variant="outline">{item.status}</Badge>
+                        <Button type="button" variant="outline" size="sm" onClick={() => useCase(item)}>
+                          Use this case
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+            <Field>
               <FieldLabel htmlFor="link-case-id">
                 Case ID to link <span className="font-normal text-muted-foreground">(required)</span>
               </FieldLabel>
@@ -269,8 +347,14 @@ export function CaseLinks({ caseId, closed, canWrite }: Props) {
                 value={linkedCaseId}
                 aria-invalid={invalid("linked")}
                 aria-describedby={describedBy("linked")}
-                onChange={(event) => setLinkedCaseId(event.target.value)}
+                onChange={(event) => {
+                  setLinkedCaseId(event.target.value);
+                  setChosenReference(null);
+                }}
               />
+              {chosenReference !== null && (
+                <span className="text-sm text-muted-foreground">Selected case: {chosenReference}</span>
+              )}
             </Field>
             <Field>
               <FieldLabel htmlFor="link-type">
