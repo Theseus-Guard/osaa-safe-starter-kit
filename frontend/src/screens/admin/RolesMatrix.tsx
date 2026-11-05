@@ -12,8 +12,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 // The backend refuses to save the admin role without these, so they stay checked and locked in the grid.
 const ADMIN_REQUIRED = ["users:manage", "users:reset_password", "roles:manage"];
 const REQUIRED_REASON = "The admin role must keep this permission, so admins cannot lock themselves out.";
-// The reporting_owner role reads the reporter contact. Its grant is fixed by the backend and its row is not editable.
-const FIXED_ROLE: Role = "reporting_owner";
+// The reporting_owner role reads the reporter contact, and the institution_owner role holds the backup rights. Their grants
+// are fixed by the backend and their rows are not editable.
+const FIXED_ROLES: ReadonlySet<string> = new Set(["reporting_owner", "institution_owner"]);
 const FIXED_REASON = "This role is fixed. Its grants cannot be changed here.";
 // A bounded height with a scroll container keeps the header sticky.
 const TABLE_FRAME_CLASS = "overflow-hidden rounded-md border";
@@ -138,7 +139,7 @@ export function RolesMatrix({ editable }: Props) {
                   {loaded.roles.map((entry) => {
                     const selected = selectionFor(entry.role);
                     const isAdmin = entry.role === "admin";
-                    const isFixed = entry.role === FIXED_ROLE;
+                    const isFixed = FIXED_ROLES.has(entry.role);
                     return (
                       <TableRow key={entry.role}>
                         <TableCell className="font-medium">

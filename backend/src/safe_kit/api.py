@@ -1073,6 +1073,8 @@ def admin_set_role_permissions(
         )
     if outcome is RoleOutcome.REPORTING_OWNER_FIXED:
         raise HTTPException(status_code=409, detail={"status": "reporting_owner_fixed"})
+    if outcome is RoleOutcome.INSTITUTION_OWNER_FIXED:
+        raise HTTPException(status_code=409, detail={"status": "institution_owner_fixed"})
     if outcome is RoleOutcome.REPORTER_CONTACT_NOT_GRANTABLE:
         raise HTTPException(
             status_code=409, detail={"status": "reporter_contact_not_grantable"}
@@ -1080,11 +1082,6 @@ def admin_set_role_permissions(
     if outcome is RoleOutcome.OWNER_PERMISSION_NOT_GRANTABLE:
         raise HTTPException(
             status_code=409, detail={"status": "owner_permission_not_grantable"}
-        )
-    if outcome is RoleOutcome.OWNER_GUARD:
-        raise HTTPException(
-            status_code=409,
-            detail="the institution_owner role must keep disclosures:assign_backup and disclosures:set_backup_wait",
         )
     return RoleSummary(role=role, permissions=list_role_permissions()[role])
 

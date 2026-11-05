@@ -83,11 +83,10 @@ class RoleOutcome(Enum):
     ADMIN_CASE_CONTENT = "admin_case_content"
     REPORTER_CONTACT_NOT_GRANTABLE = "reporter_contact_not_grantable"
     REPORTING_OWNER_FIXED = "reporting_owner_fixed"
+    INSTITUTION_OWNER_FIXED = "institution_owner_fixed"
     UNKNOWN_PERMISSION = "unknown_permission"
     # An owner-only permission (OWNER_PERMISSIONS) named for a role other than institution_owner.
     OWNER_PERMISSION_NOT_GRANTABLE = "owner_permission_not_grantable"
-    # The institution_owner role must keep OWNER_PERMISSIONS.
-    OWNER_GUARD = "owner_guard"
 
 
 # Permissions that read or change case content, including the reporter contact. The admin role never holds them:
@@ -150,11 +149,13 @@ def set_role_permissions(
 
     The audit row lists the granted and revoked permissions and commits with the change.
 
-    The reporting_owner role is refused whatever the request holds, including a request that repeats its current set.
-    The refusal is decided before any database access.
+    The reporting_owner and institution_owner roles are fixed: they are refused whatever the request holds, including a
+    request that repeats their current set. The refusal is decided before any database access.
     """
     if role == REPORTING_OWNER_ROLE:
         return RoleOutcome.REPORTING_OWNER_FIXED
+    if role == INSTITUTION_OWNER_ROLE:
+        return RoleOutcome.INSTITUTION_OWNER_FIXED
     if role == "admin":
         if not ADMIN_REQUIRED_PERMISSIONS <= permissions:
             return RoleOutcome.ADMIN_GUARD
@@ -164,10 +165,7 @@ def set_role_permissions(
             return RoleOutcome.ADMIN_CASE_CONTENT
     if any(name.startswith(REPORTER_CONTACT_PREFIX) for name in permissions):
         return RoleOutcome.REPORTER_CONTACT_NOT_GRANTABLE
-    if role == INSTITUTION_OWNER_ROLE:
-        if not OWNER_PERMISSIONS <= permissions:
-            return RoleOutcome.OWNER_GUARD
-    elif permissions & OWNER_PERMISSIONS:
+    if permissions & OWNER_PERMISSIONS:
         return RoleOutcome.OWNER_PERMISSION_NOT_GRANTABLE
     with connect() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (ROLE_LOCK_KEY,))

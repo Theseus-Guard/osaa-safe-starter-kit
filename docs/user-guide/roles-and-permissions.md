@@ -25,7 +25,7 @@ These rules are enforced by the application. An administrator cannot change them
 - The `admin` role always keeps `users:manage`, `users:reset_password` and `roles:manage`, so administrators cannot lock themselves out.
 - The `admin` role never holds a case permission (`cases:`, `evidence:`, `reviews:`, `disclosures:`, `reporter_contact:`).
 - The `reporting_owner` role cannot be changed. No other role can hold `reporter_contact:read`.
-- The `institution_owner` role keeps `disclosures:assign_backup` and `disclosures:set_backup_wait`. No other role can hold these two permissions. The `institution_owner` row can be edited on the Roles page, but a save that removes either of them is refused.
+- The `institution_owner` role keeps `disclosures:assign_backup` and `disclosures:set_backup_wait`. No other role can hold these two permissions. The `institution_owner` row is read only on the Roles page, and a save for it is refused. Its grants cannot be changed in the application.
 - No account can be created, given, removed, or changed through the application with the `institution_owner` role. An administrator cannot reset the password of an `institution_owner` account. The password is reset by the operator in the container, with `python -m safe_kit.admin reset-password`.
 - The preparer of a disclosure version cannot approve it.
 - A backup approver cannot be the primary approver of the same version, and nobody can name themselves as a backup.

@@ -166,7 +166,7 @@ Admin only. It shows a grid of roles and permissions. Each role has a **Save** b
 
 - The three permissions of the admin role are checked and locked.
 - The `reporting_owner` row is read only.
-- The `institution_owner` row can be edited, but a save that removes `disclosures:assign_backup` or `disclosures:set_backup_wait` is refused.
+- The `institution_owner` row is read only, like `reporting_owner`. Any save for it is refused, so its grants change only through a change to the product.
 - The reporter contact permission cannot be granted to any role.
 
 Audited: `role.permissions_change`, with the granted and revoked permissions.

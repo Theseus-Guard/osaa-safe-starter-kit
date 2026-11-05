@@ -140,11 +140,11 @@ def test_the_administrator_is_refused_the_owner_right_by_its_case_content_rule()
     assert outcome is RoleOutcome.ADMIN_CASE_CONTENT
 
 
-def test_the_institution_owner_keeps_its_owner_rights_in_the_matrix():
+def test_the_institution_owner_row_is_fixed_in_the_matrix():
     outcome = set_role_permissions(
         INSTITUTION_OWNER_ROLE, frozenset({"disclosures:read"}), actor_id=ADMIN_ID
     )
-    assert outcome is RoleOutcome.OWNER_GUARD
+    assert outcome is RoleOutcome.INSTITUTION_OWNER_FIXED
 
 
 def test_the_reporting_owner_refusal_still_comes_first():

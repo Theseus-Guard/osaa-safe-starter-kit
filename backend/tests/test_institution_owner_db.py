@@ -155,7 +155,7 @@ def test_the_matrix_refuses_the_owner_rights_for_other_roles_and_keeps_them_for_
     )
     assert (
         rbac.set_role_permissions("institution_owner", frozenset({"disclosures:read"}))
-        is rbac.RoleOutcome.OWNER_GUARD
+        is rbac.RoleOutcome.INSTITUTION_OWNER_FIXED
     )
 
 
