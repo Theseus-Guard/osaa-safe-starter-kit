@@ -17,6 +17,7 @@ Changes after 0.2.1 go here.
 - Escalation, recipient review and package review records of a disclosure version, through the API only. The Disclosure tab shows the missing facts of the version's escalations, read only.
 
 ### Changed
+- Adding or removing a case link updates the case's Activity history and Linked cases list at once. Link changes appear in the history as Case linked and Case link removed.
 - The case detail page shows a **Linked cases** list under the title when the case has links, with a link to each visible linked case.
 - The Roles page shows the `institution_owner` row read only, like `reporting_owner`. A save for it is refused, so its backup rights cannot be removed or widened in the application.
 - Linking cases: the link form has a finder that searches by case reference and fills in the case ID from the result, so the ID does not need to be copied by hand.

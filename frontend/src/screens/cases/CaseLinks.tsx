@@ -28,6 +28,8 @@ interface Props {
   closed: boolean;
   // The caller has cases:triage. Without it the add form and the remove buttons are not shown.
   canWrite: boolean;
+  // Called after a link is added or removed, so the case header and the activity history reload.
+  onChanged?: () => void;
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -66,7 +68,7 @@ function typeSummary(item: CaseLink): string {
   return item.link_type === "duplicate" ? `${type}, main case: ${main}` : `${type}, root: ${main}`;
 }
 
-export function CaseLinks({ caseId, closed, canWrite }: Props) {
+export function CaseLinks({ caseId, closed, canWrite, onChanged }: Props) {
   const [items, setItems] = useState<CaseLink[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Bumped after an add or a removal so the list reloads from the server.
@@ -184,6 +186,7 @@ export function CaseLinks({ caseId, closed, canWrite }: Props) {
       setShareVisibility(false);
       setMainChoice("");
       setVersion((count) => count + 1);
+      onChanged?.();
     } catch (caught) {
       toast.error(describeError(caught));
     } finally {
@@ -199,6 +202,7 @@ export function CaseLinks({ caseId, closed, canWrite }: Props) {
       await removeCaseLink(caseId, otherId);
       toast.success("The link was removed. No task, deadline or status changed.");
       setVersion((count) => count + 1);
+      onChanged?.();
     } catch (caught) {
       toast.error(describeError(caught));
     } finally {

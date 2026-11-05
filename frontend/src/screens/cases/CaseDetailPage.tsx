@@ -240,7 +240,12 @@ export function CaseDetailPage({ caseId, permissions, role }: Props) {
       label: "Links and reporting",
       content: (
         <>
-          <CaseLinks caseId={detail.id} closed={closed} canWrite={abilities.canWriteRecords} />
+          <CaseLinks
+            caseId={detail.id}
+            closed={closed}
+            canWrite={abilities.canWriteRecords}
+            onChanged={() => setHistoryRevision((value) => value + 1)}
+          />
           {/* Keyed by case so a contact read for one case never shows on another. Nothing is read until the button is pressed. */}
           {abilities.canReadReporterContact && <CaseReporterContact key={detail.id} caseId={detail.id} />}
           {/* The preliminary report gathers the free text of every record, so it needs the full view. */}
@@ -307,7 +312,7 @@ export function CaseDetailPage({ caseId, permissions, role }: Props) {
                     onReload={reloadCase}
                   />
                 </div>
-                <CaseLinkedCases caseId={detail.id} />
+                <CaseLinkedCases caseId={detail.id} refreshKey={historyRevision} />
               </div>
               <CaseRiskScore
                 caseId={detail.id}

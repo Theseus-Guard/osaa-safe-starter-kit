@@ -4,6 +4,8 @@ import { Badge } from "@/components/ui/badge";
 
 interface Props {
   caseId: string;
+  // Changes when a link is added or removed, so the list reloads.
+  refreshKey: number;
 }
 
 const TYPE_LABELS: Record<CaseLinkType, string> = {
@@ -13,7 +15,7 @@ const TYPE_LABELS: Record<CaseLinkType, string> = {
 };
 
 // Shown under the case title when the case has links. The list is the same one the Links tab shows, without the forms.
-export function CaseLinkedCases({ caseId }: Props) {
+export function CaseLinkedCases({ caseId, refreshKey }: Props) {
   const [items, setItems] = useState<CaseLink[] | null>(null);
 
   useEffect(() => {
@@ -28,7 +30,7 @@ export function CaseLinkedCases({ caseId }: Props) {
     return () => {
       stale = true;
     };
-  }, [caseId]);
+  }, [caseId, refreshKey]);
 
   if (items === null || items.length === 0) return null;
   const hidden = items.filter((item) => item.linked_case_id === null).length;
