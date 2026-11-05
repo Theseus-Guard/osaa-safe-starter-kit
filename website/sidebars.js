@@ -20,6 +20,7 @@ const sidebars = {
         "user-guide/operator-guide",
         "user-guide/demo",
         "user-guide/faq",
+        "user-guide/expected-operation-flow",
       ],
     },
     "roadmap",
