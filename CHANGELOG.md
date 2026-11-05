@@ -8,6 +8,12 @@ Every release entry states the **SAFE compatibility baseline**: the SAFE version
 
 Changes after 0.3.0 go here.
 
+### Added
+- User guide page **Expected operation flow**: one example finding followed through every role, with why the roles are separate. It describes version 0.3.0.
+
+### Changed
+- The README and the user guide introduction describe the project as in development, and do not yet recommend production use.
+
 ## 0.3.0 - 2026-11-05
 
 **SAFE compatibility baseline:** SAFE v1.0 (2026-10-21), wg-safe commit `08c0d6a11163d10ac878a15dc9f53b5b322fd7cb`. Same baseline as 0.2.0 and 0.2.1.
