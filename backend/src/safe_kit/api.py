@@ -72,6 +72,7 @@ from safe_kit.cases import (
 )
 from safe_kit.client_address import resolve_client_address
 from safe_kit.config_guard import (
+    check_tls_files,
     is_demo,
     load_settings,
     retention_years,
@@ -170,7 +171,7 @@ from safe_kit.users import (
 async def _startup_guard(_app: FastAPI) -> AsyncIterator[None]:
     # uvicorn imports this module and runs the lifespan before it serves any request. ConfigError makes the startup
     # fail, so the server does not start. No database connection is opened before this check.
-    load_settings(os.environ)
+    check_tls_files(load_settings(os.environ))
     yield
 
 

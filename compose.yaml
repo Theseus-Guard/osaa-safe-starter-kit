@@ -110,6 +110,9 @@ services:
       SAFE_SESSION_MAX_HOURS: "12"
       # Retention period in years, shown in the privacy inventory. Provisional: legal review is pending (D-09).
       SAFE_RETENTION_YEARS: "5"
+      # The gateway's certificate and key, mounted read-only. The startup guard checks that both files are readable.
+      SAFE_TLS_CERT_FILE: /run/secrets/tls_cert
+      SAFE_TLS_KEY_FILE: /run/secrets/tls_key
       # The gateway's fixed address on the backend network (see networks below). The API reads X-Forwarded-For only from
       # this address. Client address chain for a browser on the host (safe_kit/client_address.py):
       #   1. The browser connects to 127.0.0.1:8443. Docker publishes the gateway on loopback only and relays the
@@ -124,6 +127,10 @@ services:
       - db_app_password
       - jwt_signing_key
       - evidence_kek
+      - source: gateway_tls_cert
+        target: tls_cert
+      - source: gateway_tls_key
+        target: tls_key
     volumes:
       - evidence-data:/var/lib/safe/evidence
     # Not published. The gateway is the only entry point; the CLI and the worker reach the API over backend.
@@ -153,8 +160,14 @@ services:
       SAFE_REFRESH_TTL_MINUTES: "60"
       SAFE_SESSION_MAX_HOURS: "12"
       SAFE_RETENTION_YEARS: "5"
+      SAFE_TLS_CERT_FILE: /run/secrets/tls_cert
+      SAFE_TLS_KEY_FILE: /run/secrets/tls_key
     secrets:
       - db_worker_password
+      - source: gateway_tls_cert
+        target: tls_cert
+      - source: gateway_tls_key
+        target: tls_key
     depends_on:
       migrate:
         condition: service_completed_successfully

@@ -104,7 +104,8 @@ def demo_env(**changes: str | None) -> dict[str, str]:
 
 
 def production_env() -> dict[str, str]:
-    env = {"SAFE_MODE": "production"}
+    env = {"SAFE_MODE": "production", "SAFE_TLS_CERT_FILE": "/run/secrets/tls_cert"}
+    env["SAFE_TLS_KEY_FILE"] = "/run/secrets/tls_key"
     env.update(_db_settings())
     env.update(TOKEN_TTL)
     return env

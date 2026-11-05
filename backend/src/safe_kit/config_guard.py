@@ -8,6 +8,8 @@ process. Error messages name the setting that is wrong and never echo its value.
 from collections.abc import Mapping
 from dataclasses import dataclass
 from ipaddress import IPv4Network, IPv6Network, ip_address, ip_network
+from os import R_OK, access
+from os.path import isfile
 
 MODE_DEMO = "demo"
 MODE_PRODUCTION = "production"
@@ -45,6 +47,8 @@ class Settings:
     refresh_ttl_minutes: int
     session_max_hours: int
     retention_years: int
+    tls_cert_file: str | None = None
+    tls_key_file: str | None = None
     trusted_proxies: tuple[TrustedNetwork, ...] = ()
 
 
@@ -160,6 +164,14 @@ def load_settings(env: Mapping[str, str]) -> Settings:
     elif dataset is not None:
         raise ConfigError("SAFE_DATASET must be unset or empty in production mode")
 
+    # Production runs only behind the gateway's TLS certificate. The paths are required here; check_tls_files confirms
+    # that they can be read.
+    tls_cert_file = None
+    tls_key_file = None
+    if mode == MODE_PRODUCTION:
+        tls_cert_file = _required(env, "SAFE_TLS_CERT_FILE")
+        tls_key_file = _required(env, "SAFE_TLS_KEY_FILE")
+
     return Settings(
         mode=mode,
         bind_host=bind_host,
@@ -179,8 +191,26 @@ def load_settings(env: Mapping[str, str]) -> Settings:
             env, "SAFE_SESSION_MAX_HOURS", maximum=MAX_SESSION_HOURS
         ),
         retention_years=retention_years(env),
+        tls_cert_file=tls_cert_file,
+        tls_key_file=tls_key_file,
         trusted_proxies=trusted_proxies(env),
     )
+
+
+def check_tls_files(settings: Settings) -> None:
+    """In production, the TLS certificate and key files must exist and be readable. Demo mode has no such check.
+
+    This is the only startup check that touches the file system. It tests access and never reads the key. The message
+    names the setting and never the path.
+    """
+    if settings.mode != MODE_PRODUCTION:
+        return
+    for name, path in (
+        ("SAFE_TLS_CERT_FILE", settings.tls_cert_file),
+        ("SAFE_TLS_KEY_FILE", settings.tls_key_file),
+    ):
+        if path is None or not (isfile(path) and access(path, R_OK)):
+            raise ConfigError(f"{name} must name a readable file in production mode")
 
 
 def is_demo(env: Mapping[str, str]) -> bool:

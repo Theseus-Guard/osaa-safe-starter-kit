@@ -34,6 +34,7 @@ Evidence files are in the `evidence-data` volume. The database and the evidence 
 Rules:
 
 - Keep `secrets/` out of the repository and out of shared folders. It is git-ignored.
+- In production mode the API and the worker refuse to start unless the gateway's certificate and key (`secrets/tls/server.crt` and `server.key`) are mounted and readable. The check does not read the key. Demo mode does not need them.
 - Back up `evidence_kek` together with the evidence volume. Without the key, the evidence cannot be read. Store the backup in a place with the same access rules as the secrets.
 - Do not change `jwt_signing_key` on a running stack unless you accept that every session ends.
 - Plan a change to a database role password before you make it: the services read the secret when they start.

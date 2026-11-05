@@ -14,6 +14,7 @@ Changes after 0.2.1 go here.
 - Deadlines: the 30-day analysis obligation is a deadline task of its own, `preliminary_control_failure_analysis`. It is due 30 elapsed days after t0, at the same time as the preliminary public report task, so a weekend or a holiday does not move it. Each new case gets it with its other tasks, and it moves with t0 like them. It is not an external notice, so the internal incident option does not change it. Migration 0051 adds it to the cases that already exist, once per case.
 
 ### Changed
+- In production mode the API and the worker refuse to start unless `SAFE_TLS_CERT_FILE` and `SAFE_TLS_KEY_FILE` name readable files. Compose mounts the gateway's certificate and key into both services, so the key is now present in the API and worker containers as well as the gateway. Demo mode does not check them.
 - The sign-in page marks an empty username, password or demo credential on the page, with the field marked invalid and a message beside it. Before, only the browser's own prompt appeared.
 
 ## 0.2.1 - 2026-11-04
