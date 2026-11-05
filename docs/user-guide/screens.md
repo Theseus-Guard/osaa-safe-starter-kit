@@ -156,7 +156,7 @@ Audited: `user.create`, `user.update`, `user.profile_updated`, `user.password_re
 
 ![Data privacy inventory as the administrator sees it](images/admin-privacy.png)
 
-Admin only. It shows the personal data inventory of the installation: each table with its description and retention period. The retention periods are provisional and await legal review. The page shows metadata only, never row contents. **Export JSON** and **Export CSV** download the inventory. **Previous** and **Next** page through the tables.
+Admin only. It shows the personal data inventory of the installation, one entry for each of the database tables. Each entry gives the category, whether the table contains personal data, the personal fields, the purpose, the retention period, the security measures and the deletion mode. The retention periods are provisional and await legal review. The page shows metadata only, never row contents. **Export JSON** and **Export CSV** download the inventory. **Previous** and **Next** page through the tables.
 
 ## Roles and permissions
 
