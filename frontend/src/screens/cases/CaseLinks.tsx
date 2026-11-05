@@ -30,7 +30,7 @@ const LINK_TYPES: Record<CaseLinkType, { label: string; help: string }> = {
   },
   duplicate: {
     label: "Duplicate",
-    help: "The duplicate case is closed when you link. It must have no open deadline task, and its tasks are not moved to the main case.",
+    help: "The duplicate case is closed when you link. Linking is refused while the duplicate still has open work: an open deadline task, a review layer that is not set, or an external notice that is not finished. Its tasks are not moved to the main case.",
   },
   root_sub: {
     label: "Root and sub-case",

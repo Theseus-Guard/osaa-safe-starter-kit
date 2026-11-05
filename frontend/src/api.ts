@@ -1259,6 +1259,7 @@ export interface PrivacyInventoryItem {
   description: string;
   category: string;
   contains_personal_data: boolean;
+  may_contain_personal_data: boolean;
   personal_fields: string[];
   purpose: string;
   storage: string;

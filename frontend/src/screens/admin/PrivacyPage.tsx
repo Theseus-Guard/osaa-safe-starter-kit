@@ -149,7 +149,13 @@ function InventoryCard({ item }: { item: PrivacyInventoryItem }) {
       <CardContent className="flex flex-col gap-4">
         <div className="flex flex-wrap gap-2">
           <Badge variant="secondary">{item.category}</Badge>
-          {item.contains_personal_data ? <Badge>Contains personal data</Badge> : <Badge variant="outline">No personal data</Badge>}
+          {item.contains_personal_data ? (
+            <Badge>Contains personal data</Badge>
+          ) : item.may_contain_personal_data ? (
+            <Badge variant="outline">Potential personal data</Badge>
+          ) : (
+            <Badge variant="outline">No personal data</Badge>
+          )}
           {!item.retention_defined && (
             <Badge variant="outline" className={AMBER_BADGE}>
               Retention not defined yet

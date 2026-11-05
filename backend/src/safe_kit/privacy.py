@@ -28,6 +28,9 @@ class TableEntry:
     security: str
     deletion_mode: str
     created_column: str | None
+    # A table whose free text may contain personal data that the entry cannot rule out. Shown as potential, not as
+    # confirmed; contains_personal_data stays False until the owner decides otherwise.
+    may_contain_personal_data: bool = False
 
 
 CATALOG: tuple[TableEntry, ...] = (
@@ -234,6 +237,7 @@ CATALOG: tuple[TableEntry, ...] = (
         description="Notification deadlines calculated for each case.",
         category="case",
         contains_personal_data=False,
+        may_contain_personal_data=True,
         personal_fields=(),
         purpose="Tracking required notifications and their due times.",
         retention="Kept with its case. Follows the case retention.",

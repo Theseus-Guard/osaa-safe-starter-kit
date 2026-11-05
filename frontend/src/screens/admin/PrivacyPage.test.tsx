@@ -21,6 +21,7 @@ function item(index: number): PrivacyInventoryItem {
     description: `Table ${index}`,
     category: "test",
     contains_personal_data: false,
+    may_contain_personal_data: false,
     personal_fields: [],
     purpose: "test",
     storage: "test",
