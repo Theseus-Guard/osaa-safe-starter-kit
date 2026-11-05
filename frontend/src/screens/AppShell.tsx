@@ -165,6 +165,7 @@ function UserMenu({ profile, onLogout }: UserMenuProps) {
         <DropdownMenuGroup>
           <DropdownMenuLabel>Appearance</DropdownMenuLabel>
           <DropdownMenuRadioGroup
+            aria-label="Appearance"
             value={preference}
             onValueChange={(value) => {
               if (isThemePreference(value)) setPreference(value);

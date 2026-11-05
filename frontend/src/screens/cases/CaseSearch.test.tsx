@@ -44,7 +44,7 @@ describe("CaseSearch", () => {
 
     await user.type(screen.getByRole("searchbox", { name: "Search cases by ID" }), "SAFE-2026");
 
-    await waitFor(() => expect(list).toHaveBeenCalledWith(8, undefined, "SAFE-2026"));
+    await waitFor(() => expect(list).toHaveBeenCalledWith(8, undefined, "SAFE-2026", "open"));
     expect(list).toHaveBeenCalledTimes(1);
   });
 
@@ -70,6 +70,7 @@ describe("CaseSearch", () => {
     expect(link).toHaveAttribute("href", `#/cases/${CASE_ID}`);
     expect(screen.getByText("Phishing report")).toBeInTheDocument();
     expect(screen.getByText("open")).toBeInTheDocument();
+    expect(screen.getByRole("note")).toHaveTextContent("Only open cases are searched. Closed cases are not shown.");
   });
 
   it("shows No cases found when nothing matches", async () => {

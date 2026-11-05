@@ -43,15 +43,15 @@ beforeEach(() => {
   vi.mocked(demoStatus).mockResolvedValue({ demo: false, users: [] });
   vi.mocked(listCases).mockResolvedValue({ items: [], next_cursor: null });
   vi.mocked(createReport).mockReset();
-  vi.mocked(listEvidence).mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
+  vi.mocked(listEvidence).mockResolvedValue({ items: [], next_cursor: null });
 });
 
 describe("labelled form controls on the main pages", () => {
   it("the login form labels the username and password fields", async () => {
     render(<Login notice={null} onLogin={vi.fn().mockResolvedValue(undefined)} onDemoSignIn={vi.fn()} />);
 
-    expect(await screen.findByLabelText("Username")).toBeInTheDocument();
-    expect(screen.getByLabelText("Password")).toHaveAttribute("type", "password");
+    expect(await screen.findByLabelText(/^Username/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Password/)).toHaveAttribute("type", "password");
     expect(screen.getByRole("button", { name: "Show password" })).toBeInTheDocument();
   });
 
@@ -66,15 +66,15 @@ describe("labelled form controls on the main pages", () => {
   it("the evidence panel labels its file input", async () => {
     render(<CaseEvidence caseId="case-1" canRead canWrite />);
 
-    expect(await screen.findByLabelText("Upload evidence")).toHaveAttribute("type", "file");
+    expect(await screen.findByLabelText(/^Upload evidence/)).toHaveAttribute("type", "file");
   });
 
   it("the new case form labels every field", async () => {
     render(<NewCaseDialog open onOpenChange={vi.fn()} onCreated={vi.fn()} />);
 
-    expect(await screen.findByLabelText("Title")).toBeInTheDocument();
-    expect(screen.getByLabelText("Awareness date and time")).toHaveAttribute("type", "date");
-    expect(screen.getByLabelText("Awareness time")).toHaveAttribute("type", "time");
+    expect(await screen.findByLabelText(/^Title/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Date")).toHaveAttribute("type", "date");
+    expect(screen.getByLabelText("Time")).toHaveAttribute("type", "time");
     expect(screen.getByLabelText("Contact for follow-up")).toBeInTheDocument();
   });
 });
@@ -94,12 +94,12 @@ describe("error messages tied to their fields", () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     render(<NewCaseDialog open onOpenChange={vi.fn()} onCreated={vi.fn()} />);
 
-    await user.type(screen.getByLabelText("Title"), "   ");
+    await user.type(screen.getByLabelText(/^Title/), "   ");
     await user.click(screen.getByRole("button", { name: "Create case" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Enter a title for the case.");
-    const title = screen.getByLabelText("Title");
+    const title = screen.getByLabelText(/^Title/);
     expect(title).toHaveAttribute("aria-invalid", "true");
     expect(title).toHaveAttribute("aria-describedby", alert.id);
     expect(alert.id).not.toBe("");
@@ -110,15 +110,15 @@ describe("error messages tied to their fields", () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     render(<NewCaseDialog open onOpenChange={vi.fn()} onCreated={vi.fn()} />);
 
-    await user.type(screen.getByLabelText("Title"), "Example incident");
-    fireEvent.change(screen.getByLabelText("Awareness time"), { target: { value: "23:00" } });
+    await user.type(screen.getByLabelText(/^Title/), "Example incident");
+    fireEvent.change(screen.getByLabelText("Time"), { target: { value: "23:00" } });
     await user.click(screen.getByRole("button", { name: "Create case" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("The awareness time cannot be in the future.");
-    await waitFor(() => expect(screen.getByLabelText("Awareness time")).toHaveAttribute("aria-invalid", "true"));
-    expect(screen.getByLabelText("Awareness time")).toHaveAttribute("aria-describedby", alert.id);
-    expect(screen.getByLabelText("Awareness date and time")).toHaveAttribute("aria-describedby", alert.id);
-    expect(screen.getByLabelText("Title")).not.toHaveAttribute("aria-invalid");
+    await waitFor(() => expect(screen.getByLabelText("Time")).toHaveAttribute("aria-invalid", "true"));
+    expect(screen.getByLabelText("Time")).toHaveAttribute("aria-describedby", alert.id);
+    expect(screen.getByLabelText("Date")).toHaveAttribute("aria-describedby", alert.id);
+    expect(screen.getByLabelText(/^Title/)).not.toHaveAttribute("aria-invalid");
   });
 });

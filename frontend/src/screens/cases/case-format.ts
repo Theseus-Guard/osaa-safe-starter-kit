@@ -16,6 +16,8 @@ const HISTORY_ACTION_LABELS: Record<string, string> = {
   "case.create": "Case created",
   "case.closed": "Case closed",
   "case.reopened": "Case reopened",
+  "case.link_added": "Case linked",
+  "case.link_removed": "Case link removed",
   "case.assignment_added": "Assignment added",
   "case.assignment_removed": "Assignment removed",
   "case.review_recorded": "Review recorded",

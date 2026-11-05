@@ -104,7 +104,8 @@ def demo_env(**changes: str | None) -> dict[str, str]:
 
 
 def production_env() -> dict[str, str]:
-    env = {"SAFE_MODE": "production"}
+    env = {"SAFE_MODE": "production", "SAFE_TLS_CERT_FILE": "/run/secrets/tls_cert"}
+    env["SAFE_TLS_KEY_FILE"] = "/run/secrets/tls_key"
     env.update(_db_settings())
     env.update(TOKEN_TTL)
     return env
@@ -669,8 +670,9 @@ def test_upgrade_on_a_version_1_database_adds_the_credentials_once(tmp_path_fact
     legacy_credential = secrets.token_urlsafe(demo_seed.CREDENTIAL_BYTES)
     upto_0045 = work / "migrations-0045"
     upto_0045.mkdir()
+    # The seed writes the deadline kinds of the current code, so 0051 (the analysis kind) is applied as well.
     for path in sorted(MIGRATIONS.glob("*.sql")):
-        if path.name < "0046":
+        if path.name < "0046" or path.name.startswith("0051_"):
             (upto_0045 / path.name).write_bytes(path.read_bytes())
 
     with patch.dict(os.environ, env, clear=False):
@@ -880,7 +882,8 @@ EXPECTED_CASE_VIEW = {
     "demo-triager": set(SEEDED_CASES),
     "demo-investigator": set(SEEDED_CASES),
     "demo-reviewer": {demo_seed.CASE_ONE, demo_seed.CASE_THREE},
-    "demo-approver": set(SEEDED_CASES),
+    # The disclosure approver holds no case read (migration 0056): the case list and the case read are refused by role.
+    "demo-approver": None,
     "demo-auditor": None,
 }
 

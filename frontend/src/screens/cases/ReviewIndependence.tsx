@@ -258,16 +258,21 @@ function RecusalForm({ roundId, onSaved }: { roundId: string; onSaved: () => voi
 
 function AppealForm({ roundId, onSaved }: { roundId: string; onSaved: () => void }) {
   const fieldId = useId();
+  const errorId = `${fieldId}-error`;
   const [grounds, setGrounds] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // The grounds field is the one the validation message is about; it points at the message with aria-describedby.
+  const [groundsInvalid, setGroundsInvalid] = useState(false);
   const [busy, setBusy] = useState(false);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
+    setGroundsInvalid(false);
     const trimmedGrounds = grounds.trim();
     if (trimmedGrounds.length === 0) {
       setError("Give the grounds of the appeal.");
+      setGroundsInvalid(true);
       return;
     }
     setBusy(true);
@@ -294,6 +299,8 @@ function AppealForm({ roundId, onSaved }: { roundId: string; onSaved: () => void
             maxLength={GROUNDS_LIMIT}
             rows={2}
             onChange={(event) => setGrounds(event.target.value)}
+            aria-invalid={groundsInvalid || undefined}
+            aria-describedby={groundsInvalid ? errorId : undefined}
           />
         </Field>
         <FieldDescription>
@@ -302,7 +309,7 @@ function AppealForm({ roundId, onSaved }: { roundId: string; onSaved: () => void
         </FieldDescription>
       </FieldGroup>
       {error && (
-        <Alert variant="destructive">
+        <Alert variant="destructive" id={errorId}>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}

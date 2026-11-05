@@ -50,7 +50,7 @@ const ITEM: EvidenceItem = {
 };
 
 function evidencePage(items: EvidenceItem[]): EvidencePage {
-  return { items, total: items.length, limit: 20, offset: 0 };
+  return { items, next_cursor: null };
 }
 
 beforeEach(() => {
@@ -79,6 +79,27 @@ describe("CaseEvidence", () => {
     expect(within(row).getByText("2.0 KB")).toBeInTheDocument();
     expect(within(row).getByText("Available")).toBeInTheDocument();
     expect(within(row).getByText("0123456789ab…")).toBeInTheDocument();
+  });
+
+  it("follows next_cursor forward and back, and stops at the last page", async () => {
+    list
+      .mockResolvedValueOnce({ items: [ITEM], next_cursor: "cursor-2" })
+      .mockResolvedValueOnce({ items: [{ ...ITEM, id: "evidence-2", original_filename: "second.txt" }], next_cursor: null })
+      .mockResolvedValueOnce({ items: [ITEM], next_cursor: "cursor-2" });
+    const user = userEvent.setup();
+    render(<CaseEvidence caseId="case-1" canRead canWrite={false} />);
+
+    await screen.findByText("notes.txt");
+    expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Next" }));
+
+    await waitFor(() => expect(list).toHaveBeenLastCalledWith("case-1", 20, "cursor-2"));
+    expect(await screen.findByText("second.txt")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Previous" }));
+    await waitFor(() => expect(list).toHaveBeenLastCalledWith("case-1", 20, undefined));
+    expect(await screen.findByText("notes.txt")).toBeInTheDocument();
   });
 
   it("keeps the upload button disabled until a file is chosen", async () => {
@@ -124,7 +145,7 @@ describe("CaseEvidence", () => {
     const user = userEvent.setup();
     render(<CaseEvidence caseId="case-1" canRead canWrite />);
 
-    await user.click(await screen.findByRole("button", { name: "Download" }));
+    await user.click(await screen.findByRole("button", { name: /^Download/ }));
 
     await waitFor(() => expect(save).toHaveBeenCalledWith(bytes, "notes.txt"));
     expect(download).toHaveBeenCalledWith("evidence-1");
@@ -134,7 +155,7 @@ describe("CaseEvidence", () => {
     list.mockResolvedValue(evidencePage([{ ...ITEM, status: "pending" }]));
     render(<CaseEvidence caseId="case-1" canRead canWrite />);
 
-    expect(await screen.findByRole("button", { name: "Download" })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: /^Download/ })).toBeDisabled();
   });
 
   it("shows the custody log of an item when it is opened", async () => {
@@ -151,13 +172,13 @@ describe("CaseEvidence", () => {
     const user = userEvent.setup();
     render(<CaseEvidence caseId="case-1" canRead canWrite />);
 
-    await user.click(await screen.findByRole("button", { name: "Custody" }));
+    await user.click(await screen.findByRole("button", { name: /^Custody/ }));
 
     const log = await screen.findByRole("list");
     expect(within(log).getByText(/Uploaded/)).toBeInTheDocument();
     expect(within(log).getByText("Size bytes: 2048")).toBeInTheDocument();
     expect(custody).toHaveBeenCalledWith("evidence-1");
-    expect(screen.getByRole("button", { name: "Hide custody" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Custody/ })).toBeInTheDocument();
   });
 
   it("does not request the list or offer downloads and custody without evidence:read", async () => {
@@ -165,8 +186,8 @@ describe("CaseEvidence", () => {
 
     expect(await screen.findByLabelText(/Upload evidence/)).toBeInTheDocument();
     expect(list).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: "Download" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Custody" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Download/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Custody/ })).not.toBeInTheDocument();
   });
 
   it("hides the upload form without evidence:write but keeps the list", async () => {
@@ -192,7 +213,7 @@ describe("CaseEvidence", () => {
 
     const row = (await screen.findByText("notes.txt")).closest("tr") as HTMLElement;
     expect(within(row).getByText("Failed")).toBeInTheDocument();
-    expect(within(row).getByRole("button", { name: "Download" })).toBeDisabled();
+    expect(within(row).getByRole("button", { name: /^Download/ })).toBeDisabled();
     expect(screen.queryByText("No evidence uploaded yet.")).not.toBeInTheDocument();
   });
 
@@ -203,7 +224,7 @@ describe("CaseEvidence", () => {
     const row = (await screen.findByText("notes.txt")).closest("tr") as HTMLElement;
     expect(within(row).getByText("Pending")).toBeInTheDocument();
     expect(within(row).queryByText("Available")).not.toBeInTheDocument();
-    expect(within(row).getByRole("button", { name: "Download" })).toBeDisabled();
+    expect(within(row).getByRole("button", { name: /^Download/ })).toBeDisabled();
   });
 
   it("does not show the empty state when the list cannot be loaded, and names the refusal", async () => {
@@ -230,7 +251,7 @@ describe("CaseEvidence", () => {
     const user = userEvent.setup();
     render(<CaseEvidence caseId="case-1" canRead canWrite />);
 
-    await user.click(await screen.findByRole("button", { name: "Download" }));
+    await user.click(await screen.findByRole("button", { name: /^Download/ }));
 
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith("This evidence is not available for download yet."),

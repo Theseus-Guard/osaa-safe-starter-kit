@@ -17,6 +17,7 @@ from a wrapped receive channel that stops at the limit, so a request with no Con
 import os
 import uuid
 from datetime import datetime
+from functools import partial
 from typing import Any, Literal
 from urllib.parse import quote
 
@@ -42,6 +43,7 @@ from safe_kit.idempotency import (
     key_scope,
     valid_key,
 )
+from safe_kit.pagination import decode_cursor
 from safe_kit.users import User
 
 EVIDENCE_READ = "evidence:read"
@@ -105,9 +107,7 @@ class EvidenceResponse(BaseModel):
 
 class EvidencePage(BaseModel):
     items: list[EvidenceResponse]
-    total: int
-    limit: int
-    offset: int
+    next_cursor: str | None
 
 
 class CustodyEventResponse(BaseModel):
@@ -242,7 +242,9 @@ async def upload_evidence(
     same key with the same file gets the first answer, and the same key with another file is refused with 409.
     """
     provider = _key_provider()
-    if not await run_in_threadpool(is_visible, str(case_id), _scope(actor)):
+    if not await run_in_threadpool(
+        partial(is_visible, writing=True), str(case_id), _scope(actor)
+    ):
         raise HTTPException(status_code=404, detail="case not found")
     key = checked_key(idempotency_key)
     filename, content_type, data = await _read_file_field(
@@ -300,19 +302,23 @@ async def upload_evidence(
 def list_case_evidence(
     case_id: uuid.UUID,
     limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
+    # Opaque. Omit it for the first page; use next_cursor from the previous page for the next one.
+    cursor: str | None = Query(default=None, max_length=200),
     user: User = Depends(require_permission(EVIDENCE_READ)),
 ) -> EvidencePage:
+    after = None
+    if cursor is not None:
+        after = decode_cursor(cursor)
+        if after is None:
+            raise HTTPException(status_code=400, detail={"status": "invalid_cursor"})
     if not is_visible(str(case_id), _scope(user)):
         raise HTTPException(status_code=404, detail="case not found")
-    items, total = evidence.list_evidence(
-        str(case_id), limit, offset, tlp.recipient_for(user)
+    items, next_cursor = evidence.list_evidence(
+        str(case_id), limit, after, tlp.recipient_for(user)
     )
     return EvidencePage(
         items=[_response(item) for item in items],
-        total=total,
-        limit=limit,
-        offset=offset,
+        next_cursor=next_cursor,
     )
 
 

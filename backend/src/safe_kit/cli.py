@@ -521,11 +521,22 @@ def _uuid_arg(text: str, option: str) -> str:
 def _check_paging(args: argparse.Namespace) -> None:
     if not 1 <= args.limit <= MAX_PAGE_SIZE:
         raise UsageError(f"--limit must be between 1 and {MAX_PAGE_SIZE}")
-    if args.offset < 0:
-        raise UsageError("--offset must be 0 or more")
 
 
-CURSOR_INVALID_TEXT = "the cursor is not valid. Run 'case list' again without --cursor to start from the first page"
+def _cursor_invalid_text(command: str) -> str:
+    return (
+        "the cursor is not valid. Run '"
+        + command
+        + "' again without --cursor to start from the first page"
+    )
+
+
+def _is_invalid_cursor(error: RequestFailed) -> bool:
+    return (
+        error.status == 400
+        and isinstance(error.detail, dict)
+        and error.detail.get("status") == "invalid_cursor"
+    )
 
 
 def _case_list(base_url: str, args: argparse.Namespace) -> None:
@@ -541,14 +552,11 @@ def _case_list(base_url: str, args: argparse.Namespace) -> None:
         try:
             raw = _call(base, "GET", "/api/v1/cases", token=token, query=query)
         except RequestFailed as error:
-            detail = error.detail
-            if (
-                error.status == 400
-                and isinstance(detail, dict)
-                and detail.get("status") == "invalid_cursor"
-            ):
+            if _is_invalid_cursor(error):
                 raise RequestFailed(
-                    CURSOR_INVALID_TEXT, status=error.status, detail=detail
+                    _cursor_invalid_text("case list"),
+                    status=error.status,
+                    detail=error.detail,
                 ) from None
             raise
         if args.json:
@@ -751,7 +759,7 @@ def _print_evidence(item: dict) -> None:
 def _print_evidence_page(page: dict) -> None:
     items = page["items"]
     if not items:
-        print(f"No evidence for this case. Total: {page['total']}")
+        print("No evidence for this case.")
         return
     rows = [("ID", "STATUS", "MEDIA TYPE", "SIZE (BYTES)", "FILE")]
     rows += [
@@ -768,9 +776,8 @@ def _print_evidence_page(page: dict) -> None:
     for row in rows:
         cells = [row[column].ljust(widths[column]) for column in range(4)] + [row[4]]
         print("  ".join(cells).rstrip())
-    first = page["offset"] + 1
-    last = page["offset"] + len(items)
-    print(f"Showing {first}-{last} of {page['total']}")
+    if page["next_cursor"] is not None:
+        print(f"Next page: --cursor {page['next_cursor']}")
 
 
 def _print_tasks(case: dict) -> None:
@@ -853,15 +860,27 @@ def _evidence_add(base_url: str, args: argparse.Namespace) -> None:
 def _evidence_list(base_url: str, args: argparse.Namespace) -> None:
     case_id = _case_id_arg(args.case_id)
     _check_paging(args)
+    query: dict = {"limit": args.limit}
+    if args.cursor is not None:
+        query["cursor"] = args.cursor
 
     def action(base: str, token: str) -> None:
-        raw = _call(
-            base,
-            "GET",
-            f"/api/v1/cases/{case_id}/evidence",
-            token=token,
-            query={"limit": args.limit, "offset": args.offset},
-        )
+        try:
+            raw = _call(
+                base,
+                "GET",
+                f"/api/v1/cases/{case_id}/evidence",
+                token=token,
+                query=query,
+            )
+        except RequestFailed as error:
+            if _is_invalid_cursor(error):
+                raise RequestFailed(
+                    _cursor_invalid_text("evidence list"),
+                    status=error.status,
+                    detail=error.detail,
+                ) from None
+            raise
         if args.json:
             _print_json(raw)
         else:
@@ -1189,8 +1208,8 @@ UNASSIGN_MESSAGES = {
 }
 LINK_ADD_MESSAGES = {
     404: "case not found, or the other case is not available to your account",
-    409: "a case is closed, or the two cases are already linked",
-    422: "a case cannot be linked to itself",
+    409: "a case is closed, the two cases are already linked, or the duplicate case cannot be closed yet",
+    422: "the link is not valid: a case cannot be linked to itself, and the type, reason and main case must fit the type",
 }
 LINK_REMOVE_MESSAGES = {
     404: "case not found, or there is no link between the two cases",
@@ -1311,29 +1330,131 @@ def _case_unassign(base_url: str, args: argparse.Namespace) -> None:
     )
 
 
+LINK_MAIN_CASE_TEXT = {
+    "this": "this case",
+    "linked": "the linked case",
+}
+
+
 def _print_link(link: dict) -> None:
-    # The other case is shown only when the API gives its ID, which it does only for a case the caller can see.
-    print(
-        f"  Linked case ID:   {link['linked_case_id'] or '(not available to your account)'}"
-    )
+    # The other case is shown only when the API gives its ID, which it does only for a case the caller can see. The
+    # reason is given only when the other case is visible too, so a missing reason is shown the same way.
+    hidden = "(not available to your account)"
+    print(f"  Linked case ID:   {link['linked_case_id'] or hidden}")
     print(f"  Title:            {link['linked_case_title'] or '-'}")
+    print(f"  Link type:        {link['link_type']}")
+    reason = link["reason"] or (hidden if link["linked_case_id"] is None else "-")
+    print(f"  Reason:           {reason}")
+    if link["primary_side"] is not None:
+        print(f"  Main or root:     {LINK_MAIN_CASE_TEXT[link['primary_side']]}")
+        print(f"  Main or root ID:  {link['primary_case_id'] or hidden}")
+    print(f"  Visible to both:  {'yes' if link['share_visibility'] else 'no'}")
     print(f"  Linked (UTC):     {link['created_at']}")
 
 
 def _render_link_added(raw: bytes) -> None:
-    print("Cases linked. Linking changes no task, deadline or status.")
-    _print_link(_json_object(raw))
+    link = _json_object(raw)
+    if link["link_type"] == "duplicate":
+        print(
+            "Duplicate linked. The duplicate case is now closed. No task was moved to the main case."
+        )
+    else:
+        print("Cases linked. Linking changes no task, deadline or status.")
+    _print_link(link)
+
+
+CASE_TITLE_UPDATE_MESSAGES = {
+    403: "forbidden: only a triager can change the case title",
+    404: "case not found, or its case is not available to your account",
+    409: "the case is closed, so its title cannot change",
+    412: "the case changed since you read it, so nothing was saved. Run 'case show' again",
+}
+
+
+def _case_revision(base: str, token: str, case_id: str) -> int:
+    """The current revision of one case, as 'case show' reads it."""
+    case = _json_object(
+        _call(
+            base,
+            "GET",
+            f"/api/v1/cases/{case_id}",
+            token=token,
+            messages=READ_MESSAGES,
+        )
+    )
+    revision = case.get("revision")
+    if isinstance(revision, int) and not isinstance(revision, bool):
+        return revision
+    raise RequestFailed("unexpected response from the server")
+
+
+def _case_title_update(base_url: str, args: argparse.Namespace) -> None:
+    """Change the title of one case. Nothing else of the case changes.
+
+    Without --revision, the current revision is read in the same session and sent as If-Match.
+    """
+    case_id = _case_id_arg(args.case_id)
+    title = args.title
+    # The same checks as case create: 1 to 200 characters, not only whitespace.
+    if not 1 <= len(title) <= MAX_TITLE_LENGTH or not title.strip():
+        raise UsageError(
+            f"the title must be 1 to {MAX_TITLE_LENGTH} characters and not only spaces"
+        )
+    if args.revision is not None and args.revision < 1:
+        raise UsageError(
+            "--revision must be 1 or more. Read it with: case show CASE_ID, or leave it out"
+        )
+    stated = args.revision is not None
+    try:
+        _write_case(
+            base_url,
+            args,
+            "PATCH",
+            f"/api/v1/cases/{case_id}",
+            payload={"title": title.strip()},
+            messages=CASE_TITLE_UPDATE_MESSAGES,
+            render=_render_case_change("Case title updated."),
+            if_match=args.revision,
+            read_if_match=None
+            if stated
+            else (lambda base, token: _case_revision(base, token, case_id)),
+        )
+    except RequestFailed as error:
+        current = _precondition_revision(error)
+        if current is None:
+            raise
+        # Nothing was saved. The command never retries: the user reads the case again and runs it again.
+        if not stated:
+            raise RequestFailed(
+                f"the case changed after this command read it, so nothing was saved. Run "
+                f"'case show {case_id}' to check it, then run this command again"
+            ) from None
+        raise RequestFailed(
+            f"the case changed, so nothing was saved. Its current revision is {current}. Run "
+            f"'case show {case_id}' to check it, then run this command again with --revision {current}"
+        ) from None
 
 
 def _case_link_add(base_url: str, args: argparse.Namespace) -> None:
     case_id = _case_id_arg(args.case_id)
     linked_case_id = _uuid_arg(args.linked_case_id, "LINKED_CASE_ID")
+    primary_case_id = (
+        _uuid_arg(args.primary_case_id, "PRIMARY_CASE_ID")
+        if args.primary_case_id is not None
+        else None
+    )
     _write_case(
         base_url,
         args,
         "POST",
         f"/api/v1/cases/{case_id}/links",
-        payload={"linked_case_id": linked_case_id},
+        payload={
+            "linked_case_id": linked_case_id,
+            "link_type": args.link_type,
+            "reason": args.reason,
+            "share_visibility": args.share_visibility,
+            "primary_case_id": primary_case_id,
+        },
         messages=LINK_ADD_MESSAGES,
         render=_render_link_added,
     )
@@ -3058,7 +3179,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--limit", type=int, default=DEFAULT_PAGE_SIZE, help="Items per page (1 to 200)"
     )
     evidence_list.add_argument(
-        "--offset", type=int, default=0, help="Number of items to skip"
+        "--cursor",
+        default=None,
+        metavar="CURSOR",
+        help="Continue from the cursor printed as 'Next page'",
     )
     _add_auth_options(evidence_list)
     evidence_list.set_defaults(handler=_evidence_list)
@@ -3165,6 +3289,24 @@ def _add_case_update_commands(case_commands) -> None:
     _add_auth_options(unassign, json_output=False)
     unassign.set_defaults(handler=_case_unassign)
 
+    title = case_commands.add_parser("title", help="Change the title of a case")
+    title_commands = title.add_subparsers(dest="title_command", required=True)
+    title_update = title_commands.add_parser(
+        "update", help="Change the title of one of your cases. Needs cases:triage"
+    )
+    title_update.add_argument("case_id", metavar="CASE_ID", help="Case ID (UUID)")
+    title_update.add_argument(
+        "--title", required=True, help="New title, 1 to 200 characters"
+    )
+    title_update.add_argument(
+        "--revision",
+        type=int,
+        help="Revision of the case you read with 'case show'. Optional: without it, the current revision is read first",
+    )
+    _add_idempotency_option(title_update)
+    _add_auth_options(title_update)
+    title_update.set_defaults(handler=_case_title_update)
+
     link = case_commands.add_parser(
         "link",
         help="Link two cases that concern the same incident. A link changes nothing else",
@@ -3178,6 +3320,32 @@ def _add_case_update_commands(case_commands) -> None:
         "linked_case_id",
         metavar="LINKED_CASE_ID",
         help="Case ID (UUID) of the other case",
+    )
+    link_add.add_argument(
+        "--type",
+        dest="link_type",
+        required=True,
+        choices=["duplicate", "related", "root_sub"],
+        help="duplicate: this link closes the duplicate case and points to the main case; "
+        "related: reference only; root_sub: a reader of the sub-case may read the root case",
+    )
+    link_add.add_argument(
+        "--reason",
+        required=True,
+        help="Short reason for the link (required, up to 500 characters)",
+    )
+    link_add.add_argument(
+        "--primary-case-id",
+        metavar="PRIMARY_CASE_ID",
+        default=None,
+        help="Case ID (UUID) of the main case of a duplicate or the root case of a root_sub link. "
+        "It is one of the two cases. Not for a related link",
+    )
+    link_add.add_argument(
+        "--share-visibility",
+        action="store_true",
+        default=False,
+        help="Users who can see one of the two cases can see the other too (default: off)",
     )
     _add_idempotency_option(link_add)
     _add_auth_options(link_add)

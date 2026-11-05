@@ -170,7 +170,7 @@ def upload_client(monkeypatch, provider):
         "permissions_for_role",
         lambda role: frozenset({"evidence:read", "evidence:write"}),
     )
-    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope: True)
+    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope, **kwargs: True)
     monkeypatch.setattr(evidence_api, "_PROVIDER", provider)
     monkeypatch.setenv("SAFE_EVIDENCE_MAX_BYTES", "100000")
     return TestClient(app)

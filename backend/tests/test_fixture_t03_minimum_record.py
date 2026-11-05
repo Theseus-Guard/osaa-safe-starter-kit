@@ -129,7 +129,7 @@ def test_an_empty_record_lists_every_minimum_field_and_still_produces_the_report
     for name in REPORT_CLASSIFICATION_FIELDS:
         assert (f"classification.{name}", "missing") in missing, name
     assert {(f"impacts.{area}", "missing") for area in IMPACT_AREAS} <= missing
-    assert len(report["safe_deadlines"]) == 5
+    assert len(report["safe_deadlines"]) == 6
 
 
 @pytest.mark.parametrize("name", REPORT_CLASSIFICATION_FIELDS)

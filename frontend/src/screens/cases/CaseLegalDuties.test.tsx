@@ -73,11 +73,11 @@ describe("CaseLegalDuties", () => {
     list.mockResolvedValue([DUTY]);
     const { rerender } = render(<CaseLegalDuties {...BASE_PROPS} canWrite={false} />);
     expect(await screen.findByText("Notify the regulator")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Mark done" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Mark done/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add legal duty" })).not.toBeInTheDocument();
 
     rerender(<CaseLegalDuties {...BASE_PROPS} closed />);
-    expect(screen.queryByRole("button", { name: "Mark done" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Mark done/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add legal duty" })).not.toBeInTheDocument();
   });
 
@@ -87,10 +87,10 @@ describe("CaseLegalDuties", () => {
     const user = userEvent.setup();
     render(<CaseLegalDuties {...BASE_PROPS} />);
 
-    await user.click(await screen.findByRole("button", { name: "Mark done" }));
+    await user.click(await screen.findByRole("button", { name: /^Mark done/ }));
 
     expect(update).toHaveBeenCalledWith("case-1", "duty-1", { status: "done" }, 4);
-    expect(await screen.findByRole("button", { name: "Set open" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /^Set open/ })).toBeInTheDocument();
     expect(toast.success).toHaveBeenCalledWith("Statutory duty is now done.");
   });
 
@@ -102,10 +102,10 @@ describe("CaseLegalDuties", () => {
 
     await user.click(await screen.findByRole("button", { name: "Add legal duty" }));
     const dialog = await screen.findByRole("dialog");
-    await user.click(within(dialog).getByLabelText("Kind"));
+    await user.click(within(dialog).getByLabelText(/^Kind/));
     await user.click(await screen.findByRole("option", { name: "Contractual" }));
-    await user.type(within(dialog).getByLabelText("Duty"), "  Report the breach to the customer  ");
-    await user.type(within(dialog).getByLabelText("Source"), "Clause 9.2");
+    await user.type(within(dialog).getByLabelText(/^Duty/), "  Report the breach to the customer  ");
+    await user.type(within(dialog).getByLabelText(/^Source/), "Clause 9.2");
     await user.click(within(dialog).getByRole("button", { name: "Add duty" }));
 
     await waitFor(() =>

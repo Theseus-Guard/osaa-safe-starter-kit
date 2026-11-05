@@ -241,7 +241,7 @@ def test_history_hides_the_reporter_account_from_triagers_too(
     monkeypatch.setattr(
         api,
         "case_history",
-        lambda case_id, scope, limit, offset, **kwargs: (entries, 2),
+        lambda case_id, scope, limit, after, **kwargs: (entries, None),
     )
 
     as_role(caller, TRIAGER_ID, "triager")

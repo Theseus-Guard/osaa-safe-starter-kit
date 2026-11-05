@@ -24,17 +24,23 @@ export function CreateUserForm({ onCreated }: Props) {
   const [temporary, setTemporary] = useState("");
   const [created, setCreated] = useState<CreatedUser | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The field the current error is about, so that the field can point at the message.
+  const [errorField, setErrorField] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    if (busy) return;
     setError(null);
+    setErrorField(null);
     setCreated(null);
     if (email.trim() === "") {
+      setErrorField("create-email");
       setError(EMAIL_REQUIRED_MESSAGE);
       return;
     }
     if (temporary.length < MIN_PASSWORD_LENGTH) {
+      setErrorField("create-temporary");
       setError(`The temporary password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
       return;
     }
@@ -69,7 +75,9 @@ export function CreateUserForm({ onCreated }: Props) {
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <FieldGroup className="grid gap-4 sm:grid-cols-2">
             <Field>
-              <FieldLabel htmlFor="create-username">Username</FieldLabel>
+              <FieldLabel htmlFor="create-username">
+                Username <span className="font-normal text-muted-foreground">(required)</span>
+              </FieldLabel>
               <Input id="create-username" value={username} onChange={(e) => setUsername(e.target.value)} required />
             </Field>
             <Field>
@@ -78,6 +86,8 @@ export function CreateUserForm({ onCreated }: Props) {
               </FieldLabel>
               <Input
                 id="create-email"
+                aria-invalid={errorField === "create-email" || undefined}
+                aria-describedby={errorField === "create-email" ? "create-user-error" : undefined}
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -118,9 +128,13 @@ export function CreateUserForm({ onCreated }: Props) {
               </Select>
             </Field>
             <Field>
-              <FieldLabel htmlFor="create-temporary">Temporary password</FieldLabel>
+              <FieldLabel htmlFor="create-temporary">
+                Temporary password <span className="font-normal text-muted-foreground">(required)</span>
+              </FieldLabel>
               <Input
                 id="create-temporary"
+                aria-invalid={errorField === "create-temporary" || undefined}
+                aria-describedby={errorField === "create-temporary" ? "create-user-error" : undefined}
                 type="password"
                 value={temporary}
                 onChange={(e) => setTemporary(e.target.value)}
@@ -130,16 +144,17 @@ export function CreateUserForm({ onCreated }: Props) {
             </Field>
           </FieldGroup>
           {error && (
-            <Alert variant="destructive">
+            <Alert variant="destructive" id="create-user-error">
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           )}
-          <Button type="submit" disabled={busy} className="self-start">
+          {/* Not disabled while busy: a disabled button loses focus, and the error would then leave the keyboard user nowhere. */}
+          <Button type="submit" aria-busy={busy} className="self-start">
             Create user
           </Button>
         </form>
         {created && (
-          <Alert>
+          <Alert role="status">
             <AlertDescription>
               Created {created.username} ({created.role}). User ID: <code className="font-mono text-xs">{created.id}</code>. Share the
               temporary password through a secure channel. The user must change it at first login.

@@ -16,7 +16,7 @@ import pytest
 import yaml
 
 from safe_kit import api, db
-from safe_kit.config_guard import ConfigError, load_settings
+from safe_kit.config_guard import ConfigError, check_tls_files, load_settings
 
 SECRET = "sentinel-secret-value-7f3a"
 SOURCE_DIR = Path(__file__).resolve().parents[1] / "src"
@@ -56,7 +56,75 @@ def demo_env(**changes) -> dict:
 
 
 def production_env(**changes) -> dict:
-    return _apply({"SAFE_MODE": "production", **DB_SETTINGS}, changes)
+    base = {
+        "SAFE_MODE": "production",
+        "SAFE_TLS_CERT_FILE": "/run/secrets/tls_cert",
+        "SAFE_TLS_KEY_FILE": "/run/secrets/tls_key",
+        **DB_SETTINGS,
+    }
+    return _apply(base, changes)
+
+
+@pytest.mark.parametrize("name", ["SAFE_TLS_CERT_FILE", "SAFE_TLS_KEY_FILE"])
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_production_requires_both_tls_file_settings(name, value):
+    with pytest.raises(ConfigError, match=f"{name} is required"):
+        load_settings(production_env(**{name: value}))
+
+
+def test_demo_does_not_require_tls_file_settings():
+    settings = load_settings(
+        demo_env(SAFE_TLS_CERT_FILE=None, SAFE_TLS_KEY_FILE=None)
+    )
+    assert (settings.tls_cert_file, settings.tls_key_file) == (None, None)
+
+
+def test_tls_files_that_exist_and_are_readable_pass_in_production(tmp_path):
+    cert = tmp_path / "server.crt"
+    key = tmp_path / "server.key"
+    cert.write_text("cert", encoding="utf-8")
+    key.write_text(SECRET, encoding="utf-8")
+    settings = load_settings(
+        production_env(SAFE_TLS_CERT_FILE=str(cert), SAFE_TLS_KEY_FILE=str(key))
+    )
+
+    check_tls_files(settings)
+
+
+@pytest.mark.parametrize("name", ["SAFE_TLS_CERT_FILE", "SAFE_TLS_KEY_FILE"])
+def test_missing_tls_file_stops_production_without_echoing_the_path(
+    name, tmp_path
+):
+    cert = tmp_path / "server.crt"
+    key = tmp_path / "server.key"
+    cert.write_text("cert", encoding="utf-8")
+    key.write_text("key", encoding="utf-8")
+    missing = str(tmp_path / f"absent-{SECRET}")
+    settings = load_settings(
+        production_env(
+            SAFE_TLS_CERT_FILE=missing if name == "SAFE_TLS_CERT_FILE" else str(cert),
+            SAFE_TLS_KEY_FILE=missing if name == "SAFE_TLS_KEY_FILE" else str(key),
+        )
+    )
+
+    with pytest.raises(ConfigError, match=name) as refused:
+        check_tls_files(settings)
+    assert SECRET not in str(refused.value)
+
+
+def test_a_directory_is_not_accepted_as_a_tls_file(tmp_path):
+    cert = tmp_path / "server.crt"
+    cert.write_text("cert", encoding="utf-8")
+    settings = load_settings(
+        production_env(SAFE_TLS_CERT_FILE=str(cert), SAFE_TLS_KEY_FILE=str(tmp_path))
+    )
+
+    with pytest.raises(ConfigError, match="SAFE_TLS_KEY_FILE"):
+        check_tls_files(settings)
+
+
+def test_demo_skips_the_tls_file_check():
+    check_tls_files(load_settings(demo_env()))
 
 
 def test_valid_demo_environment_is_accepted():

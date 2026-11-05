@@ -11,9 +11,13 @@ const sidebars = {
       link: { type: "doc", id: "user-guide/index" },
       collapsed: false,
       items: [
+        "user-guide/concepts",
         "user-guide/quick-start",
+        "user-guide/administrator-first-day",
+        "user-guide/roles-and-permissions",
         "user-guide/screens",
         "user-guide/workflows",
+        "user-guide/operator-guide",
         "user-guide/demo",
         "user-guide/faq",
       ],

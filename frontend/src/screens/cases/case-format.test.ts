@@ -60,6 +60,8 @@ describe("humanize", () => {
 describe("labels", () => {
   it("labels known history actions and falls back for unknown ones", () => {
     expect(historyActionLabel("case.closed")).toBe("Case closed");
+    expect(historyActionLabel("case.link_added")).toBe("Case linked");
+    expect(historyActionLabel("case.link_removed")).toBe("Case link removed");
     expect(historyActionLabel("case.new_thing")).toBe("Case new thing");
   });
 

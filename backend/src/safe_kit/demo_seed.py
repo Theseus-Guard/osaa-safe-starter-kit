@@ -27,7 +27,7 @@ import sys
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import psycopg
@@ -136,32 +136,32 @@ TIMEZONE_ROW_ID = "5afe0d00-0000-4000-8000-000000000101"
 DEMO_TIMEZONE = "UTC"
 
 CASES = (
-    # (id, n, title, awareness time, status)
+    # (id, n, title, awareness as an offset from the seed time, status). Relative dates keep the demo current.
     (
         "5afe0d00-0000-4000-8000-000000000201",
         1,
         "Demo: tool call outside the approved scope",
-        datetime(2026, 10, 20, 8, 0, tzinfo=UTC),
+        timedelta(days=-1),
         "open",
     ),
     (
         "5afe0d00-0000-4000-8000-000000000202",
         2,
         "Demo: sample identifier in a generated report",
-        datetime(2026, 10, 25, 14, 30, tzinfo=UTC),
+        timedelta(days=-2),
         "open",
     ),
     (
         "5afe0d00-0000-4000-8000-000000000203",
         3,
         "Demo: near miss, closed after review",
-        datetime(2026, 9, 30, 9, 0, tzinfo=UTC),
+        timedelta(days=-40),
         "closed",
     ),
 )
 CASE_ONE, CASE_TWO, CASE_THREE = (case[0] for case in CASES)
-CLOSED_AT = datetime(2026, 10, 15, 10, 0, tzinfo=UTC)
-REVIEW_TIME = datetime(2026, 10, 22, 9, 0, tzinfo=UTC)
+CLOSED_AGO = timedelta(days=-20)
+REVIEW_AGO = timedelta(hours=-12)
 
 EVIDENCE_ONE = "5afe0d00-0000-4000-8000-000000000301"
 EVIDENCE_TWO = "5afe0d00-0000-4000-8000-000000000302"
@@ -214,8 +214,8 @@ DISCLOSURE_PURPOSE = "Demo preview only (synthetic); not approved"
 
 MARKER_ID = "5afe0d00-0000-4000-8000-000000000801"
 CHILD_NAMESPACE = uuid.UUID("5afe0d00-0000-4000-8000-0000000000ff")
-# The password of every demo account is unusable, so its change time is fixed as well.
-PASSWORD_SET_TIME = datetime(2026, 10, 1, 8, 0, tzinfo=UTC)
+# The password of every demo account is unusable, so its change time is set relative to the seed time as well.
+PASSWORD_SET_AGO = timedelta(days=-30)
 
 
 class SeedRefused(Exception):
@@ -329,7 +329,7 @@ def _insert_user(conn, row: tuple) -> None:
             "role": role,
             "is_active": True,
             "must_change_password": False,
-            "password_changed_at": PASSWORD_SET_TIME,
+            "password_changed_at": datetime.now(UTC) + PASSWORD_SET_AGO,
             "is_protected": False,
             "first_name": first_name,
             "last_name": last_name,
@@ -358,11 +358,13 @@ def _insert_timezone(conn) -> str:
 
 def _insert_cases(conn, timezone: str) -> None:
     admin = DEMO_ADMIN_ID
-    for case_id, index, title, awareness, status in CASES:
+    now = datetime.now(UTC)
+    for case_id, index, title, ago, status in CASES:
+        awareness = now + ago
         closed = {}
         if status == "closed":
             closed = {
-                "closed_at": CLOSED_AT,
+                "closed_at": now + CLOSED_AGO,
                 "closed_by": admin,
                 "close_reason": "Demo: closed after review (synthetic)",
             }
@@ -473,7 +475,7 @@ def _insert_review(conn) -> None:
                 reason,
                 evidence_ids,
                 reviewer if decided else None,
-                REVIEW_TIME if decided else None,
+                datetime.now(UTC) + REVIEW_AGO if decided else None,
             ),
         )
 
@@ -489,7 +491,7 @@ def _insert_catalog(conn) -> None:
             "required_defence_outcome": "Every outbound call is checked against the approved scope before it is sent",
             "minimum_control": "Deny by default for outbound tool calls",
             "responsible": "Demo platform owner (synthetic)",
-            "due_at": datetime(2027, 1, 31, 9, 0, tzinfo=UTC),
+            "due_at": datetime.now(UTC) + timedelta(days=90),
             "evidence_to_keep": "Demo: policy diff and test output",
             "created_by": triager,
         },

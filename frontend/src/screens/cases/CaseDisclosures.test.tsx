@@ -13,6 +13,7 @@ import {
   exportDisclosure,
   getDisclosurePreview,
   listDisclosures,
+  listEscalations,
   recordNoticeFollowUp,
   recordNoticeReceipt,
   saveBlob,
@@ -31,6 +32,7 @@ vi.mock("../../api", async (importOriginal) => {
     exportDisclosure: vi.fn(),
     saveBlob: vi.fn(),
     listNotices: vi.fn(),
+    listEscalations: vi.fn(),
     recordNotice: vi.fn(),
     recordNoticeReceipt: vi.fn(),
     recordNoticeFollowUp: vi.fn(),
@@ -50,6 +52,7 @@ const approve = vi.mocked(approveDisclosure);
 const exportOne = vi.mocked(exportDisclosure);
 const save = vi.mocked(saveBlob);
 const notices = vi.mocked(listNotices);
+const escalations = vi.mocked(listEscalations);
 const record = vi.mocked(recordNotice);
 const receipt = vi.mocked(recordNoticeReceipt);
 const followUp = vi.mocked(recordNoticeFollowUp);
@@ -120,6 +123,7 @@ beforeEach(() => {
   vi.mocked(toast.success).mockClear();
   vi.mocked(toast.error).mockClear();
   notices.mockReset();
+  escalations.mockReset();
   record.mockReset();
   receipt.mockReset();
   followUp.mockReset();
@@ -127,6 +131,7 @@ beforeEach(() => {
   list.mockResolvedValue({ items: [VERSION] });
   preview.mockResolvedValue(PREVIEW);
   notices.mockResolvedValue({ items: [] });
+  escalations.mockResolvedValue({ items: [] });
 });
 
 const APPROVED: DisclosureVersion = {
@@ -408,6 +413,32 @@ describe("CaseDisclosures", () => {
     render(<CaseDisclosures caseId={CASE_ID} closed={false} canApprove={false} canRecordNotices={false} />);
 
     expect(await screen.findByText("No external notice is recorded for this version.")).toBeInTheDocument();
+  });
+
+  it("shows the missing facts of the escalations of the chosen version", async () => {
+    escalations.mockResolvedValue({
+      items: [
+        {
+          id: "ffffffff-0000-4111-8222-000000000001",
+          version_id: VERSION_ID,
+          missing_facts: "Recipient contact is unconfirmed.\nThe event time is not known.",
+          escalated_at: "2026-11-02T11:00:00Z",
+        },
+      ],
+    });
+    render(<CaseDisclosures caseId={CASE_ID} closed={false} canApprove={false} canRecordNotices={false} />);
+
+    const section = await screen.findByRole("region", { name: "Missing facts" });
+    expect(await within(section).findByText(/Recipient contact is unconfirmed/)).toBeInTheDocument();
+    expect(within(section).getByText(/The event time is not known/)).toBeInTheDocument();
+    expect(escalations).toHaveBeenCalledWith(CASE_ID, VERSION_ID);
+  });
+
+  it("says when no escalation is recorded for the version", async () => {
+    render(<CaseDisclosures caseId={CASE_ID} closed={false} canApprove={false} canRecordNotices={false} />);
+
+    const section = await screen.findByRole("region", { name: "Missing facts" });
+    expect(await within(section).findByText("No escalation is recorded for this version.")).toBeInTheDocument();
   });
 
   it("offers the record form only to a caller who may record notices", async () => {

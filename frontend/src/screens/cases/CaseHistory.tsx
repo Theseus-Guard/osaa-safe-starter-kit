@@ -17,15 +17,23 @@ interface Props {
 }
 
 export function CaseHistory({ caseId, refreshKey }: Props) {
-  const [offset, setOffset] = useState(0);
+  // Cursors of the pages already passed, oldest first. The current page is fetched with the last one.
+  // The first page has no cursor, so the stack is empty there.
+  const [cursors, setCursors] = useState<string[]>([]);
+  const cursor = cursors.length > 0 ? cursors[cursors.length - 1] : undefined;
   const [page, setPage] = useState<HistoryPage | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Another case starts again at its first page.
+  useEffect(() => {
+    setCursors([]);
+  }, [caseId]);
+
   useEffect(() => {
     let stale = false;
     setLoading(true);
-    getCaseHistory(caseId, PAGE_SIZE, offset)
+    getCaseHistory(caseId, PAGE_SIZE, cursor)
       .then((result) => {
         if (stale) return;
         setPage(result);
@@ -40,10 +48,9 @@ export function CaseHistory({ caseId, refreshKey }: Props) {
     return () => {
       stale = true;
     };
-  }, [caseId, offset, refreshKey]);
+  }, [caseId, cursor, refreshKey]);
 
-  const shownFrom = page && page.items.length > 0 ? page.offset + 1 : 0;
-  const shownTo = page ? page.offset + page.items.length : 0;
+  const nextCursor = page?.next_cursor ?? null;
 
   return (
     <Card>
@@ -105,22 +112,24 @@ export function CaseHistory({ caseId, refreshKey }: Props) {
         )}
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm text-muted-foreground" aria-live="polite">
-            {loading ? "Loading…" : `Showing ${shownFrom}–${shownTo} of ${page?.total ?? 0}`}
+            {loading ? "Loading…" : `Page ${cursors.length + 1}`}
           </p>
           <div className="flex gap-2">
             <Button
               variant="outline"
               size="sm"
-              disabled={loading || !page || page.offset === 0}
-              onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+              disabled={loading || cursors.length === 0}
+              onClick={() => setCursors(cursors.slice(0, -1))}
             >
               Previous
             </Button>
             <Button
               variant="outline"
               size="sm"
-              disabled={loading || !page || page.offset + page.limit >= page.total}
-              onClick={() => setOffset(offset + PAGE_SIZE)}
+              disabled={loading || nextCursor === null}
+              onClick={() => {
+                if (nextCursor !== null) setCursors([...cursors, nextCursor]);
+              }}
             >
               Next
             </Button>

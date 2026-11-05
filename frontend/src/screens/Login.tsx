@@ -41,6 +41,8 @@ export function Login({ notice, onLogin, onDemoSignIn }: Props) {
   // Demo mode only: the role picker and the demo credential field. Null until the server has answered.
   const [demo, setDemo] = useState<DemoStatus | null>(null);
   const [demoRole, setDemoRole] = useState("");
+  // Ids of the required fields left empty by the last submit. They are marked invalid and say so on the page.
+  const [blankIds, setBlankIds] = useState<string[]>([]);
 
   useEffect(() => {
     readiness()
@@ -56,6 +58,20 @@ export function Login({ notice, onLogin, onDemoSignIn }: Props) {
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    if (busy) return;
+    // The form does not use the browser's own required check, so an empty field is reported here, on the page.
+    const fields = demoMode
+      ? [{ id: "login-demo-credential", value: password }]
+      : [
+          { id: "login-username", value: username },
+          { id: "login-password", value: password },
+        ];
+    const empty = fields.filter((field) => field.value === "").map((field) => field.id);
+    setBlankIds(empty);
+    if (empty.length > 0) {
+      document.getElementById(empty[0])?.focus();
+      return;
+    }
     setFailure(null);
     setBusy(true);
     try {
@@ -129,7 +145,7 @@ export function Login({ notice, onLogin, onDemoSignIn }: Props) {
                   </Alert>
                 ))}
 
-              <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+              <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
                 {demoMode && (
                   <p className="text-sm text-muted-foreground">
                     Demo sign-in. Each role has its own credential, kept on the demo server.
@@ -156,17 +172,24 @@ export function Login({ notice, onLogin, onDemoSignIn }: Props) {
                         </select>
                       </Field>
                       <Field>
-                        <FieldLabel htmlFor="login-demo-credential">Demo credential</FieldLabel>
+                        <FieldLabel htmlFor="login-demo-credential">
+                          Demo credential <span className="font-normal text-muted-foreground">(required)</span>
+                        </FieldLabel>
                         <div className="relative">
                           <Input
                             id="login-demo-credential"
                             name="credential"
                             type={showPassword ? "text" : "password"}
                             value={password}
-                            onChange={(event) => setPassword(event.target.value)}
+                            onChange={(event) => {
+                              setPassword(event.target.value);
+                              setBlankIds([]);
+                            }}
                             autoComplete="off"
                             required
                             disabled={unavailable}
+                            aria-invalid={blankIds.includes("login-demo-credential") || undefined}
+                            aria-describedby={blankIds.includes("login-demo-credential") ? "login-demo-credential-error" : undefined}
                             className="pr-10"
                           />
                           <Button
@@ -174,7 +197,7 @@ export function Login({ notice, onLogin, onDemoSignIn }: Props) {
                             variant="ghost"
                             size="icon-sm"
                             className="absolute top-1/2 right-1 -translate-y-1/2"
-                            aria-label={showPassword ? "Hide credential" : "Show credential"}
+                            aria-label="Show credential"
                             aria-pressed={showPassword}
                             disabled={unavailable}
                             onClick={() => setShowPassword((value) => !value)}
@@ -182,36 +205,60 @@ export function Login({ notice, onLogin, onDemoSignIn }: Props) {
                             {showPassword ? <EyeOffIcon /> : <EyeIcon />}
                           </Button>
                         </div>
+                        {blankIds.includes("login-demo-credential") && (
+                          <p id="login-demo-credential-error" className="text-sm text-destructive">
+                            Enter the demo credential for this role.
+                          </p>
+                        )}
                       </Field>
                     </>
                   )}
                   {!demoMode && (
                     <>
                     <Field>
-                      <FieldLabel htmlFor="login-username">Username</FieldLabel>
+                      <FieldLabel htmlFor="login-username">
+                        Username <span className="font-normal text-muted-foreground">(required)</span>
+                      </FieldLabel>
                       <Input
                         id="login-username"
                         name="username"
                         value={username}
-                        onChange={(event) => setUsername(event.target.value)}
+                        onChange={(event) => {
+                          setUsername(event.target.value);
+                          setBlankIds([]);
+                        }}
                         autoComplete="username"
                         autoFocus
                         required
                         disabled={unavailable}
+                        aria-invalid={blankIds.includes("login-username") || undefined}
+                        aria-describedby={blankIds.includes("login-username") ? "login-username-error" : undefined}
                       />
+                      {blankIds.includes("login-username") && (
+                        <p id="login-username-error" className="text-sm text-destructive">
+                          Enter your username.
+                        </p>
+                      )}
                     </Field>
                     <Field>
-                      <FieldLabel htmlFor="login-password">Password</FieldLabel>
+                      <FieldLabel htmlFor="login-password">
+                        Password <span className="font-normal text-muted-foreground">(required)</span>
+                      </FieldLabel>
                       <div className="relative">
                         <Input
                           id="login-password"
                           name="password"
                           type={showPassword ? "text" : "password"}
                           value={password}
-                          onChange={(event) => setPassword(event.target.value)}
+                          onChange={(event) => {
+                            setPassword(event.target.value);
+                            setBlankIds([]);
+                          }}
                           autoComplete="current-password"
                           required
                           disabled={unavailable}
+                          aria-invalid={blankIds.includes("login-password") || undefined}
+                          aria-describedby={blankIds.includes("login-password") ? "login-password-error" : undefined}
                           className="pr-10"
                         />
                         <Button
@@ -219,7 +266,7 @@ export function Login({ notice, onLogin, onDemoSignIn }: Props) {
                           variant="ghost"
                           size="icon-sm"
                           className="absolute top-1/2 right-1 -translate-y-1/2"
-                          aria-label={showPassword ? "Hide password" : "Show password"}
+                          aria-label="Show password"
                           aria-pressed={showPassword}
                           disabled={unavailable}
                           onClick={() => setShowPassword((value) => !value)}
@@ -227,11 +274,17 @@ export function Login({ notice, onLogin, onDemoSignIn }: Props) {
                           {showPassword ? <EyeOffIcon /> : <EyeIcon />}
                         </Button>
                       </div>
+                      {blankIds.includes("login-password") && (
+                        <p id="login-password-error" className="text-sm text-destructive">
+                          Enter your password.
+                        </p>
+                      )}
                     </Field>
                     </>
                   )}
                 </FieldGroup>
-                <Button type="submit" className="w-full" disabled={busy || unavailable} aria-busy={busy}>
+                {/* Not disabled while busy: a disabled button loses focus, and the error would then leave the keyboard user nowhere. */}
+                <Button type="submit" className="w-full" disabled={unavailable} aria-busy={busy}>
                   {busy && <Loader2Icon className="animate-spin" />}
                   {busy ? "Logging in…" : "Log in"}
                 </Button>

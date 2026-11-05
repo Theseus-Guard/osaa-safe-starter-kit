@@ -99,7 +99,13 @@ export function CaseImpacts({ caseId, closed, canWrite, canReadFullView, onRecor
                     </TableCell>
                     {canAssess && (
                       <TableCell>
-                        <Button size="sm" variant="outline" onClick={() => setEditing(impact)}>
+                        {/* Several rows share the visible action text, so the name also says which impact it is for. */}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          aria-label={`${impact.assessed ? "Update" : "Assess"}: ${humanize(impact.area)}`}
+                          onClick={() => setEditing(impact)}
+                        >
                           {impact.assessed ? "Update" : "Assess"}
                         </Button>
                       </TableCell>
@@ -161,17 +167,22 @@ function AssessImpactForm({
   const [severity, setSeverity] = useState<ImpactSeverity | null>(impact.assessed ? impact.severity : null);
   const [scope, setScope] = useState(impact.assessed ? (impact.scope ?? "") : "");
   const [error, setError] = useState<string | null>(null);
+  // The field the current error is about, so that the field can point at the message.
+  const [errorField, setErrorField] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
+    setErrorField(null);
     if (severity === null) {
+      setErrorField("impact-severity");
       setError("Choose the severity for this area. Choose Unknown if the answer is not known yet.");
       return;
     }
     const trimmed = scope.trim();
     if (trimmed.length === 0) {
+      setErrorField("impact-scope");
       setError("Enter the scope for this area.");
       return;
     }
@@ -198,14 +209,16 @@ function AssessImpactForm({
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         <FieldGroup>
           <Field>
-            <FieldLabel htmlFor="impact-severity">Severity</FieldLabel>
+            <FieldLabel htmlFor="impact-severity">
+              Severity <span className="font-normal text-muted-foreground">(required)</span>
+            </FieldLabel>
             <Select
               value={severity}
               onValueChange={(value) => {
                 if (value) setSeverity(value as ImpactSeverity);
               }}
             >
-              <SelectTrigger id="impact-severity" className="w-full">
+              <SelectTrigger id="impact-severity" className="w-full" aria-invalid={errorField === "impact-severity" || undefined} aria-describedby={errorField === "impact-severity" ? "impact-error" : undefined}>
                 <SelectValue>
                   {(value: ImpactSeverity | null) => (value ? humanize(value) : "Choose a severity")}
                 </SelectValue>
@@ -220,9 +233,13 @@ function AssessImpactForm({
             </Select>
           </Field>
           <Field>
-            <FieldLabel htmlFor="impact-scope">Scope</FieldLabel>
+            <FieldLabel htmlFor="impact-scope">
+              Scope <span className="font-normal text-muted-foreground">(required)</span>
+            </FieldLabel>
             <Textarea
               id="impact-scope"
+              aria-invalid={errorField === "impact-scope" || undefined}
+              aria-describedby={errorField === "impact-scope" ? "impact-error" : undefined}
               value={scope}
               maxLength={SCOPE_MAX_LENGTH}
               onChange={(event) => setScope(event.target.value)}
@@ -231,7 +248,7 @@ function AssessImpactForm({
           </Field>
         </FieldGroup>
         {error && (
-          <Alert variant="destructive">
+          <Alert variant="destructive" id="impact-error">
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}

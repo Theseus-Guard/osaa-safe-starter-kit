@@ -91,6 +91,26 @@ def test_fixed_elapsed_deadlines():
     assert result.remediation_status == datetime(2027, 1, 30, 12, 0, tzinfo=UTC)
 
 
+def test_analysis_obligation_is_thirty_elapsed_days_and_a_weekend_due_date_is_not_moved():
+    # A Friday 30 elapsed days later is a Sunday. The 30-day day count is not a working-day count, so the due time
+    # stays on the Sunday. It is the same instant as the preliminary public report.
+    t0 = datetime(2026, 10, 2, 10, 0, tzinfo=UTC)  # Friday
+    result = deadlines_for(t0, calendar())
+    due = datetime(2026, 11, 1, 10, 0, tzinfo=UTC)  # Sunday
+    assert due.weekday() == 6
+    assert result.preliminary_control_failure_analysis == due
+    assert result.preliminary_control_failure_analysis == result.preliminary_public_report
+
+
+def test_analysis_obligation_ignores_holidays_as_it_is_elapsed_time():
+    t0 = datetime(2026, 10, 2, 10, 0, tzinfo=UTC)  # Friday
+    holiday = frozenset({date(2026, 11, 2), date(2026, 11, 1)})
+    result = deadlines_for(t0, calendar(holidays=holiday))
+    assert result.preliminary_control_failure_analysis == datetime(
+        2026, 11, 1, 10, 0, tzinfo=UTC
+    )
+
+
 def test_naive_t0_is_rejected():
     with pytest.raises(ValueError):
         deadlines_for(datetime(2026, 11, 1, 12, 0), calendar())

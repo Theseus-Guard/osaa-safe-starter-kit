@@ -123,7 +123,7 @@ def test_done_and_not_applicable_tasks_do_not_block_closure():
 def test_reporter_scope_sees_only_own_cases():
     sql, params = CaseScope.from_permissions(
         REPORTER_ID, frozenset({"cases:read_own"})
-    ).visibility_sql()
+    ).visibility_sql(writing=True)
     assert sql == "(cases.created_by = %s)"
     assert params == (REPORTER_ID,)
 
@@ -133,18 +133,45 @@ def test_triager_scope_sees_every_case_including_unassigned_reporter_cases():
     scope = CaseScope.from_permissions(TRIAGER_ID, DEFAULT_ROLE_PERMISSIONS["triager"])
     assert scope.can_assign is True
     assert scope.reporter_contact is False
-    assert scope.visibility_sql() == ("TRUE", ())
+    assert scope.visibility_sql(writing=True) == ("TRUE", ())
 
 
 def test_read_all_without_assign_keeps_hiding_unassigned_reporter_cases():
     # The disclosure approver holds cases:read_all but not cases:assign, so the reporter-channel rule is unchanged.
     sql, params = CaseScope.from_permissions(
         TRIAGER_ID, frozenset({"cases:read_all"})
-    ).visibility_sql()
+    ).visibility_sql(writing=True)
     assert sql == (
         "(NOT EXISTS (SELECT 1 FROM reporter_identities ri WHERE ri.case_id = cases.id AND NOT ri.is_deleted) "
         "OR EXISTS (SELECT 1 FROM case_assignments ca WHERE ca.case_id = cases.id AND NOT ca.is_deleted))"
     )
+    assert params == ()
+
+
+def test_read_mode_adds_the_link_rules_and_its_parameters_match_the_placeholders():
+    # A reader also sees the other case of a shared link, and the root of a root_sub link, by the peer's own rights.
+    scope = CaseScope.from_permissions(REPORTER_ID, frozenset({"cases:read_own"}))
+    sql, params = scope.visibility_sql()
+    assert "case_links" in sql and "share_visibility" in sql
+    assert "link_type = 'root_sub'" in sql and "primary_case_id = cases.id" in sql
+    assert sql.count("%s") == len(params) == 3
+    assert params == (REPORTER_ID, REPORTER_ID, REPORTER_ID)
+
+
+def test_write_mode_has_no_link_rules():
+    # A case seen only through a link is never locked or changed: writes use the own rights alone.
+    scope = CaseScope.from_permissions(REPORTER_ID, frozenset({"cases:read_own"}))
+    sql, params = scope.visibility_sql(writing=True)
+    assert "case_links" not in sql
+    assert (sql, params) == ("(cases.created_by = %s)", (REPORTER_ID,))
+
+
+def test_read_mode_for_read_all_without_link_rules_still_has_no_parameters():
+    sql, params = CaseScope.from_permissions(
+        TRIAGER_ID, DEFAULT_ROLE_PERMISSIONS["triager"]
+    ).visibility_sql()
+    assert "case_links" in sql
+    assert sql.startswith("(TRUE OR ")
     assert params == ()
 
 
@@ -153,7 +180,7 @@ def test_reporter_contact_holder_sees_every_case_including_unassigned_reporter_c
         TRIAGER_ID, DEFAULT_ROLE_PERMISSIONS["triager"] | {"reporter_contact:read"}
     )
     assert scope.reporter_contact is True
-    assert scope.visibility_sql() == ("TRUE", ())
+    assert scope.visibility_sql(writing=True) == ("TRUE", ())
 
 
 def test_reporter_contact_permission_is_granted_by_default_to_reporting_owner_only():
@@ -168,7 +195,7 @@ def test_reporter_contact_permission_is_granted_by_default_to_reporting_owner_on
 def test_assignee_scope_needs_an_active_assignment():
     sql, params = CaseScope.from_permissions(
         INVESTIGATOR_ID, DEFAULT_ROLE_PERMISSIONS["investigator"]
-    ).visibility_sql()
+    ).visibility_sql(writing=True)
     assert "case_assignments" in sql and "NOT ca.is_deleted" in sql
     assert params == (INVESTIGATOR_ID,)
 
@@ -176,7 +203,7 @@ def test_assignee_scope_needs_an_active_assignment():
 @pytest.mark.parametrize("role", ["admin", "auditor"])
 def test_roles_without_case_permissions_see_no_case(role):
     scope = CaseScope.from_permissions(ADMIN_ID, DEFAULT_ROLE_PERMISSIONS[role])
-    assert scope.visibility_sql() == ("FALSE", ())
+    assert scope.visibility_sql(writing=True) == ("FALSE", ())
 
 
 def test_history_redaction_keeps_only_action_and_timestamp():
@@ -281,7 +308,7 @@ def test_unknown_or_invisible_case_is_404_on_every_read(client, caller, monkeypa
     monkeypatch.setattr(api, "find_visible_case", lambda case_id, scope: None)
     monkeypatch.setattr(api, "list_assignments", lambda case_id, scope: None)
     monkeypatch.setattr(
-        api, "case_history", lambda case_id, scope, limit, offset, **kwargs: None
+        api, "case_history", lambda case_id, scope, limit, after, **kwargs: None
     )
     assert client.get(f"/api/v1/cases/{CASE_ID}").status_code == 404
     assert client.get(f"/api/v1/cases/{CASE_ID}/assignments").status_code == 404
@@ -762,8 +789,8 @@ def test_history_gives_triager_the_details_and_reporter_only_actions(
         details={"status": {"old": "open", "new": "closed"}},
     )
 
-    def fake_history(case_id, scope, limit, offset, **kwargs):
-        return [entry], 1
+    def fake_history(case_id, scope, limit, after, **kwargs):
+        return [entry], None
 
     monkeypatch.setattr(api, "case_history", fake_history)
 
@@ -774,7 +801,7 @@ def test_history_gives_triager_the_details_and_reporter_only_actions(
 
     as_role(caller, REPORTER_ID, "reporter")
     stripped = client.get(f"/api/v1/cases/{CASE_ID}/history").json()
-    assert stripped["total"] == 1
+    assert stripped["next_cursor"] is None
     assert stripped["items"][0]["action"] == audit.CASE_CLOSE
     assert stripped["items"][0]["details"] is None
     assert stripped["items"][0]["actor_id"] is None
@@ -785,9 +812,9 @@ def test_history_leaves_out_evidence_entries_unless_the_caller_holds_evidence_re
 ):
     seen = []
 
-    def fake_history(case_id, scope, limit, offset, **kwargs):
+    def fake_history(case_id, scope, limit, after, **kwargs):
         seen.append(kwargs["include_evidence"])
-        return [], 0
+        return [], None
 
     monkeypatch.setattr(api, "case_history", fake_history)
     as_role(caller, REPORTER_ID, "reporter")
@@ -799,7 +826,17 @@ def test_history_leaves_out_evidence_entries_unless_the_caller_holds_evidence_re
 
 def test_history_is_paged_with_the_standard_bounds(client, caller):
     assert client.get(f"/api/v1/cases/{CASE_ID}/history?limit=0").status_code == 400
-    assert client.get(f"/api/v1/cases/{CASE_ID}/history?offset=-1").status_code == 400
+    assert client.get(f"/api/v1/cases/{CASE_ID}/history?limit=201").status_code == 400
+
+
+def test_history_refuses_an_invalid_cursor_before_any_read(client, caller, monkeypatch):
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("an invalid cursor is refused before the history is read")
+
+    monkeypatch.setattr(api, "case_history", must_not_run)
+    response = client.get(f"/api/v1/cases/{CASE_ID}/history?cursor=not-a-cursor")
+    assert response.status_code == 400
+    assert response.json()["detail"] == {"status": "invalid_cursor"}
 
 
 # --- database: the same flow against PostgreSQL ------------------------------------------------------------------
@@ -1165,11 +1202,13 @@ def test_close_succeeds_after_review_and_tasks_done_or_not_applicable(
 
     tasks = task_ids(db_client, people["triager"], case_id)
     # An assigned investigator may mark tasks done, but not not_applicable. The conditional advisory starts not
-    # applicable, and only a triager may change that, so it is left as it is and closure accepts it.
+    # applicable, and only a triager may change that, so it is left as it is and closure accepts it. The analysis
+    # obligation is a task too, so it is marked done as well.
     for kind in (
         "affected_customers",
         "preliminary_safe_report",
         "preliminary_public_report",
+        "preliminary_control_failure_analysis",
     ):
         url = f"/api/v1/cases/{case_id}/deadlines/{tasks[kind]}"
         assert (
@@ -1345,7 +1384,7 @@ def test_history_shows_details_only_to_the_triager(db_client, people):
     } <= actions
     assert full["items"][0]["action"] == audit.CASE_REVIEW_LAYER_SET  # newest first
     assert all(item["details"] is not None for item in full["items"])
-    assert stripped["total"] == full["total"]
+    assert len(stripped["items"]) == len(full["items"])
     assert all(
         item["details"] is None and item["actor_id"] is None
         for item in stripped["items"]
@@ -1463,7 +1502,7 @@ def test_evidence_history_entries_need_evidence_read(db_client, people):
     assert audit.EVIDENCE_UPLOADED not in {
         item["action"] for item in without_read["items"]
     }
-    assert without_read["total"] == with_read["total"] - 1
+    assert len(without_read["items"]) == len(with_read["items"]) - 1
 
 
 @requires_database
@@ -1769,10 +1808,10 @@ def test_unassigned_reporter_case_stays_hidden_from_the_other_roles(db_client, p
         for url in ("", "/history", "/assignments"):
             response = db_client(actor).get(f"/api/v1/cases/{case_id}{url}")
             assert response.status_code == 404, (actor, url, response.text)
-    # The disclosure approver holds cases:read_all without cases:assign, so the reporter-channel rule still applies.
+    # The disclosure approver holds no case read (migration 0056): the case list and the case read are refused by role.
     approver = new_user("disclosure_approver")
-    assert case_id not in listed_ids(db_client, approver)
-    assert get_case(db_client, approver, case_id).status_code == 404
+    assert db_client(approver).get("/api/v1/cases").status_code == 403
+    assert get_case(db_client, approver, case_id).status_code == 403
     # The reporter sees its own case, and the other reporter does not.
     assert case_id in listed_ids(db_client, people["reporter"])
     assert get_case(db_client, people["reporter"], case_id).status_code == 200

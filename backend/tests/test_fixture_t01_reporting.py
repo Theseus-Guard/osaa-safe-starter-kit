@@ -256,6 +256,8 @@ def test_the_report_keeps_the_due_dates_when_external_tasks_are_not_applicable()
         "preliminary_safe_report": "not_applicable",
         "broader_advisory": "not_applicable",
         "preliminary_public_report": "not_applicable",
+        # The analysis obligation is not an external notice: the internal incident option does not change it.
+        "preliminary_control_failure_analysis": "open",
         "remediation_status": "open",
     }
 
@@ -397,7 +399,7 @@ def test_each_external_notice_task_is_marked_not_applicable_on_its_own(triage_pe
     assert {kind: value[2] for kind, value in after.items()} == {
         kind: value[2] for kind, value in before.items()
     }
-    assert len(after) == 5
+    assert len(after) == 6
     assert deadline_audit_rows(case_id) == 1
 
 

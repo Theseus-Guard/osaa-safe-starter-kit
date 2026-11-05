@@ -1,7 +1,7 @@
-"""Case links without a database: the pair rules and the HTTP mapping. The service functions are replaced.
+"""Case links without a database: the pair rules, the request shape and the HTTP mapping. The service functions are replaced.
 
-The database tests (test_case_links_db.py) cover the uniqueness constraint, the soft delete, the audit rows and the
-whole flow against PostgreSQL.
+The database tests (test_case_links_db.py) cover the uniqueness constraint, the soft delete, the audit rows, the
+duplicate closure, the visibility rules and the whole flow against PostgreSQL.
 """
 
 import uuid
@@ -12,7 +12,12 @@ from fastapi.testclient import TestClient
 
 from safe_kit import api, auth
 from safe_kit import case_links_api
-from safe_kit.case_links import CaseLink, LinkOutcome, check_pair
+from safe_kit.case_links import (
+    CaseLink,
+    LinkOutcome,
+    check_pair,
+    request_error,
+)
 from safe_kit.rbac import DEFAULT_ROLE_PERMISSIONS
 from safe_kit.users import User
 
@@ -26,6 +31,18 @@ NOW = datetime(2026, 11, 1, 9, 0, tzinfo=UTC)
 def idem() -> dict:
     """A fresh Idempotency-Key header for one request."""
     return {"Idempotency-Key": str(uuid.uuid4())}
+
+
+def body(**overrides) -> dict:
+    """A well-formed link request. Override fields to make a refusal."""
+    values = {
+        "linked_case_id": OTHER_ID,
+        "link_type": "related",
+        "reason": "Same incident",
+        "share_visibility": False,
+    }
+    values.update(overrides)
+    return values
 
 
 def make_user(user_id, role):
@@ -79,6 +96,53 @@ def test_source_not_found_takes_precedence_over_a_closed_linked_case():
     assert check_pair(CASE_ID, OTHER_ID, {OTHER_ID: "closed"}) is LinkOutcome.NOT_FOUND
 
 
+# --- request shape (type, reason, main case) ------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("link_type", "primary", "reason"),
+    [
+        ("related", None, "Same incident"),
+        ("duplicate", CASE_ID, "Same incident"),
+        ("duplicate", OTHER_ID, "Same incident"),
+        ("root_sub", OTHER_ID, "Analysis of the root"),
+    ],
+)
+def test_a_well_formed_request_has_no_error(link_type, primary, reason):
+    assert request_error(CASE_ID, OTHER_ID, link_type, reason, primary) is None
+
+
+@pytest.mark.parametrize(
+    ("link_type", "primary", "reason", "message"),
+    [
+        ("partner", None, "Same incident", "link_type must be"),
+        ("", None, "Same incident", "link_type must be"),
+        ("related", None, "", "a reason is required"),
+        ("related", None, "   ", "a reason is required"),
+        ("related", None, "x" * 501, "a reason is required"),
+        ("related", CASE_ID, "Same incident", "a related link has no main case"),
+        ("duplicate", None, "Same incident", "needs primary_case_id"),
+        ("root_sub", None, "Same incident", "needs primary_case_id"),
+        (
+            "root_sub",
+            "77777777-7777-4777-8777-777777777777",
+            "Same incident",
+            "primary_case_id must be one of the two cases",
+        ),
+    ],
+)
+def test_a_malformed_request_is_refused_before_the_database(
+    link_type, primary, reason, message
+):
+    error = request_error(CASE_ID, OTHER_ID, link_type, reason, primary)
+    assert error is not None
+    assert message in error
+
+
+def test_a_reason_of_500_characters_is_accepted():
+    assert request_error(CASE_ID, OTHER_ID, "related", "x" * 500, None) is None
+
+
 # --- HTTP mapping ---------------------------------------------------------------------------------------------------
 
 
@@ -110,6 +174,11 @@ def link(**overrides) -> CaseLink:
         "linked_case_id": OTHER_ID,
         "linked_case_title": "Related case",
         "created_at": NOW,
+        "link_type": "related",
+        "reason": "Same incident",
+        "share_visibility": False,
+        "primary_side": None,
+        "primary_case_id": None,
     }
     values.update(overrides)
     return CaseLink(**values)
@@ -131,7 +200,7 @@ def test_writes_need_cases_triage(client, caller, monkeypatch, role):
     assert (
         client.post(
             f"/api/v1/cases/{CASE_ID}/links",
-            json={"linked_case_id": OTHER_ID},
+            json=body(),
             headers=idem(),
         ).status_code
         == 403
@@ -151,57 +220,117 @@ def test_writes_need_cases_triage(client, caller, monkeypatch, role):
 def test_add_refusals(client, caller, monkeypatch, outcome, status, detail):
     as_role(caller, TRIAGER_ID, "triager")
     monkeypatch.setattr(
-        case_links_api, "add_link", lambda *args, **kwargs: (outcome, None)
+        case_links_api, "add_link", lambda *args, **kwargs: (outcome, None, [])
     )
     response = client.post(
         f"/api/v1/cases/{CASE_ID}/links",
-        json={"linked_case_id": OTHER_ID},
+        json=body(),
         headers=idem(),
     )
     assert response.status_code == status
     assert response.json()["detail"] == detail
 
 
-def test_add_success_is_201_with_the_linked_case_id_and_title(
-    client, caller, monkeypatch
-):
+def test_a_blocked_duplicate_is_409_and_names_the_blockers(client, caller, monkeypatch):
     as_role(caller, TRIAGER_ID, "triager")
+    blockers = ["deadline task affected_customers is open", "no review is recorded"]
     monkeypatch.setattr(
-        case_links_api, "add_link", lambda *args, **kwargs: (LinkOutcome.OK, link())
+        case_links_api,
+        "add_link",
+        lambda *args, **kwargs: (LinkOutcome.BLOCKED, None, blockers),
     )
     response = client.post(
         f"/api/v1/cases/{CASE_ID}/links",
-        json={"linked_case_id": OTHER_ID},
+        json=body(link_type="duplicate", primary_case_id=CASE_ID),
+        headers=idem(),
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "duplicate case cannot be closed: "
+        "deadline task affected_customers is open; no review is recorded"
+    )
+
+
+def test_add_success_is_201_with_the_full_link(client, caller, monkeypatch):
+    as_role(caller, TRIAGER_ID, "triager")
+    monkeypatch.setattr(
+        case_links_api,
+        "add_link",
+        lambda *args, **kwargs: (LinkOutcome.OK, link(), []),
+    )
+    response = client.post(
+        f"/api/v1/cases/{CASE_ID}/links",
+        json=body(),
         headers=idem(),
     )
     assert response.status_code == 201
     assert response.json() == {
         "linked_case_id": OTHER_ID,
         "linked_case_title": "Related case",
+        "link_type": "related",
+        "reason": "Same incident",
+        "share_visibility": False,
+        "primary_side": None,
+        "primary_case_id": None,
         "created_at": NOW.isoformat().replace("+00:00", "Z"),
     }
 
 
-def test_add_passes_the_actor_and_the_scope_to_the_service(client, caller, monkeypatch):
+def test_add_passes_the_type_the_reason_and_the_checkbox_to_the_service(
+    client, caller, monkeypatch
+):
     as_role(caller, TRIAGER_ID, "triager")
     seen = {}
 
     def fake_add(case_id, linked_case_id, actor, scope, **kwargs):
         seen.update(
-            case_id=case_id, linked_case_id=linked_case_id, actor=actor, scope=scope
+            case_id=case_id,
+            linked_case_id=linked_case_id,
+            actor=actor,
+            scope=scope,
+            **kwargs,
         )
-        return LinkOutcome.OK, link()
+        return LinkOutcome.OK, link(), []
 
     monkeypatch.setattr(case_links_api, "add_link", fake_add)
     client.post(
         f"/api/v1/cases/{CASE_ID}/links",
-        json={"linked_case_id": OTHER_ID},
+        json=body(
+            link_type="root_sub",
+            primary_case_id=OTHER_ID,
+            share_visibility=True,
+            reason="  Root of the analysis  ",
+        ),
         headers=idem(),
     )
     assert seen["case_id"] == CASE_ID
     assert seen["linked_case_id"] == OTHER_ID
     assert seen["actor"] == TRIAGER_ID
     assert seen["scope"].user_id == TRIAGER_ID
+    assert seen["link_type"] == "root_sub"
+    assert seen["primary_case_id"] == OTHER_ID
+    assert seen["share_visibility"] is True
+    assert seen["reason"] == "  Root of the analysis  "
+
+
+def test_the_checkbox_defaults_to_off(client, caller, monkeypatch):
+    as_role(caller, TRIAGER_ID, "triager")
+    seen = {}
+
+    def fake_add(*args, **kwargs):
+        seen.update(kwargs)
+        return LinkOutcome.OK, link(), []
+
+    monkeypatch.setattr(case_links_api, "add_link", fake_add)
+    payload = body()
+    del payload["share_visibility"]
+    assert (
+        client.post(
+            f"/api/v1/cases/{CASE_ID}/links", json=payload, headers=idem()
+        ).status_code
+        == 201
+    )
+    assert seen["share_visibility"] is False
 
 
 def test_linked_case_id_must_be_a_uuid(client, caller):
@@ -209,11 +338,53 @@ def test_linked_case_id_must_be_a_uuid(client, caller):
     assert (
         client.post(
             f"/api/v1/cases/{CASE_ID}/links",
-            json={"linked_case_id": "not-a-uuid"},
+            json=body(linked_case_id="not-a-uuid"),
             headers=idem(),
         ).status_code
         == 400
     )
+
+
+def test_link_type_must_be_one_of_the_three_types(client, caller):
+    as_role(caller, TRIAGER_ID, "triager")
+    assert (
+        client.post(
+            f"/api/v1/cases/{CASE_ID}/links",
+            json=body(link_type="partner"),
+            headers=idem(),
+        ).status_code
+        == 400
+    )
+
+
+def test_a_reason_is_required(client, caller):
+    as_role(caller, TRIAGER_ID, "triager")
+    payload = body()
+    del payload["reason"]
+    assert (
+        client.post(
+            f"/api/v1/cases/{CASE_ID}/links", json=payload, headers=idem()
+        ).status_code
+        == 400
+    )
+
+
+def test_a_malformed_request_answers_422_without_reaching_the_service(
+    client, caller, monkeypatch
+):
+    as_role(caller, TRIAGER_ID, "triager")
+    monkeypatch.setattr(
+        case_links_api,
+        "add_link",
+        lambda *args, **kwargs: pytest.fail("the service must not be reached"),
+    )
+    response = client.post(
+        f"/api/v1/cases/{CASE_ID}/links",
+        json=body(link_type="duplicate"),
+        headers=idem(),
+    )
+    assert response.status_code == 422
+    assert "needs primary_case_id" in response.json()["detail"]
 
 
 @pytest.mark.parametrize(
@@ -272,17 +443,55 @@ def test_a_link_to_a_case_the_caller_cannot_see_carries_no_id_and_no_title(
     client, caller, monkeypatch
 ):
     as_role(caller, REPORTER_ID, "reporter")
-    hidden = link(linked_case_id=None, linked_case_title=None)
+    # The service gives no reason and no primary ID for a link to a case the caller cannot see.
+    hidden = link(
+        linked_case_id=None,
+        linked_case_title=None,
+        reason=None,
+        primary_side="linked",
+        primary_case_id=None,
+        link_type="root_sub",
+    )
     monkeypatch.setattr(case_links_api, "list_links", lambda case_id, scope: [hidden])
     response = client.get(f"/api/v1/cases/{CASE_ID}/links")
     assert response.status_code == 200
-    body = response.json()
-    assert body == [
+    body_ = response.json()
+    assert body_ == [
         {
             "linked_case_id": None,
             "linked_case_title": None,
+            "link_type": "root_sub",
+            "reason": None,
+            "share_visibility": False,
+            "primary_side": "linked",
+            "primary_case_id": None,
             "created_at": NOW.isoformat().replace("+00:00", "Z"),
         }
     ]
     # Nothing else about the hidden case or about the people who made the link is returned.
-    assert set(body[0]) == {"linked_case_id", "linked_case_title", "created_at"}
+    assert set(body_[0]) == {
+        "linked_case_id",
+        "linked_case_title",
+        "link_type",
+        "reason",
+        "share_visibility",
+        "primary_side",
+        "primary_case_id",
+        "created_at",
+    }
+
+
+def test_a_visible_main_case_is_named_by_its_id_in_the_response(
+    client, caller, monkeypatch
+):
+    as_role(caller, REPORTER_ID, "reporter")
+    root = link(
+        primary_side="linked",
+        primary_case_id=OTHER_ID,
+        link_type="root_sub",
+    )
+    monkeypatch.setattr(case_links_api, "list_links", lambda case_id, scope: [root])
+    response = client.get(f"/api/v1/cases/{CASE_ID}/links")
+    assert response.status_code == 200
+    assert response.json()[0]["primary_case_id"] == OTHER_ID
+    assert response.json()[0]["primary_side"] == "linked"

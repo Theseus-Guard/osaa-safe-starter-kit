@@ -20,16 +20,21 @@ export function ChangePassword({ heading, description, onChange, onDone }: Props
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // The field the current error is about, so that the field can point at the message.
+  const [errorField, setErrorField] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
+    setErrorField(null);
     if (next.length < MIN_PASSWORD_LENGTH) {
+      setErrorField("new-password");
       setError(`The new password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
       return;
     }
     if (next !== confirm) {
+      setErrorField("confirm-password");
       setError("The new passwords do not match.");
       return;
     }
@@ -54,7 +59,9 @@ export function ChangePassword({ heading, description, onChange, onDone }: Props
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <FieldGroup>
             <Field>
-              <FieldLabel htmlFor="current-password">Current password</FieldLabel>
+              <FieldLabel htmlFor="current-password">
+                Current password <span className="font-normal text-muted-foreground">(required)</span>
+              </FieldLabel>
               <Input
                 id="current-password"
                 type="password"
@@ -65,21 +72,31 @@ export function ChangePassword({ heading, description, onChange, onDone }: Props
               />
             </Field>
             <Field>
-              <FieldLabel htmlFor="new-password">New password</FieldLabel>
+              <FieldLabel htmlFor="new-password">
+                New password <span className="font-normal text-muted-foreground">(required)</span>
+              </FieldLabel>
               <Input
                 id="new-password"
+                aria-invalid={errorField === "new-password" || undefined}
+                aria-describedby={errorField === "new-password" ? "change-password-error new-password-hint" : "new-password-hint"}
                 type="password"
                 value={next}
                 onChange={(e) => setNext(e.target.value)}
                 autoComplete="new-password"
                 required
               />
-              <FieldDescription>At least {MIN_PASSWORD_LENGTH} characters. Changing it ends all of your sessions.</FieldDescription>
+              <FieldDescription id="new-password-hint">
+                At least {MIN_PASSWORD_LENGTH} characters. Changing it ends all of your sessions.
+              </FieldDescription>
             </Field>
             <Field>
-              <FieldLabel htmlFor="confirm-password">Confirm new password</FieldLabel>
+              <FieldLabel htmlFor="confirm-password">
+                Confirm new password <span className="font-normal text-muted-foreground">(required)</span>
+              </FieldLabel>
               <Input
                 id="confirm-password"
+                aria-invalid={errorField === "confirm-password" || undefined}
+                aria-describedby={errorField === "confirm-password" ? "change-password-error" : undefined}
                 type="password"
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}
@@ -89,7 +106,7 @@ export function ChangePassword({ heading, description, onChange, onDone }: Props
             </Field>
           </FieldGroup>
           {error && (
-            <Alert variant="destructive">
+            <Alert variant="destructive" id="change-password-error">
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           )}

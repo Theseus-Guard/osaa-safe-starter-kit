@@ -10,6 +10,9 @@ a crash is marked failed by fail_stale_pending, which the worker runs on a fixed
 The case visibility is checked again inside the transaction that inserts the pending row, so a case that stops being
 visible after the API check is refused before any row or object exists.
 
+Evidence may be uploaded to a closed case: late-arriving or later-discovered evidence is legitimate. The upload's audit
+row records case_closed, the status of the case when the pending row was inserted. No extra permission is needed.
+
 Download decrypts only after the ciphertext checksum matches. The plaintext checksum is checked before any byte is
 returned. A failed check records a "failed" custody event, and an integrity failure also moves the item to failed.
 The caller gets no content.
@@ -30,12 +33,13 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from safe_kit import audit, tlp
-from safe_kit.cases import CaseScope, is_visible_on
+from safe_kit.cases import CaseScope, lock_visible_case
 from safe_kit.db import connect
 from safe_kit.evidence_crypto import IntegrityError, open_sealed, seal, sha256_hex
 from safe_kit.evidence_keys import KeyProvider, KeyProviderError
 from safe_kit.evidence_storage import EvidenceStorage, ObjectNotFound, StorageError
 from safe_kit.idempotency import KeyReused, KeyScope, Replayed, check, remember
+from safe_kit.pagination import encode_cursor
 
 DEFAULT_MAX_BYTES = 50 * 1024 * 1024
 MAX_FILENAME_LENGTH = 255
@@ -286,7 +290,7 @@ def create_evidence(
     name = sanitize_filename(filename)
     storage_key = str(uuid.uuid4())
     sealed = seal(data, storage_key, provider)
-    evidence_id = _insert_pending(
+    evidence_id, case_closed = _insert_pending(
         case_id,
         uploader_id,
         name,
@@ -330,6 +334,7 @@ def create_evidence(
             uploader_id,
             plaintext_digest,
             ciphertext_digest,
+            case_closed=case_closed,
             idempotency=idempotency,
             render=render,
         )
@@ -350,13 +355,18 @@ def _insert_pending(
     nonce: bytes,
     scope: CaseScope,
     idempotency: KeyScope | None = None,
-) -> str:
+) -> tuple[str, bool]:
+    """Insert the pending row. Returns its ID and whether the case was closed when the row was inserted."""
     with connect() as conn:
         check(conn, idempotency)
-        # The same visibility rule as the API check, run on this connection so the check and the insert commit or
-        # roll back together. A visibility change committed before this statement is seen here.
-        if not is_visible_on(conn, case_id, scope):
+        # Lock the case row first, then check visibility, on this connection. The lock holds until this insert
+        # commits or rolls back, so a concurrent assignment or closure waits for it, and the check and the insert are
+        # serialized against it. The same visibility rule as the API check applies.
+        locked = lock_visible_case(conn, case_id, scope)
+        if locked is None:
             raise CaseNotVisible()
+        # A closed case takes evidence too. The closed state is recorded in the upload's audit row, not refused.
+        case_closed = locked[0] == "closed"
         row = conn.execute(
             """
             INSERT INTO evidence_items
@@ -377,7 +387,7 @@ def _insert_pending(
                 nonce,
             ),
         ).fetchone()
-    return row[0]
+    return row[0], case_closed
 
 
 def _mark_available(
@@ -386,6 +396,7 @@ def _mark_available(
     sha_plaintext: str,
     sha_ciphertext: str,
     *,
+    case_closed: bool,
     idempotency: KeyScope | None = None,
     render: Callable[[EvidenceItem], Any] | None = None,
 ) -> EvidenceItem:
@@ -410,7 +421,7 @@ def _mark_available(
             EVIDENCE_TARGET,
             evidence_id,
             actor_id=uploader_id,
-            details={"case_id": item.case_id},
+            details={"case_id": item.case_id, "case_closed": case_closed},
         )
         if idempotency is not None:
             assert render is not None
@@ -518,29 +529,40 @@ def record_failure(evidence_id: str, actor_id: str | None, reason: str) -> None:
 
 
 def list_evidence(
-    case_id: str, limit: int, offset: int, recipient: tlp.Recipient | None = None
-) -> tuple[list[EvidenceItem], int]:
-    """A page of the items of a case, and their total. With a recipient, items the TLP rule hides from it are left out
-    of both the page and the total, so the total never counts an item the caller cannot see."""
+    case_id: str,
+    limit: int,
+    after: tuple[datetime, str] | None = None,
+    recipient: tlp.Recipient | None = None,
+) -> tuple[list[EvidenceItem], str | None]:
+    """One page of the items of a case, oldest first, and the cursor of the next page (None on the last page).
+    after is the (created_at, id) position of the last row of the previous page. With a recipient, items the TLP rule
+    hides from it are left out, so no page carries an item the caller cannot see."""
     if recipient is None:
         audience, audience_params = "TRUE", ()
     else:
         audience, audience_params = tlp.visibility_sql(recipient)
+    # Matches the ORDER BY: created_at ascending, then id ascending.
+    if after is None:
+        keyset, keyset_params = "TRUE", ()
+    else:
+        created_at, row_id = after
+        keyset = "(e.created_at > %s OR (e.created_at = %s AND e.id > %s::uuid))"
+        keyset_params = (created_at, created_at, row_id)
     with connect() as conn:
+        # One extra row tells whether another page exists; it is not returned.
         rows = conn.execute(
             f"""
             SELECT {_ITEM_COLUMNS} FROM evidence_items e
-            WHERE e.case_id = %s AND NOT e.is_deleted AND {audience}
+            WHERE e.case_id = %s AND NOT e.is_deleted AND {audience} AND {keyset}
             ORDER BY e.created_at, e.id
-            LIMIT %s OFFSET %s
+            LIMIT %s
             """,
-            (case_id, *audience_params, limit, offset),
+            (case_id, *audience_params, *keyset_params, limit + 1),
         ).fetchall()
-        total = conn.execute(
-            f"SELECT count(*) FROM evidence_items e WHERE e.case_id = %s AND NOT e.is_deleted AND {audience}",
-            (case_id, *audience_params),
-        ).fetchone()[0]
-    return [_to_item(row) for row in rows], total
+    items = [_to_item(row) for row in rows[:limit]]
+    has_more = len(rows) > limit
+    next_cursor = encode_cursor(items[-1].created_at, items[-1].id) if has_more else None
+    return items, next_cursor
 
 
 def get_item(evidence_id: str) -> EvidenceItem | None:

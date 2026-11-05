@@ -49,6 +49,7 @@ SAFE_KINDS = (
     "preliminary_safe_report",
     "broader_advisory",
     "preliminary_public_report",
+    "preliminary_control_failure_analysis",
     "remediation_status",
 )
 CASE_ID = "99999999-9999-9999-9999-999999999999"
@@ -105,6 +106,7 @@ def test_deadlines_run_from_the_awareness_time_and_not_from_the_creation_time():
     assert due["preliminary_safe_report"] == datetime(2026, 11, 3, 6, 0, tzinfo=UTC)
     assert due["broader_advisory"] == t0 + timedelta(days=14)
     assert due["preliminary_public_report"] == t0 + timedelta(days=30)
+    assert due["preliminary_control_failure_analysis"] == t0 + timedelta(days=30)
     assert due["remediation_status"] == t0 + timedelta(days=90)
 
 

@@ -230,7 +230,7 @@ def test_list_pages_follow_the_username_order_and_skip_deleted_users():
     users.soft_delete_user(doomed)
     total = users.count_users()
 
-    everyone = users.list_users(total, 0)
+    everyone = users.list_users(total)
     with connect() as conn:
         expected_order = [
             row[0]
@@ -244,10 +244,15 @@ def test_list_pages_follow_the_username_order_and_skip_deleted_users():
     assert doomed not in [user.id for user in everyone]
 
     paged = []
-    for offset in range(0, total, 2):
-        paged.extend(users.list_users(2, offset))
+    after = None
+    while True:
+        page = users.list_users(2, after)
+        paged.extend(page)
+        if len(page) < 2:
+            break
+        after = (page[-1].username, page[-1].id)
     assert [user.id for user in paged] == expected_order
-    assert users.list_users(2, total) == []
+    assert users.list_users(2, (paged[-1].username, paged[-1].id)) == []
 
 
 def test_find_user_ignores_deleted_users_and_count_drops_by_one():

@@ -85,7 +85,7 @@ describe("CaseAssignments", () => {
     const user = userEvent.setup();
     render(<CaseAssignments caseId="case-1" closed={false} canAssign />);
 
-    await user.click(await screen.findByRole("button", { name: "Remove" }));
+    await user.click(await screen.findByRole("button", { name: /^Remove/ }));
 
     await waitFor(() => expect(remove).toHaveBeenCalledWith("case-1", "user-2"));
     expect(await screen.findByText("No one is assigned to this case yet.")).toBeInTheDocument();
@@ -96,14 +96,14 @@ describe("CaseAssignments", () => {
     list.mockResolvedValue([ASSIGNMENT]);
     render(<CaseAssignments caseId="case-1" closed canAssign />);
 
-    expect(await screen.findByRole("button", { name: "Remove" })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: /^Remove/ })).toBeDisabled();
   });
 
   it("locks removal for a caller without cases:assign", async () => {
     list.mockResolvedValue([ASSIGNMENT]);
     render(<CaseAssignments caseId="case-1" closed={false} canAssign={false} />);
 
-    expect(await screen.findByRole("button", { name: "Remove" })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: /^Remove/ })).toBeDisabled();
     expect(list).toHaveBeenCalledWith("case-1");
   });
 
@@ -122,7 +122,7 @@ describe("CaseAssignments assign picker", () => {
     const user = userEvent.setup();
     render(<CaseAssignments caseId="case-1" closed={false} canAssign />);
 
-    await user.click(await screen.findByLabelText("Add a user"));
+    await user.click(await screen.findByLabelText(/^Add a user/));
 
     expect(candidates).toHaveBeenCalledWith("case-1");
     expect(await screen.findByRole("option", { name: "Ada Lovelace (example-reviewer) - Reviewer" })).toBeInTheDocument();
@@ -144,7 +144,7 @@ describe("CaseAssignments assign picker", () => {
     const user = userEvent.setup();
     render(<CaseAssignments caseId="case-1" closed={false} canAssign />);
 
-    await user.click(await screen.findByLabelText("Add a user"));
+    await user.click(await screen.findByLabelText(/^Add a user/));
     await user.click(await screen.findByRole("option", { name: "example-investigator - Investigator" }));
     await user.click(screen.getByRole("button", { name: "Assign" }));
 
@@ -162,7 +162,7 @@ describe("CaseAssignments assign picker", () => {
     const user = userEvent.setup();
     render(<CaseAssignments caseId="case-1" closed={false} canAssign />);
 
-    await user.click(await screen.findByLabelText("Add a user"));
+    await user.click(await screen.findByLabelText(/^Add a user/));
     await user.click(await screen.findByRole("option", { name: "example-investigator - Investigator" }));
     await user.click(screen.getByRole("button", { name: "Assign" }));
 
@@ -195,7 +195,7 @@ describe("CaseAssignments assign picker", () => {
     render(<CaseAssignments caseId="case-1" closed={false} canAssign={false} />);
 
     expect(await screen.findByText("No one is assigned to this case yet.")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Add a user")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Add a user/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Assign" })).not.toBeInTheDocument();
     expect(candidates).not.toHaveBeenCalled();
   });
@@ -204,8 +204,8 @@ describe("CaseAssignments assign picker", () => {
     list.mockResolvedValue([ASSIGNMENT]);
     render(<CaseAssignments caseId="case-1" closed canAssign />);
 
-    expect(await screen.findByRole("button", { name: "Remove" })).toBeDisabled();
-    expect(screen.queryByLabelText("Add a user")).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /^Remove/ })).toBeDisabled();
+    expect(screen.queryByLabelText(/^Add a user/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Assign" })).not.toBeInTheDocument();
     expect(candidates).not.toHaveBeenCalled();
   });

@@ -175,7 +175,7 @@ def test_filing_an_appeal_needs_a_case_read_permission(
 def test_the_disclosure_approver_reads_appeals_but_may_not_file_one(
     client, caller, monkeypatch
 ):
-    # cases:read_all lets the approver read the case and so its appeals; filing an appeal is refused to this role.
+    # The approver holds no case read (migration 0056), so it reads no appeals of the case; filing one is refused too.
     monkeypatch.setattr(review_independence_api, "file_appeal", forbid("file_appeal"))
     monkeypatch.setattr(
         review_independence_api, "list_appeals", lambda *args, **kwargs: []
@@ -185,7 +185,7 @@ def test_the_disclosure_approver_reads_appeals_but_may_not_file_one(
     response = client.post(APPEAL_URL, headers=idem(), json=body)
     assert response.status_code == 403
     assert response.json()["detail"] == "forbidden"
-    assert client.get(APPEAL_URL).status_code == 200
+    assert client.get(APPEAL_URL).status_code == 403
 
 
 def test_a_reporter_may_file_an_appeal_but_not_declare_a_conflict(

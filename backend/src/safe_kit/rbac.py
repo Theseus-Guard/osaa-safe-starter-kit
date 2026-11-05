@@ -23,9 +23,17 @@ ROLE_LOCK_KEY = 0x5AFE0004
 REPORTING_OWNER_ROLE = "reporting_owner"
 FIXED_REPORTER_CONTACT_GRANT = frozenset({"reporter_contact:read"})
 
-# The approver reads the case it approves through cases:read_all (migration 0044). That permission also reaches the
-# deadline routes and the appeal route, which this role must not use, so those routes refuse the role by name.
+# The disclosure approver holds no case read permission (migration 0056 removed cases:read_all). It reads the packet it
+# approves through the disclosure read path (safe_kit.disclosure), and nothing else of the case.
 DISCLOSURE_APPROVER_ROLE = "disclosure_approver"
+
+# The institution owner (migration 0055). It assigns the backup pool of a case and changes the waiting time of a backup.
+# Those two permissions are held by this role only: the matrix refuses them for every other role (set_role_permissions),
+# and the role's own set may not lose them.
+INSTITUTION_OWNER_ROLE = "institution_owner"
+OWNER_PERMISSIONS = frozenset(
+    {"disclosures:assign_backup", "disclosures:set_backup_wait"}
+)
 
 DEFAULT_ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "reporter": frozenset({"cases:submit", "cases:read_own"}),
@@ -45,14 +53,24 @@ DEFAULT_ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "reviewer": frozenset(
         {"cases:read_assigned", "cases:assignable", "evidence:read", "reviews:write"}
     ),
-    # Reads the case it approves: cases:read_all, granted by migration 0044 (see DISCLOSURE_APPROVER_ROLE).
-    "disclosure_approver": frozenset({"disclosures:approve", "cases:read_all"}),
+    # Approves a packet and reads it through the disclosure read path. No case read (migration 0056, see DISCLOSURE_APPROVER_ROLE).
+    "disclosure_approver": frozenset({"disclosures:approve", "disclosures:read"}),
     "auditor": frozenset({"audit:read"}),
     # Reads the reporter contact (the fixed grant, see REPORTING_OWNER_ROLE). cases:read_all is needed as well: the
     # contact route checks case visibility, and reporter_contact:read is what lets a read_all caller see a
     # reporter-channel case that has no assignee (cases.CaseScope.visibility_sql). It holds no triage, assign,
     # evidence or review permission.
     "reporting_owner": frozenset({"cases:read_all", "reporter_contact:read"}),
+    # The owner's rights (OWNER_PERMISSIONS) and the reads they need: the backup pool is shown for a visible case, and
+    # the notice settings are read with disclosures:read. It holds no approval, prepare or triage permission.
+    "institution_owner": frozenset(
+        {
+            "disclosures:assign_backup",
+            "disclosures:set_backup_wait",
+            "disclosures:read",
+            "cases:read_all",
+        }
+    ),
     # By design the admin role has no case permissions: platform administration
     # does not grant access to case content.
     "admin": ADMIN_REQUIRED_PERMISSIONS | {"privacy:read"},
@@ -65,7 +83,10 @@ class RoleOutcome(Enum):
     ADMIN_CASE_CONTENT = "admin_case_content"
     REPORTER_CONTACT_NOT_GRANTABLE = "reporter_contact_not_grantable"
     REPORTING_OWNER_FIXED = "reporting_owner_fixed"
+    INSTITUTION_OWNER_FIXED = "institution_owner_fixed"
     UNKNOWN_PERMISSION = "unknown_permission"
+    # An owner-only permission (OWNER_PERMISSIONS) named for a role other than institution_owner.
+    OWNER_PERMISSION_NOT_GRANTABLE = "owner_permission_not_grantable"
 
 
 # Permissions that read or change case content, including the reporter contact. The admin role never holds them:
@@ -128,11 +149,13 @@ def set_role_permissions(
 
     The audit row lists the granted and revoked permissions and commits with the change.
 
-    The reporting_owner role is refused whatever the request holds, including a request that repeats its current set.
-    The refusal is decided before any database access.
+    The reporting_owner and institution_owner roles are fixed: they are refused whatever the request holds, including a
+    request that repeats their current set. The refusal is decided before any database access.
     """
     if role == REPORTING_OWNER_ROLE:
         return RoleOutcome.REPORTING_OWNER_FIXED
+    if role == INSTITUTION_OWNER_ROLE:
+        return RoleOutcome.INSTITUTION_OWNER_FIXED
     if role == "admin":
         if not ADMIN_REQUIRED_PERMISSIONS <= permissions:
             return RoleOutcome.ADMIN_GUARD
@@ -142,6 +165,8 @@ def set_role_permissions(
             return RoleOutcome.ADMIN_CASE_CONTENT
     if any(name.startswith(REPORTER_CONTACT_PREFIX) for name in permissions):
         return RoleOutcome.REPORTER_CONTACT_NOT_GRANTABLE
+    if permissions & OWNER_PERMISSIONS:
+        return RoleOutcome.OWNER_PERMISSION_NOT_GRANTABLE
     with connect() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (ROLE_LOCK_KEY,))
         known = {

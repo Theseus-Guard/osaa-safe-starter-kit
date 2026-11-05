@@ -10,6 +10,8 @@ settings are set, like tests/test_database.py.
 
 import contextlib
 import os
+import threading
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -75,8 +77,8 @@ class LoggingConnection:
         return self
 
     def fetchone(self):
-        if self.last.startswith("SELECT 1 FROM cases"):
-            return (1,) if self.db.visible else None
+        if self.last.startswith("SELECT status, closed_at, closed_by::text, revision FROM cases") and self.last.endswith("FOR UPDATE"):
+            return ("open", None, None, 1) if self.db.visible else None
         if self.last.startswith("INSERT INTO evidence_items"):
             return (str(uuid.uuid4()),)
         return None
@@ -143,7 +145,7 @@ def test_case_no_longer_visible_at_insert_is_refused_with_no_row_and_no_object(
     assert storage.puts == []
 
 
-def test_visibility_is_checked_on_the_same_connection_as_the_insert(db):
+def test_case_row_is_locked_and_checked_before_the_insert_on_the_same_connection(db):
     scope = CaseScope(user_id=INVESTIGATOR.id, read_all=True)
     evidence._insert_pending(
         str(uuid.uuid4()),
@@ -158,13 +160,13 @@ def test_visibility_is_checked_on_the_same_connection_as_the_insert(db):
         scope,
     )
     assert len(db.inserts()) == 1
-    visibility_checks = [
+    locks = [
         i
         for i, sql in enumerate(db.statements)
-        if sql.startswith("SELECT 1 FROM cases")
+        if sql.startswith("SELECT status, closed_at, closed_by::text, revision FROM cases") and sql.endswith("FOR UPDATE")
     ]
     insert_at = db.statements.index(db.inserts()[0])
-    assert visibility_checks and visibility_checks[-1] < insert_at
+    assert locks and locks[-1] < insert_at
     # One connection served the check and the insert, so they share one transaction.
     assert len(set(db.connection_of_statement)) == 1
 
@@ -202,7 +204,7 @@ def upload_client(monkeypatch, provider, db):
     storage = StorageSpy()
     monkeypatch.setattr(evidence_api, "storage_from_env", lambda: storage)
     # The API check (before the body is read) says visible; the insert-time check in the database says not.
-    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope: True)
+    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope, **kwargs: True)
     db.visible = False
     client = TestClient(app, raise_server_exceptions=False)
     yield client, storage
@@ -267,3 +269,74 @@ def test_database_refuses_an_insert_for_a_case_the_scope_cannot_see(provider):
             "SELECT count(*) FROM evidence_items WHERE case_id = %s", (case_id,)
         ).fetchone()[0]
     assert count == 0
+
+
+def _case_lock_waiter_seen(timeout: float = 10.0) -> bool:
+    """Polls pg_stat_activity until a session waits on a lock inside the statement that locks a case row."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with connect() as conn:
+            waiting = conn.execute(
+                """
+                SELECT count(*) FROM pg_stat_activity
+                WHERE datname = current_database() AND wait_event_type = 'Lock'
+                  AND query LIKE %s AND query LIKE %s
+                """,
+                ("SELECT status, closed_at, closed_by%", "%FOR UPDATE%"),
+            ).fetchone()[0]
+        if waiting:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+@requires_database
+def test_evidence_insert_waits_for_a_held_case_row_lock(provider):
+    """The upload transaction takes the case row lock before its insert. While another transaction holds that lock
+    (as an assignment or a closure does), the insert waits, and it completes only after the holder commits."""
+    migrate.MIGRATIONS_DIR = MIGRATIONS
+    assert migrate.main() == 0
+    suffix = uuid.uuid4().hex[:12]
+    creator = users.create_user("l-a-" + suffix, "temporary passphrase", "investigator")
+    with connect() as conn:
+        case_id = conn.execute(
+            """
+            INSERT INTO cases (reference, title, awareness_time, created_by, status, calendar_version, calendar_timezone)
+            VALUES (%s, 'lock case', now(), %s, 'open', 'test', 'UTC') RETURNING id::text
+            """,
+            ("SAFE-TEST-" + suffix, creator),
+        ).fetchone()[0]
+    scope = CaseScope.from_permissions(creator, frozenset({"cases:read_all"}))
+
+    holder = connect()
+    outcome: dict = {}
+
+    def upload() -> None:
+        try:
+            outcome["row"] = evidence._insert_pending(
+                case_id, creator, "scan.pdf", "text/plain", 3, str(uuid.uuid4()), "test", b"\x00", b"\x00", scope,
+            )
+        except BaseException as failure:  # re-raised on the test thread below
+            outcome["error"] = failure
+
+    try:
+        holder.execute("SELECT id FROM cases WHERE id = %s FOR UPDATE", (case_id,)).fetchone()
+        worker = threading.Thread(target=upload)
+        worker.start()
+        try:
+            waited = _case_lock_waiter_seen()
+        finally:
+            holder.commit()  # release the lock whatever happened, so the worker can finish
+            worker.join(timeout=30)
+        assert waited, "the upload insert did not wait on the case row lock"
+        assert not worker.is_alive()
+        if "error" in outcome:
+            raise outcome["error"]
+    finally:
+        holder.close()
+    assert outcome["row"]
+    with connect() as conn:
+        count = conn.execute(
+            "SELECT count(*) FROM evidence_items WHERE case_id = %s AND status = 'pending'", (case_id,)
+        ).fetchone()[0]
+    assert count == 1

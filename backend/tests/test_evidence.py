@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from safe_kit import (
     api,
+    audit,
     auth,
     cases,
     evidence,
@@ -151,7 +152,7 @@ def client(monkeypatch, provider):
         "permissions_for_role",
         lambda role: frozenset({"evidence:read", "evidence:write"}),
     )
-    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope: True)
+    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope, **kwargs: True)
     monkeypatch.setattr(evidence_api, "_PROVIDER", provider)
     monkeypatch.setenv("SAFE_EVIDENCE_MAX_BYTES", "1000")
     return TestClient(app)
@@ -660,7 +661,7 @@ def test_upload_is_refused_when_no_key_is_configured(client, monkeypatch):
 
 
 def test_upload_to_a_case_the_caller_cannot_see_is_404(client, monkeypatch):
-    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope: False)
+    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope, **kwargs: False)
     body, content_type = multipart("scan.pdf", "application/pdf", PDF[:100])
     response = client.post(
         f"/api/v1/cases/{uuid.uuid4()}/evidence",
@@ -718,7 +719,7 @@ def test_reading_evidence_is_404_when_the_case_is_not_visible(
     monkeypatch.setattr(
         auth, "permissions_for_role", lambda role: frozenset({"evidence:read"})
     )
-    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope: False)
+    monkeypatch.setattr(evidence_api, "is_visible", lambda case_id, scope, **kwargs: False)
     monkeypatch.setattr(evidence, "find_stored", lambda evidence_id, scope: None)
     assert client.get(url_template.format(uuid.uuid4())).status_code == 404
 
@@ -730,11 +731,11 @@ def test_listing_with_evidence_read_returns_the_page(client, monkeypatch):
     monkeypatch.setattr(
         evidence,
         "list_evidence",
-        lambda case_id, limit, offset, recipient=None: ([], 0),
+        lambda case_id, limit, after, recipient=None: ([], None),
     )
     response = client.get(f"/api/v1/cases/{uuid.uuid4()}/evidence")
     assert response.status_code == 200
-    assert response.json() == {"items": [], "total": 0, "limit": 50, "offset": 0}
+    assert response.json() == {"items": [], "next_cursor": None}
 
 
 # --- custody and reconciliation: database-backed -----------------------------------------------------------------
@@ -987,13 +988,92 @@ def test_missing_evidence_permission_is_403_before_visibility_is_checked(
     assert upload.status_code == 403
 
 
+def upload_as(user_id: str, case_id: str):
+    body, content_type = multipart("notes.pdf", "application/pdf", PDF[:100])
+    return request_as(
+        user_id,
+        "post",
+        f"/api/v1/cases/{case_id}/evidence",
+        content=body,
+        headers={**idem(), "Content-Type": content_type},
+    )
+
+
+def close_case_row(case_id: str, user_id: str) -> None:
+    """Mark the case closed in the table. cases.close_case is not used: its rules need a review and done deadline
+    tasks, which these tests do not set up. The closed state is all the upload path reads."""
+    with connect() as conn:
+        status = conn.execute(
+            """
+            UPDATE cases SET status = 'closed', closed_at = now(), closed_by = %s, close_reason = 'test'
+            WHERE id = %s RETURNING status
+            """,
+            (user_id, case_id),
+        ).fetchone()[0]
+    assert status == "closed"
+
+
+def upload_audit_details(evidence_id: str) -> list[dict]:
+    """The details of every evidence.uploaded row for one item. One row per upload is expected."""
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT details FROM audit_events
+            WHERE action = %s AND target_type = %s AND target_id = %s AND NOT is_deleted
+            """,
+            (audit.EVIDENCE_UPLOADED, evidence.EVIDENCE_TARGET, evidence_id),
+        ).fetchall()
+    return [row[0] for row in rows]
+
+
+@requires_database
+def test_upload_to_an_open_case_is_audited_once_with_case_closed_false(evidence_world):
+    investigator = evidence_world["people"]["investigator"]
+    case_id = evidence_world["case_id"]
+    response = upload_as(investigator, case_id)
+    assert response.status_code == 201
+    assert upload_audit_details(response.json()["id"]) == [
+        {"case_id": case_id, "case_closed": False}
+    ]
+
+
+@requires_database
+def test_upload_to_a_closed_case_succeeds_and_is_audited_with_case_closed_true(
+    evidence_world,
+):
+    people = evidence_world["people"]
+    case_id = evidence_world["case_id"]
+    close_case_row(case_id, people["triager"])
+    response = upload_as(people["investigator"], case_id)
+    assert response.status_code == 201
+    assert upload_audit_details(response.json()["id"]) == [
+        {"case_id": case_id, "case_closed": True}
+    ]
+    assert evidence_count(case_id) == 2
+
+
+@requires_database
+def test_closed_case_upload_still_needs_evidence_write(evidence_world):
+    people = evidence_world["people"]
+    case_id = evidence_world["case_id"]
+    close_case_row(case_id, people["triager"])
+    # The reporter can see the case but holds no evidence:write, so a closed case does not open the route to it.
+    response = upload_as(people["reporter"], case_id)
+    assert response.status_code == 403
+    assert evidence_count(case_id) == 1
+    assert upload_audit_details(evidence_world["evidence_id"]) == [
+        {"case_id": case_id, "case_closed": False}
+    ]
+
+
 @requires_database
 def test_assigned_investigator_reads_and_uploads_on_its_case(evidence_world):
     investigator = evidence_world["people"]["investigator"]
     case_id, evidence_id = evidence_world["case_id"], evidence_world["evidence_id"]
     listing = request_as(investigator, "get", f"/api/v1/cases/{case_id}/evidence")
     assert listing.status_code == 200
-    assert listing.json()["total"] == 1
+    assert len(listing.json()["items"]) == 1
+    assert listing.json()["next_cursor"] is None
     download = request_as(
         investigator, "get", f"/api/v1/evidence/{evidence_id}/download"
     )

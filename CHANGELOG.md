@@ -6,7 +6,34 @@ Every release entry states the **SAFE compatibility baseline**: the SAFE version
 
 ## Unreleased
 
-Changes after 0.2.1 go here.
+Changes after 0.3.0 go here.
+
+## 0.3.0 - 2026-11-05
+
+**SAFE compatibility baseline:** SAFE v1.0 (2026-10-21), wg-safe commit `08c0d6a11163d10ac878a15dc9f53b5b322fd7cb`. Same baseline as 0.2.0 and 0.2.1.
+
+This release completes phase F3 (hardening and release preparation). It contains a breaking API change: the paged list endpoints return a cursor only, and `offset` and `total` are removed.
+
+### Added
+- The header case search finds open cases only, so closed cases are not shown there. The Cases page search keeps its status filter (All statuses, Open, Closed).
+- Case links have a type (duplicate, related or root and sub-case), a required reason and a visibility checkbox that is off by default (migration 0052; links made before it read as related with no reason). A duplicate link closes the duplicate case in the same step, under the rules for closing a case, and is refused while that case has an open deadline task, a review layer that is not set, an open external notice, or an escalation or notice review that has no notice yet. A root and sub-case link lets a reader of the sub-case read the root case, read only. With the checkbox on, the users of either case can see both cases. The API, the CLI and the case page take the new fields.
+- Deadlines: the 30-day analysis obligation is a deadline task of its own, `preliminary_control_failure_analysis`. It is due 30 elapsed days after t0, at the same time as the preliminary public report task, so a weekend or a holiday does not move it. Each new case gets it with its other tasks, and it moves with t0 like them. It is not one of the external notice tasks, so marking those not applicable does not change it. Migration 0051 adds it to the cases that already exist, once per case.
+- Institution owner role (`institution_owner`, migration 0055). It sets the backup approvers of a case and the waiting time of a backup, and it reads every case. It holds no approval, preparation, triage or evidence right. The operator grants and revokes it with `python -m safe_kit.admin owner grant` and `owner revoke`, each with a reason. No user route can create, give, change, disable, delete or reset the password of an account that holds it.
+- Backup approver of an external notice, through the API only (migrations 0053, 0054 and 0057). The owner sets a pool of at least two and at most 20 active approvers for a case. The preparer of a disclosure version opens an escalation, with the reason `unreachable` or `conflict_of_interest`, and names a backup from the pool. The backup decides once, after the waiting time: approve, reject with a reason, or emergency manual notice. The waiting time is 4 hours by default, and the owner changes it with a reason (`PUT /api/v1/notice-settings/backup-wait`). Only an approve decision writes an approval. None of the decisions sends a notice or changes a deadline.
+- Escalation, recipient review and package review records of a disclosure version, through the API only. The Disclosure tab shows the missing facts of the version's escalations, read only.
+
+### Changed
+- Adding or removing a case link updates the case's Activity history and Linked cases list at once. Link changes appear in the history as Case linked and Case link removed.
+- The case detail page shows a **Linked cases** list under the title when the case has links, with a link to each visible linked case.
+- The Roles page shows the `institution_owner` row read only, like `reporting_owner`. A save for it is refused, so its backup rights cannot be removed or widened in the application.
+- Linking cases: the link form has a finder that searches by case reference and fills in the case ID from the result, so the ID does not need to be copied by hand.
+- The data privacy inventory marks the deadline task table as **Potential personal data**: its not-applicable reason is free text that may hold personal data. The catalog entry does not confirm personal data until the owner decides. The duplicate-link help text lists the open work that refuses the link.
+- In production mode the API and the worker refuse to start unless `SAFE_TLS_CERT_FILE` and `SAFE_TLS_KEY_FILE` name readable files. Compose mounts the gateway's certificate and key into both services, so the key is now present in the API and worker containers as well as the gateway. Demo mode does not check them.
+- The sign-in page marks an empty username, password or demo credential on the page, with the field marked invalid and a message beside it. Before, only the browser's own prompt appeared.
+- The disclosure approver reads only its packet: the latest version that has no approval, and each version it approved, with the missing facts of that version. It no longer reads the case (migration 0056). An approver can export a version it approved.
+- The lists of users, case history and evidence page by cursor (`limit`, `cursor`, `next_cursor`). The `offset` and `total` fields are removed. `safe-kit case evidence list` takes `--cursor` in place of `--offset`.
+- Evidence can be uploaded to a closed case, with no extra permission. The `evidence.uploaded` audit row records `case_closed`.
+- Forms are more accessible: a required field shows "(required)" in its label, the date and time fields are labelled groups, and an empty required field is reported on the form.
 
 ## 0.2.1 - 2026-11-04
 
@@ -120,7 +147,6 @@ This release closes F2 (the disclosure, notice, export and demo phase).
 
 - Whether a weekly update moves its task's due date. Today it does not, so the task can go overdue while updates are produced on time.
 - The holiday calendar for deadlines. Today the calendar counts weekends only.
-- Whether the 30-day analysis obligation gets its own deadline task. Today it has none.
 
 ### Not yet verified
 

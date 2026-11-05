@@ -37,7 +37,8 @@ export function CaseSearch() {
     }
     let stale = false;
     setLoading(true);
-    listCases(MAX_RESULTS, undefined, term)
+    // The header search finds open cases only. The Cases page search keeps its status filter.
+    listCases(MAX_RESULTS, undefined, term, "open")
       .then((page) => {
         if (stale) return;
         setItems(page.items);
@@ -107,10 +108,12 @@ export function CaseSearch() {
       />
       {dropdownOpen && (
         <div className="absolute top-full right-0 left-0 z-30 mt-1 max-h-96 overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
-          {pending && <p className="px-2 py-1.5 text-sm text-muted-foreground">Searching…</p>}
-          {!pending && error !== null && <p className="px-2 py-1.5 text-sm text-destructive">{error}</p>}
+          {pending && <p role="status" className="px-2 py-1.5 text-sm text-muted-foreground">Searching…</p>}
+          {!pending && error !== null && (
+            <p role="alert" className="px-2 py-1.5 text-sm text-destructive">{error}</p>
+          )}
           {!pending && error === null && shown.length === 0 && (
-            <p className="px-2 py-1.5 text-sm text-muted-foreground">No cases found</p>
+            <p role="status" className="px-2 py-1.5 text-sm text-muted-foreground">No cases found</p>
           )}
           {!pending && shown.length > 0 && (
             <ul aria-label="Matching cases" className="flex flex-col">
@@ -129,6 +132,7 @@ export function CaseSearch() {
               ))}
             </ul>
           )}
+          <p role="note" className="px-2 py-1.5 text-xs text-muted-foreground">Only open cases are searched. Closed cases are not shown.</p>
         </div>
       )}
     </div>

@@ -37,13 +37,17 @@ export function ReopenCaseDialog({ caseId, open, onOpenChange, onReopened }: Pro
 function ReopenCaseForm({ caseId, onReopened }: { caseId: string; onReopened: (detail: CaseDetail) => void }) {
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // The field the current error is about, so that the field can point at the message.
+  const [errorField, setErrorField] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
+    setErrorField(null);
     const trimmed = reason.trim();
     if (trimmed.length === 0) {
+      setErrorField("reopen-reason");
       setError("Enter the reason for reopening the case.");
       return;
     }
@@ -64,12 +68,17 @@ function ReopenCaseForm({ caseId, onReopened }: { caseId: string; onReopened: (d
         <DialogTitle>Reopen case</DialogTitle>
         <DialogDescription>Reopening unlocks the deadlines and assignments. The reason is stored with the case.</DialogDescription>
       </DialogHeader>
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+      {/* noValidate: the empty reason is reported by handleSubmit, where the message is announced and linked to the field. */}
+      <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
         <FieldGroup>
           <Field>
-            <FieldLabel htmlFor="reopen-reason">Reason</FieldLabel>
+            <FieldLabel htmlFor="reopen-reason">
+              Reason <span className="font-normal text-muted-foreground">(required)</span>
+            </FieldLabel>
             <Textarea
               id="reopen-reason"
+              aria-invalid={errorField === "reopen-reason" || undefined}
+              aria-describedby={errorField === "reopen-reason" ? "reopen-error" : undefined}
               value={reason}
               maxLength={REASON_MAX_LENGTH}
               onChange={(event) => setReason(event.target.value)}
@@ -80,7 +89,7 @@ function ReopenCaseForm({ caseId, onReopened }: { caseId: string; onReopened: (d
           </Field>
         </FieldGroup>
         {error && (
-          <Alert variant="destructive">
+          <Alert variant="destructive" id="reopen-error">
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}

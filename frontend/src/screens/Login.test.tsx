@@ -45,8 +45,8 @@ describe("Login", () => {
     renderLogin();
 
     expect(screen.getByRole("heading", { level: 1, name: "SAFE-Starter-Kit" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Username")).toBeEnabled();
-    expect(screen.getByLabelText("Password")).toBeEnabled();
+    expect(screen.getByLabelText(/^Username/)).toBeEnabled();
+    expect(screen.getByLabelText(/^Password/)).toBeEnabled();
     expect(await screen.findByRole("button", { name: "Log in" })).toBeEnabled();
   });
 
@@ -54,19 +54,46 @@ describe("Login", () => {
     const user = userEvent.setup();
     const { onLogin } = renderLogin();
 
-    await user.type(screen.getByLabelText("Username"), "example-user");
-    await user.type(screen.getByLabelText("Password"), "example-password");
+    await user.type(screen.getByLabelText(/^Username/), "example-user");
+    await user.type(screen.getByLabelText(/^Password/), "example-password");
     await user.click(await screen.findByRole("button", { name: "Log in" }));
 
     expect(onLogin).toHaveBeenCalledWith("example-user", "example-password");
+  });
+
+  it("marks an empty username and password on the page and does not send the login", async () => {
+    const user = userEvent.setup();
+    const { onLogin } = renderLogin();
+
+    await user.click(await screen.findByRole("button", { name: "Log in" }));
+
+    const username = screen.getByLabelText(/^Username/);
+    expect(username).toHaveAttribute("aria-invalid", "true");
+    expect(username).toHaveAccessibleDescription("Enter your username.");
+    expect(screen.getByLabelText(/^Password/)).toHaveAccessibleDescription("Enter your password.");
+    expect(username).toHaveFocus();
+    expect(onLogin).not.toHaveBeenCalled();
+  });
+
+  it("marks an empty demo credential on the page and does not sign in", async () => {
+    const user = userEvent.setup();
+    demo.mockResolvedValue(DEMO_ROLES);
+    const { onDemoSignIn } = renderLogin();
+
+    await user.click(await screen.findByRole("button", { name: "Log in" }));
+
+    const credential = screen.getByLabelText(/^Demo credential/);
+    expect(credential).toHaveAttribute("aria-invalid", "true");
+    expect(credential).toHaveAccessibleDescription("Enter the demo credential for this role.");
+    expect(onDemoSignIn).not.toHaveBeenCalled();
   });
 
   it("shows the error alert for a rejected login", async () => {
     const user = userEvent.setup();
     renderLogin(vi.fn().mockRejectedValue(new ApiError(401, "invalid credentials")));
 
-    await user.type(screen.getByLabelText("Username"), "example-user");
-    await user.type(screen.getByLabelText("Password"), "wrong-example-password");
+    await user.type(screen.getByLabelText(/^Username/), "example-user");
+    await user.type(screen.getByLabelText(/^Password/), "wrong-example-password");
     await user.click(await screen.findByRole("button", { name: "Log in" }));
 
     const alert = await screen.findByRole("alert");
@@ -78,8 +105,8 @@ describe("Login", () => {
     const user = userEvent.setup();
     renderLogin(vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
 
-    await user.type(screen.getByLabelText("Username"), "example-user");
-    await user.type(screen.getByLabelText("Password"), "example-password");
+    await user.type(screen.getByLabelText(/^Username/), "example-user");
+    await user.type(screen.getByLabelText(/^Password/), "example-password");
     await user.click(await screen.findByRole("button", { name: "Log in" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("The server could not be reached.");
@@ -89,8 +116,8 @@ describe("Login", () => {
     const user = userEvent.setup();
     renderLogin(vi.fn().mockRejectedValue(new ApiError(503, "system setup required")));
 
-    await user.type(screen.getByLabelText("Username"), "example-user");
-    await user.type(screen.getByLabelText("Password"), "example-password");
+    await user.type(screen.getByLabelText(/^Username/), "example-user");
+    await user.type(screen.getByLabelText(/^Password/), "example-password");
     await user.click(await screen.findByRole("button", { name: "Log in" }));
 
     const alert = await screen.findByRole("alert");
@@ -119,8 +146,8 @@ describe("Login", () => {
     renderLogin();
 
     expect(await screen.findByText("Setup required")).toBeInTheDocument();
-    expect(screen.getByLabelText("Username")).toBeDisabled();
-    expect(screen.getByLabelText("Password")).toBeDisabled();
+    expect(screen.getByLabelText(/^Username/)).toBeDisabled();
+    expect(screen.getByLabelText(/^Password/)).toBeDisabled();
     expect(screen.getByRole("button", { name: "Log in" })).toBeDisabled();
   });
 
@@ -129,7 +156,7 @@ describe("Login", () => {
     renderLogin();
 
     expect(await screen.findByText("Service unavailable")).toBeInTheDocument();
-    expect(screen.getByLabelText("Username")).toBeDisabled();
+    expect(screen.getByLabelText(/^Username/)).toBeDisabled();
     expect(screen.getByRole("button", { name: "Log in" })).toBeDisabled();
   });
 
@@ -144,12 +171,14 @@ describe("Login", () => {
     const user = userEvent.setup();
     renderLogin();
 
-    const password = screen.getByLabelText("Password");
+    const password = screen.getByLabelText(/^Password/);
     expect(password).toHaveAttribute("type", "password");
 
-    await user.click(screen.getByRole("button", { name: "Show password" }));
+    // The name stays "Show password"; the pressed state carries the toggle.
+    const toggle = screen.getByRole("button", { name: "Show password" });
+    await user.click(toggle);
     expect(password).toHaveAttribute("type", "text");
-    expect(screen.getByRole("button", { name: "Hide password" })).toHaveAttribute("aria-pressed", "true");
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
   });
 });
 
@@ -160,9 +189,9 @@ describe("Login in demo mode", () => {
 
     const picker = await screen.findByLabelText("Demo role");
     expect(picker.tagName).toBe("SELECT");
-    expect(screen.getByLabelText("Demo credential")).toHaveAttribute("type", "password");
-    expect(screen.queryByLabelText("Username")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/^Demo credential/)).toHaveAttribute("type", "password");
+    expect(screen.queryByLabelText(/^Username/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Password/)).not.toBeInTheDocument();
   });
 
   it("does not show the picker outside demo mode", async () => {
@@ -171,9 +200,9 @@ describe("Login in demo mode", () => {
     await screen.findByRole("button", { name: "Log in" });
     await vi.waitFor(() => expect(demo).toHaveBeenCalled());
     expect(screen.queryByLabelText("Demo role")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Demo credential")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Username")).toBeEnabled();
-    expect(screen.getByLabelText("Password")).toBeEnabled();
+    expect(screen.queryByLabelText(/^Demo credential/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/^Username/)).toBeEnabled();
+    expect(screen.getByLabelText(/^Password/)).toBeEnabled();
   });
 
   it("lists the demo roles by name and role, in the server's order", async () => {
@@ -195,7 +224,7 @@ describe("Login in demo mode", () => {
     const { onDemoSignIn, onLogin } = renderLogin();
 
     await user.selectOptions(await screen.findByLabelText("Demo role"), "demo-triager");
-    await user.type(screen.getByLabelText("Demo credential"), EXAMPLE_CREDENTIAL);
+    await user.type(screen.getByLabelText(/^Demo credential/), EXAMPLE_CREDENTIAL);
     await user.click(screen.getByRole("button", { name: "Log in" }));
 
     expect(onDemoSignIn).toHaveBeenCalledWith("demo-triager", EXAMPLE_CREDENTIAL);
@@ -209,7 +238,7 @@ describe("Login in demo mode", () => {
 
     await screen.findByLabelText("Demo role");
     expect(document.body.innerHTML).not.toContain(EXAMPLE_CREDENTIAL);
-    await user.type(screen.getByLabelText("Demo credential"), EXAMPLE_CREDENTIAL);
+    await user.type(screen.getByLabelText(/^Demo credential/), EXAMPLE_CREDENTIAL);
     await user.click(screen.getByRole("button", { name: "Log in" }));
     await vi.waitFor(() => expect(screen.getByRole("button", { name: "Log in" })).toBeEnabled());
 
@@ -221,7 +250,7 @@ describe("Login in demo mode", () => {
     demo.mockResolvedValue(DEMO_ROLES);
     renderLogin(undefined, null, vi.fn().mockRejectedValue(new ApiError(401, "invalid credentials")));
 
-    await user.type(await screen.findByLabelText("Demo credential"), EXAMPLE_CREDENTIAL);
+    await user.type(await screen.findByLabelText(/^Demo credential/), EXAMPLE_CREDENTIAL);
     await user.click(screen.getByRole("button", { name: "Log in" }));
 
     const alert = await screen.findByRole("alert");

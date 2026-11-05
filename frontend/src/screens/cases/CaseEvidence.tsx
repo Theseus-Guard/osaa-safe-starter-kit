@@ -40,7 +40,10 @@ interface Props {
 }
 
 export function CaseEvidence({ caseId, canRead, canWrite }: Props) {
-  const [offset, setOffset] = useState(0);
+  // Cursors of the pages already passed, oldest first. The current page is fetched with the last one.
+  // The first page has no cursor, so the stack is empty there.
+  const [cursors, setCursors] = useState<string[]>([]);
+  const cursor = cursors.length > 0 ? cursors[cursors.length - 1] : undefined;
   const [page, setPage] = useState<EvidencePage | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,12 +54,17 @@ export function CaseEvidence({ caseId, canRead, canWrite }: Props) {
   const [custodyRevision, setCustodyRevision] = useState(0);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
+  // Another case starts again at its first page.
+  useEffect(() => {
+    setCursors([]);
+  }, [caseId]);
+
   useEffect(() => {
     // Without evidence:read the server would answer 403, so the list is not requested at all.
     if (!canRead) return;
     let stale = false;
     setLoading(true);
-    listEvidence(caseId, PAGE_SIZE, offset)
+    listEvidence(caseId, PAGE_SIZE, cursor)
       .then((result) => {
         if (stale) return;
         setPage(result);
@@ -71,11 +79,11 @@ export function CaseEvidence({ caseId, canRead, canWrite }: Props) {
     return () => {
       stale = true;
     };
-  }, [caseId, offset, version, canRead]);
+  }, [caseId, cursor, version, canRead]);
 
   function handleUploaded(item: EvidenceItem) {
     toast.success(`${item.original_filename} was uploaded.`);
-    setOffset(0);
+    setCursors([]);
     setVersion((value) => value + 1);
   }
 
@@ -93,8 +101,7 @@ export function CaseEvidence({ caseId, canRead, canWrite }: Props) {
     }
   }
 
-  const shownFrom = page && page.items.length > 0 ? page.offset + 1 : 0;
-  const shownTo = page ? page.offset + page.items.length : 0;
+  const nextCursor = page?.next_cursor ?? null;
 
   return (
     <Card>
@@ -149,22 +156,24 @@ export function CaseEvidence({ caseId, canRead, canWrite }: Props) {
             )}
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm text-muted-foreground" aria-live="polite">
-                {loading ? "Loading…" : `Showing ${shownFrom}–${shownTo} of ${page?.total ?? 0}`}
+                {loading ? "Loading…" : `Page ${cursors.length + 1}`}
               </p>
               <div className="flex gap-2">
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={loading || !page || page.offset === 0}
-                  onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+                  disabled={loading || cursors.length === 0}
+                  onClick={() => setCursors(cursors.slice(0, -1))}
                 >
                   Previous
                 </Button>
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={loading || !page || page.offset + page.limit >= page.total}
-                  onClick={() => setOffset(offset + PAGE_SIZE)}
+                  disabled={loading || nextCursor === null}
+                  onClick={() => {
+                    if (nextCursor !== null) setCursors([...cursors, nextCursor]);
+                  }}
                 >
                   Next
                 </Button>
@@ -186,15 +195,19 @@ function EvidenceUploadForm({ caseId, onUploaded }: UploadProps) {
   const [file, setFile] = useState<File | null>(null);
   const [inputKey, setInputKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  // The field the current error is about, so that the field can point at the message.
+  const [errorField, setErrorField] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     if (file === null) {
+      setErrorField("evidence-file");
       setError("Choose a file to upload.");
       return;
     }
     setError(null);
+    setErrorField(null);
     setBusy(true);
     try {
       const item = await uploadEvidence(caseId, file);
@@ -212,10 +225,14 @@ function EvidenceUploadForm({ caseId, onUploaded }: UploadProps) {
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-3 rounded-md border p-3">
       <Field>
-        <FieldLabel htmlFor="evidence-file">Upload evidence</FieldLabel>
+        <FieldLabel htmlFor="evidence-file">
+          Upload evidence <span className="font-normal text-muted-foreground">(required)</span>
+        </FieldLabel>
         <Input
           key={inputKey}
           id="evidence-file"
+          aria-invalid={errorField === "evidence-file" || undefined}
+          aria-describedby={errorField === "evidence-file" ? "evidence-error" : undefined}
           type="file"
           accept={ACCEPTED_EVIDENCE_TYPES.join(",")}
           onChange={(event) => setFile(event.target.files?.[0] ?? null)}
@@ -223,7 +240,7 @@ function EvidenceUploadForm({ caseId, onUploaded }: UploadProps) {
         <FieldDescription>Allowed types: {ACCEPTED_EVIDENCE_TYPE_NAMES}. The server also limits the file size.</FieldDescription>
       </Field>
       {error && (
-        <Alert variant="destructive">
+        <Alert variant="destructive" id="evidence-error">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
@@ -281,13 +298,13 @@ function EvidenceRowGroup({
         </TableCell>
         <TableCell>
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="outline" disabled={!canDownload || downloading} onClick={onDownload}>
+            <Button size="sm" variant="outline" disabled={!canDownload || downloading} onClick={onDownload} aria-label={`Download ${item.original_filename}`}>
               {downloading ? "Downloading…" : "Download"}
             </Button>
-            <Button size="sm" variant="ghost" aria-expanded={detailOpen} onClick={onToggleDetail}>
+            <Button size="sm" variant="ghost" aria-expanded={detailOpen} onClick={onToggleDetail} aria-label={`Details of ${item.original_filename}`}>
               {detailOpen ? "Hide details" : "Details"}
             </Button>
-            <Button size="sm" variant="ghost" aria-expanded={custodyOpen} onClick={onToggleCustody}>
+            <Button size="sm" variant="ghost" aria-expanded={custodyOpen} onClick={onToggleCustody} aria-label={`Custody of ${item.original_filename}`}>
               {custodyOpen ? "Hide custody" : "Custody"}
             </Button>
           </div>

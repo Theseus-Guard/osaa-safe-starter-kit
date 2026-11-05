@@ -468,7 +468,7 @@ describe("endpoints", () => {
     ["getProfile", (a) => a.getProfile(), "GET", "/api/v1/auth/profile"],
     ["updateProfile", (a) => a.updateProfile({ first_name: "Ada" }), "PATCH", "/api/v1/auth/profile"],
     ["updateUserProfile", (a) => a.updateUserProfile("user-2", { title: "" }), "PATCH", "/api/v1/users/user-2/profile"],
-    ["listUsers", (a) => a.listUsers(10, 20), "GET", "/api/v1/users?limit=10&offset=20"],
+    ["listUsers", (a) => a.listUsers(10, "cursor-1"), "GET", "/api/v1/users?limit=10&cursor=cursor-1"],
     ["updateUser", (a) => a.updateUser("user-2", { is_active: false }, 5), "PATCH", "/api/v1/users/user-2"],
     ["resetUserPassword", (a) => a.resetUserPassword("user-2", "example-temporary"), "POST", "/api/v1/users/user-2/password"],
     ["listRoles", (a) => a.listRoles(), "GET", "/api/v1/rbac/roles"],
@@ -482,6 +482,7 @@ describe("endpoints", () => {
     ["listCases omits blank q", (a) => a.listCases(8, undefined, "   "), "GET", "/api/v1/cases?limit=8"],
     ["listCases with cursor, q and status", (a) => a.listCases(8, "next", "SAFE", "closed"), "GET", "/api/v1/cases?limit=8&cursor=next&q=SAFE&status=closed"],
     ["getCase", (a) => a.getCase("case-1"), "GET", "/api/v1/cases/case-1"],
+    ["updateCaseTitle", (a) => a.updateCaseTitle("case-1", "New title", 4), "PATCH", "/api/v1/cases/case-1"],
     ["getSystemTimezone", (a) => a.getSystemTimezone(), "GET", "/api/v1/system/timezone"],
     [
       "updateSystemTimezone",
@@ -696,14 +697,44 @@ describe("case and evidence endpoints", () => {
     expect(methodOf(0)).toBe("GET");
   });
 
-  it("adds a link with the linked case ID in the body", async () => {
+  it("adds a link with its type, reason, visibility checkbox and main case in the body", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(201, {}));
 
-    await api.addCaseLink("case-1", "case-2");
+    await api.addCaseLink("case-1", {
+      linked_case_id: "case-2",
+      link_type: "root_sub",
+      reason: "Root of the analysis",
+      share_visibility: true,
+      primary_case_id: "case-2",
+    });
 
     expect(urlOf(0)).toBe("/api/v1/cases/case-1/links");
     expect(methodOf(0)).toBe("POST");
-    expect(bodyOf(0)).toEqual({ linked_case_id: "case-2" });
+    expect(bodyOf(0)).toEqual({
+      linked_case_id: "case-2",
+      link_type: "root_sub",
+      reason: "Root of the analysis",
+      share_visibility: true,
+      primary_case_id: "case-2",
+    });
+  });
+
+  it("sends no main case for a related link", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(201, {}));
+
+    await api.addCaseLink("case-1", {
+      linked_case_id: "case-2",
+      link_type: "related",
+      reason: "Same incident",
+      share_visibility: false,
+    });
+
+    expect(bodyOf(0)).toEqual({
+      linked_case_id: "case-2",
+      link_type: "related",
+      reason: "Same incident",
+      share_visibility: false,
+    });
   });
 
   it("removes a link by the linked case ID and encodes the segment", async () => {
@@ -773,22 +804,22 @@ describe("case and evidence endpoints", () => {
   });
 
   it("requests one page of history", async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { items: [], total: 0, limit: 20, offset: 40 }));
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { items: [], next_cursor: null }));
 
-    await api.getCaseHistory("case-1", 20, 40);
+    await api.getCaseHistory("case-1", 20, "cursor-2");
 
-    expect(urlOf(0)).toBe("/api/v1/cases/case-1/history?limit=20&offset=40");
+    expect(urlOf(0)).toBe("/api/v1/cases/case-1/history?limit=20&cursor=cursor-2");
   });
 
   it("requests one page of evidence and the custody log of one item", async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { items: [], total: 0, limit: 20, offset: 0 })).mockResolvedValueOnce(
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { items: [], next_cursor: null })).mockResolvedValueOnce(
       jsonResponse(200, []),
     );
 
-    await api.listEvidence("case-1", 20, 0);
+    await api.listEvidence("case-1", 20);
     await api.listCustodyEvents("evidence-1");
 
-    expect(urlOf(0)).toBe("/api/v1/cases/case-1/evidence?limit=20&offset=0");
+    expect(urlOf(0)).toBe("/api/v1/cases/case-1/evidence?limit=20");
     expect(urlOf(1)).toBe("/api/v1/evidence/evidence-1/custody");
   });
 

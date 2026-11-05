@@ -16,6 +16,9 @@ frontend/dist/
 # Browser automation artifacts from local testing.
 .playwright-mcp/
 
+# Local Claude Code state, worktrees and agent data.
+.claude/
+
 *.md
 !README.md
 !CHANGELOG.md

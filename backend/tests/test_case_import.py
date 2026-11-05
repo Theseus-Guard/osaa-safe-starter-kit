@@ -463,7 +463,7 @@ def test_valid_record_is_imported_with_its_case_deadlines_registry_and_audit():
         actor,
         "open",
     )
-    assert tasks == 5
+    assert tasks == 6
     assert sorted(actions) == ["case.create", "case.import"]
 
 

@@ -91,7 +91,7 @@ function ProfileForm({ user, onClose, onSaved }: { user: UserSummary; onClose: (
         </Field>
       </FieldGroup>
       {error && (
-        <Alert variant="destructive">
+        <Alert variant="destructive" id="edit-profile-error">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}

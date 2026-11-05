@@ -23,6 +23,10 @@ USER_UPDATE = "user.update"
 USER_DELETE = "user.delete"
 USER_PASSWORD_RESET = "user.password_reset"
 USER_PASSWORD_CHANGE = "user.password_change"
+# The operator grants or revokes the institution_owner role (safe_kit.users.change_institution_owner). Details hold the
+# roles before and after, and the reason the operator gave.
+USER_OWNER_GRANT = "user.owner_granted"
+USER_OWNER_REVOKE = "user.owner_revoked"
 # Details hold the changed field names only, never the values of the profile fields.
 USER_PROFILE_UPDATE = "user.profile_updated"
 ROLE_PERMISSIONS_CHANGE = "role.permissions_change"
@@ -56,7 +60,8 @@ CASE_LINK_REMOVE = "case.link_removed"
 CASE_WEEKLY_UPDATE_CREATED = "case.weekly_update_created"
 # Written against the import record (target_type "case_import"), not the case, so it stays out of the case history.
 CASE_IMPORT = "case.import"
-# Written by safe_kit.evidence against the evidence item (target_type "evidence").
+# Written by safe_kit.evidence against the evidence item (target_type "evidence"). Details hold case_id and case_closed
+# (whether the case was closed when the upload's pending row was inserted).
 EVIDENCE_UPLOADED = "evidence.uploaded"
 EVIDENCE_DOWNLOADED = "evidence.downloaded"
 # Redaction creates a derived item (target: the derived evidence ID). Details hold IDs and counts, never removed text.
@@ -107,6 +112,20 @@ DISCLOSURE_RELEASE_REFUSED = "disclosure.release_refused"
 # identifiers, the channel, states, reason codes and the length of each free-text reason, never the text itself.
 DISCLOSURE_NOTICE_RECORD = "disclosure.notice_recorded"
 DISCLOSURE_NOTICE_STATE = "disclosure.notice_state_changed"
+# T12-A records (safe_kit.external_notice_records). An escalation is written against its own row (target_type
+# "disclosure_escalation"), a recipient or package review against its row ("disclosure_review"). Details hold identifiers,
+# the reason code, the digest and the length of each free-text field, never the text itself.
+DISCLOSURE_ESCALATION = "disclosure.notice_escalated"
+DISCLOSURE_REVIEW = "disclosure.notice_reviewed"
+# The backup approver (safe_kit.external_notice_backup). A pool change is written against the backup row ("external_notice_backup"),
+# one row per person added or removed. A decision is written against its own row ("external_notice_backup_decision").
+# Details hold identifiers, the decision, and the length of the reason, never the reason itself.
+DISCLOSURE_BACKUP_ASSIGNED = "disclosure.backup_assigned"
+DISCLOSURE_BACKUP_REVOKED = "disclosure.backup_revoked"
+DISCLOSURE_BACKUP_DECISION = "disclosure.backup_decided"
+# The institution owner changes the waiting time of a backup (migration 0057). Details hold the old and new value and
+# the length of the reason; the reason itself is kept in external_notice_setting_changes only.
+DISCLOSURE_BACKUP_WAIT_CHANGED = "disclosure.backup_wait_changed"
 SYSTEM_TIMEZONE_SET = "system.timezone_set"
 SYSTEM_TIMEZONE_CHANGED = "system.timezone_changed"
 

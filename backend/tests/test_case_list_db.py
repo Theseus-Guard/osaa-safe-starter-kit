@@ -154,7 +154,10 @@ def item_for(page: dict, case_id: str) -> dict:
 
 
 def fresh_case_with_known_deadlines(reporter: ActingClient) -> str:
-    """A case whose five SAFE tasks have known due dates: affected customers done, broader advisory not applicable."""
+    """A case whose SAFE tasks have known due dates: affected customers done, broader advisory not applicable.
+
+    The analysis obligation is due last (day 5), so it does not change the earliest-open tests.
+    """
     case_id = new_case(reporter)["id"]
     set_deadline(
         case_id, "affected_customers", due_at=BASE + timedelta(days=1), status="done"
@@ -163,6 +166,9 @@ def fresh_case_with_known_deadlines(reporter: ActingClient) -> str:
     set_deadline(case_id, "broader_advisory", due_at=BASE + timedelta(hours=1))
     set_deadline(case_id, "preliminary_public_report", due_at=BASE + timedelta(days=3))
     set_deadline(case_id, "remediation_status", due_at=BASE + timedelta(days=4))
+    set_deadline(
+        case_id, "preliminary_control_failure_analysis", due_at=BASE + timedelta(days=5)
+    )
     return case_id
 
 
@@ -185,6 +191,7 @@ def test_next_deadline_is_null_when_no_task_is_open():
     for kind in (
         "preliminary_safe_report",
         "preliminary_public_report",
+        "preliminary_control_failure_analysis",
         "remediation_status",
     ):
         set_deadline(case_id, kind, status="done")
@@ -378,3 +385,24 @@ def test_evidence_changes_count_only_for_a_caller_with_evidence_read():
 def task_id_of(client: ActingClient, case_id: str, kind: str) -> str:
     detail = client.get(f"/api/v1/cases/{case_id}").json()
     return next(task["id"] for task in detail["deadlines"] if task["kind"] == kind)
+
+
+def test_the_header_search_asks_for_open_cases_and_the_cases_page_search_keeps_its_filter():
+    reporter = ActingClient(new_user("reporter"))
+    closed = new_case(reporter, "Leak A")
+    close_in_database(closed["id"], reporter.user_id)
+    wanted = new_case(reporter, "Leak B")
+
+    # The header search asks for open cases, so a matching closed case is not returned.
+    open_only = reporter.get(
+        f"/api/v1/cases?status=open&q={closed['reference']}"
+    ).json()
+    assert open_only["items"] == []
+    open_match = reporter.get(
+        f"/api/v1/cases?status=open&q={wanted['reference']}"
+    ).json()
+    assert [item["id"] for item in open_match["items"]] == [wanted["id"]]
+
+    # The Cases page search without a status keeps every status, so the closed case is found.
+    all_statuses = reporter.get(f"/api/v1/cases?q={closed['reference']}").json()
+    assert [item["id"] for item in all_statuses["items"]] == [closed["id"]]

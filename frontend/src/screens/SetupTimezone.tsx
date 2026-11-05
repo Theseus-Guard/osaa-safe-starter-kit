@@ -51,7 +51,9 @@ export function SetupTimezone({ onDone }: Props) {
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <FieldGroup>
             <Field>
-              <FieldLabel htmlFor="setup-timezone">System timezone</FieldLabel>
+              <FieldLabel htmlFor="setup-timezone">
+                System timezone <span className="font-normal text-muted-foreground">(required)</span>
+              </FieldLabel>
               <TimezonePicker id="setup-timezone" value={zone} onChange={setZone} disabled={busy} />
             </Field>
           </FieldGroup>

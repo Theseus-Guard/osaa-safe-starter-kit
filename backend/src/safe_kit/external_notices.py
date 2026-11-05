@@ -38,16 +38,19 @@ Rules:
 - Free text (reasons) is kept in the notice rows and is not written to the audit log; the audit log keeps lengths only.
 - Every change runs in one transaction with its audit row. The case row is locked first, so two changes to one notice are
   serialised and the second one sees the first one's state.
+- Receipt delay alarm (plans/03 T08-A): a notice still in state 'sent' is overdue when more than a threshold of elapsed
+  time has passed since sent_at. The plans do not give that threshold, so it has no default and the caller must pass it.
+  The alarm only reads; it sends nothing and has no recipient yet.
 """
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
-from safe_kit import audit, cases, disclosure
+from safe_kit import audit, disclosure
 from safe_kit.cases import CaseScope
 from safe_kit.db import connect
 from safe_kit.idempotency import KeyReused, KeyScope, Replayed, check, remember
@@ -216,15 +219,13 @@ def _time_allowed(moment: datetime, not_before: datetime) -> bool:
     return not_before <= moment <= datetime.now(UTC) + CLOCK_ALLOWANCE
 
 
-def _lock_case(conn, case_id: str, scope: CaseScope) -> str | None:
-    """Lock the case row, then check the caller's visibility. Returns the case status, or None when not visible."""
-    row = conn.execute(
-        "SELECT status FROM cases WHERE id = %s AND NOT is_deleted FOR UPDATE",
-        (case_id,),
-    ).fetchone()
-    if row is None or not cases.is_visible_on(conn, case_id, scope):
-        return None
-    return row[0]
+def _lock_case(conn, case_id: str, scope: CaseScope, version_id: str) -> str | None:
+    """Lock the case row, then check the caller's write visibility. Returns the case status, or None when not visible.
+
+    The version is named because an approver writes a notice through the packet rule (safe_kit.disclosure); every other
+    caller is checked by the case rule alone, as before.
+    """
+    return disclosure.lock_case_for_version(conn, case_id, scope, version_id)
 
 
 def _latest(
@@ -377,7 +378,7 @@ def record_notice(
     try:
         with connect() as conn:
             check(conn, idempotency)
-            status = _lock_case(conn, case_id, scope)
+            status = _lock_case(conn, case_id, scope, version_id)
             if status is None:
                 return Result(Outcome.NOT_FOUND)
             if status == "closed":
@@ -521,7 +522,7 @@ def _change(
     try:
         with connect() as conn:
             check(conn, idempotency)
-            status = _lock_case(conn, case_id, scope)
+            status = _lock_case(conn, case_id, scope, version_id)
             if status is None:
                 return Result(Outcome.NOT_FOUND)
             if status == "closed":
@@ -657,6 +658,65 @@ def cancel_notice(
         idempotency=idempotency,
         render=render,
     )
+
+
+# --- alarms ---------------------------------------------------------------------------------------------------------
+# T08-A receipt delay (plans/03 T08-A: "receipt gecikmesi"). Only a notice in state 'sent' is waiting for a receipt. A
+# receipt_unknown notice already has an answer and its follow-up (T12-B), so it is not counted here. The delay itself is
+# not defined in the plans, so the threshold is always passed in by the caller.
+
+RECEIPT_AWAITING_STATE = "sent"
+
+
+def _check_alarm_inputs(now: datetime, threshold: timedelta) -> None:
+    if now.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    if threshold <= timedelta(0):
+        raise ValueError("the receipt delay threshold must be a positive duration")
+
+
+def receipt_delay_overdue(
+    notices: Iterable[Notice], now: datetime, threshold: timedelta
+) -> list[Notice]:
+    """The notices that still await a receipt and whose sent_at is more than threshold before now.
+
+    Elapsed time is used, and a notice exactly at the threshold is not yet overdue.
+    """
+    _check_alarm_inputs(now, threshold)
+    return [
+        notice
+        for notice in notices
+        if notice.state == RECEIPT_AWAITING_STATE and now - notice.sent_at > threshold
+    ]
+
+
+def read_receipt_delay_alarms(
+    now: datetime, threshold: timedelta, limit: int
+) -> list[Notice]:
+    """The latest revision of each notice, across all cases, that is overdue for a receipt.
+
+    Oldest send first. Read only: nothing is written and nothing is sent.
+    """
+    _check_alarm_inputs(now, threshold)
+    cutoff = now - threshold
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT {_COLUMNS}
+            FROM (
+                SELECT DISTINCT ON (notice_id) *
+                FROM external_notices
+                WHERE NOT is_deleted
+                  AND case_id IN (SELECT id FROM cases WHERE NOT is_deleted)
+                ORDER BY notice_id, revision DESC
+            ) latest
+            WHERE state = %s AND sent_at < %s
+            ORDER BY sent_at, notice_id
+            LIMIT %s
+            """,
+            (RECEIPT_AWAITING_STATE, cutoff, limit),
+        ).fetchall()
+    return [_from_row(row) for row in rows]
 
 
 # --- read -----------------------------------------------------------------------------------------------------------

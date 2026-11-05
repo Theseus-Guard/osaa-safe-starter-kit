@@ -87,11 +87,11 @@ describe("CaseImpacts", () => {
     render(<CaseImpacts {...BASE_PROPS} onRecorded={onRecorded} />);
 
     expect(await screen.findByText("Affected people groups")).toBeInTheDocument();
-    await user.click(within(rowOf("Duration")).getByRole("button", { name: "Assess" }));
+    await user.click(within(rowOf("Duration")).getByRole("button", { name: /^Assess/ }));
     const dialog = await screen.findByRole("dialog");
-    await user.click(within(dialog).getByLabelText("Severity"));
+    await user.click(within(dialog).getByLabelText(/^Severity/));
     await user.click(await screen.findByRole("option", { name: "Medium" }));
-    await user.type(within(dialog).getByLabelText("Scope"), "  Two days  ");
+    await user.type(within(dialog).getByLabelText(/^Scope/), "  Two days  ");
     await user.click(within(dialog).getByRole("button", { name: "Save assessment" }));
 
     await waitFor(() => expect(save).toHaveBeenCalledWith("case-1", "duration", { severity: "medium", scope: "Two days" }));
@@ -107,9 +107,9 @@ describe("CaseImpacts", () => {
     render(<CaseImpacts {...BASE_PROPS} />);
 
     expect(await screen.findByText("Affected people groups")).toBeInTheDocument();
-    await user.click(within(rowOf("Duration")).getByRole("button", { name: "Assess" }));
+    await user.click(within(rowOf("Duration")).getByRole("button", { name: /^Assess/ }));
     const dialog = await screen.findByRole("dialog");
-    await user.type(within(dialog).getByLabelText("Scope"), "Two days");
+    await user.type(within(dialog).getByLabelText(/^Scope/), "Two days");
     await user.click(within(dialog).getByRole("button", { name: "Save assessment" }));
 
     expect(save).not.toHaveBeenCalled();

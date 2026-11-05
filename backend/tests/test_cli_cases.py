@@ -25,6 +25,7 @@ CASE_BODY = {
     "status": "open",
     "calendar_version": "2026.1",
     "created_at": "2026-10-31T10:00:00Z",
+    "revision": 3,
     "deadlines": [
         {
             "kind": "initial_notice",
@@ -2083,26 +2084,148 @@ LINKED_ID = "dddddddd-eeee-4fff-8000-111111111111"
 LINK_BODY = {
     "linked_case_id": LINKED_ID,
     "linked_case_title": "Related case",
+    "link_type": "related",
+    "reason": "Same incident",
+    "share_visibility": False,
+    "primary_side": None,
+    "primary_case_id": None,
     "created_at": "2026-11-01T09:00:00Z",
 }
 HIDDEN_LINK_BODY = {
     "linked_case_id": None,
     "linked_case_title": None,
+    "link_type": "related",
+    "reason": None,
+    "share_visibility": False,
+    "primary_side": None,
+    "primary_case_id": None,
     "created_at": "2026-11-01T09:00:00Z",
 }
 
 
-def test_link_add_sends_the_linked_case_id_and_says_nothing_else_changes(api, capsys):
+def test_link_add_sends_the_type_reason_and_defaults_then_says_nothing_else_changes(
+    api, capsys
+):
     api.route("POST", LINKS_PATH, status=201, body=LINK_BODY)
     code, out, err = run(
-        capsys, "case", "link", "add", CASE_ID, LINKED_ID, "--username", "alice"
+        capsys,
+        "case",
+        "link",
+        "add",
+        CASE_ID,
+        LINKED_ID,
+        "--type",
+        "related",
+        "--reason",
+        "Same incident",
+        "--username",
+        "alice",
     )
     assert code == 0
     assert api.calls[1]["method"] == "POST"
-    assert api.calls[1]["json"] == {"linked_case_id": LINKED_ID}
+    assert api.calls[1]["json"] == {
+        "linked_case_id": LINKED_ID,
+        "link_type": "related",
+        "reason": "Same incident",
+        "share_visibility": False,
+        "primary_case_id": None,
+    }
     assert out.startswith("Cases linked. Linking changes no task, deadline or status.")
     assert LINKED_ID in out and "Related case" in out
+    assert "Link type:        related" in out
     assert err == ""
+
+
+def test_link_add_sends_the_main_case_and_the_visibility_checkbox(api, capsys):
+    api.route("POST", LINKS_PATH, status=201, body=LINK_BODY)
+    code, out, err = run(
+        capsys,
+        "case",
+        "link",
+        "add",
+        CASE_ID,
+        LINKED_ID,
+        "--type",
+        "root_sub",
+        "--reason",
+        "Root of the analysis",
+        "--primary-case-id",
+        LINKED_ID,
+        "--share-visibility",
+        "--username",
+        "alice",
+    )
+    assert code == 0
+    assert api.calls[1]["json"] == {
+        "linked_case_id": LINKED_ID,
+        "link_type": "root_sub",
+        "reason": "Root of the analysis",
+        "share_visibility": True,
+        "primary_case_id": LINKED_ID,
+    }
+
+
+def test_link_add_duplicate_reports_that_the_duplicate_is_closed(api, capsys):
+    duplicate_body = dict(
+        LINK_BODY, link_type="duplicate", primary_side="linked", primary_case_id=LINKED_ID
+    )
+    api.route("POST", LINKS_PATH, status=201, body=duplicate_body)
+    code, out, err = run(
+        capsys,
+        "case",
+        "link",
+        "add",
+        CASE_ID,
+        LINKED_ID,
+        "--type",
+        "duplicate",
+        "--reason",
+        "Same incident",
+        "--primary-case-id",
+        LINKED_ID,
+        "--username",
+        "alice",
+    )
+    assert code == 0
+    assert out.startswith("Duplicate linked. The duplicate case is now closed.")
+    assert "Main or root:     the linked case" in out
+    assert f"Main or root ID:  {LINKED_ID}" in out
+
+
+def test_link_add_type_is_required_and_checked_by_the_parser(api, capsys):
+    code, out, err = run(
+        capsys,
+        "case",
+        "link",
+        "add",
+        CASE_ID,
+        LINKED_ID,
+        "--type",
+        "partner",
+        "--reason",
+        "Same incident",
+        "--username",
+        "alice",
+    )
+    assert code == 2
+    assert api.calls == []
+
+
+def test_link_add_reason_is_required_by_the_parser(api, capsys):
+    code, out, err = run(
+        capsys,
+        "case",
+        "link",
+        "add",
+        CASE_ID,
+        LINKED_ID,
+        "--type",
+        "related",
+        "--username",
+        "alice",
+    )
+    assert code == 2
+    assert api.calls == []
 
 
 def test_link_add_json_prints_the_api_body_exactly(api, capsys):
@@ -2114,6 +2237,10 @@ def test_link_add_json_prints_the_api_body_exactly(api, capsys):
         "add",
         CASE_ID,
         LINKED_ID,
+        "--type",
+        "related",
+        "--reason",
+        "Same incident",
         "--username",
         "alice",
         "--json",
@@ -2138,6 +2265,12 @@ def test_link_add_json_prints_the_api_body_exactly(api, capsys):
             id="duplicate-or-closed",
         ),
         pytest.param(
+            409,
+            {"detail": "duplicate case cannot be closed: no review is recorded"},
+            "cannot be closed yet",
+            id="duplicate-blocked",
+        ),
+        pytest.param(
             422,
             {"detail": "a case cannot be linked to itself"},
             "cannot be linked to itself",
@@ -2150,7 +2283,18 @@ def test_link_add_refusals_are_reported_as_messages(
 ):
     api.route("POST", LINKS_PATH, status=status, body=detail)
     code, out, err = run(
-        capsys, "case", "link", "add", CASE_ID, LINKED_ID, "--username", "alice"
+        capsys,
+        "case",
+        "link",
+        "add",
+        CASE_ID,
+        LINKED_ID,
+        "--type",
+        "related",
+        "--reason",
+        "Same incident",
+        "--username",
+        "alice",
     )
     assert code == 1
     assert message in err
@@ -2160,7 +2304,18 @@ def test_link_add_rejects_a_linked_case_id_that_is_not_a_uuid_without_a_request(
     api, capsys
 ):
     code, out, err = run(
-        capsys, "case", "link", "add", CASE_ID, "not-a-uuid", "--username", "alice"
+        capsys,
+        "case",
+        "link",
+        "add",
+        CASE_ID,
+        "not-a-uuid",
+        "--type",
+        "related",
+        "--reason",
+        "Same incident",
+        "--username",
+        "alice",
     )
     assert code == 2
     assert "LINKED_CASE_ID must be a UUID" in err
@@ -2174,6 +2329,23 @@ def test_link_list_prints_the_links_and_marks_a_hidden_case(api, capsys):
     assert api.calls[1]["method"] == "GET"
     assert LINKED_ID in out and "Related case" in out
     assert "(not available to your account)" in out
+    # The hidden link has no reason to show, so the hidden text is printed for it.
+    assert "Reason:           Same incident" in out
+    assert out.count("Reason:           (not available to your account)") == 1
+
+
+def test_link_list_shows_the_main_case_id_only_when_given(api, capsys):
+    main_link = dict(
+        LINK_BODY, link_type="root_sub", primary_side="linked", primary_case_id=LINKED_ID
+    )
+    hidden_main = dict(
+        HIDDEN_LINK_BODY, link_type="root_sub", primary_side="linked", primary_case_id=None
+    )
+    api.route("GET", LINKS_PATH, body=[main_link, hidden_main])
+    code, out, err = run(capsys, "case", "link", "list", CASE_ID, "--username", "alice")
+    assert code == 0
+    assert f"Main or root ID:  {LINKED_ID}" in out
+    assert "Main or root ID:  (not available to your account)" in out
 
 
 def test_link_list_empty_says_so(api, capsys):
@@ -3361,3 +3533,196 @@ def test_catalog_export_to_an_unwritable_path_is_a_usage_error(api, capsys, tmp_
 
     assert code == 2
     assert "cannot write" in err
+
+
+# --- title update ---
+
+TITLE_PATH = f"/api/v1/cases/{CASE_ID}"
+
+
+def title_update_without_revision(*extra: str) -> tuple[str, ...]:
+    return (
+        "case",
+        "title",
+        "update",
+        CASE_ID,
+        "--username",
+        "alice",
+        *extra,
+    )
+
+
+def test_title_update_without_a_revision_reads_the_current_one_and_sends_it(
+    api, capsys
+):
+    api.route("GET", TITLE_PATH, body=CASE_BODY)
+    api.route("PATCH", TITLE_PATH, body={**CASE_BODY, "title": "New title"})
+    code, out, err = run(
+        capsys, *title_update_without_revision("--title", "  New title  ")
+    )
+    assert code == 0, err
+    assert out.startswith("Case title updated.")
+    assert "New title" in out
+    assert api.paths() == [
+        ("POST", "/api/v1/auth/token"),
+        ("GET", TITLE_PATH),
+        ("PATCH", TITLE_PATH),
+        ("POST", "/api/v1/auth/logout"),
+    ]
+    # The title is sent trimmed, as case create sends it.
+    assert api.calls[2]["json"] == {"title": "New title"}
+    # The revision the case show response carries (3) travels as If-Match.
+    sent = {name.lower(): value for name, value in api.calls[2]["headers"].items()}
+    assert sent["if-match"] == '"3"'
+
+
+def test_title_update_with_a_revision_sends_it_without_reading_the_case(api, capsys):
+    api.route("PATCH", TITLE_PATH, body={**CASE_BODY, "title": "New title"})
+    code, out, err = run(
+        capsys,
+        "case",
+        "title",
+        "update",
+        CASE_ID,
+        "--title",
+        "New title",
+        "--revision",
+        "7",
+        "--username",
+        "alice",
+    )
+    assert code == 0, err
+    assert api.paths() == [
+        ("POST", "/api/v1/auth/token"),
+        ("PATCH", TITLE_PATH),
+        ("POST", "/api/v1/auth/logout"),
+    ]
+    sent = {name.lower(): value for name, value in api.calls[1]["headers"].items()}
+    assert sent["if-match"] == '"7"'
+
+
+def test_title_update_without_a_revision_that_changes_meanwhile_says_so(api, capsys):
+    api.route("GET", TITLE_PATH, body=CASE_BODY)
+    api.route(
+        "PATCH",
+        TITLE_PATH,
+        status=412,
+        body={"detail": {"status": "precondition_failed", "current_revision": 5}},
+    )
+    code, out, err = run(capsys, *title_update_without_revision("--title", "New"))
+    assert code == 1
+    assert out == ""
+    assert "changed after this command read it, so nothing was saved" in err
+    assert f"case show {CASE_ID}" in err
+    # No number is offered, because the command read the revision itself.
+    assert "--revision" not in err
+    assert "current revision" not in err
+
+
+def test_title_update_with_a_stale_revision_names_the_current_one(api, capsys):
+    api.route(
+        "PATCH",
+        TITLE_PATH,
+        status=412,
+        body={"detail": {"status": "precondition_failed", "current_revision": 5}},
+    )
+    code, out, err = run(
+        capsys,
+        "case",
+        "title",
+        "update",
+        CASE_ID,
+        "--title",
+        "New",
+        "--revision",
+        "3",
+        "--username",
+        "alice",
+    )
+    assert code == 1
+    assert out == ""
+    assert "current revision is 5" in err
+    assert "--revision 5" in err
+    assert f"case show {CASE_ID}" in err
+
+
+def test_title_update_rejects_a_blank_title_without_a_request(api, capsys):
+    code, out, err = run(
+        capsys, *title_update_without_revision("--title", "   ")
+    )
+    assert code == 2
+    assert api.calls == []
+    assert "the title must be 1 to 200 characters and not only spaces" in err
+
+
+def test_title_update_rejects_a_title_over_200_characters_without_a_request(api, capsys):
+    code, out, err = run(
+        capsys, *title_update_without_revision("--title", "x" * 201)
+    )
+    assert code == 2
+    assert api.calls == []
+    assert "1 to 200 characters" in err
+
+
+def test_title_update_rejects_a_revision_below_one_without_a_request(api, capsys):
+    code, out, err = run(
+        capsys,
+        "case",
+        "title",
+        "update",
+        CASE_ID,
+        "--title",
+        "New",
+        "--revision",
+        "0",
+        "--username",
+        "alice",
+    )
+    assert code == 2
+    assert api.calls == []
+    assert "--revision must be 1 or more" in err
+
+
+def test_title_update_case_id_must_be_a_uuid_before_any_request(api, capsys):
+    code, out, err = run(
+        capsys,
+        "case",
+        "title",
+        "update",
+        "not-a-case",
+        "--title",
+        "New",
+        "--username",
+        "alice",
+    )
+    assert code == 2
+    assert api.calls == []
+    assert "CASE_ID must be the case ID" in err
+
+
+def test_title_update_of_a_case_not_available_sends_no_write(api, capsys):
+    api.route("GET", TITLE_PATH, status=404, body={"detail": "case not found"})
+    code, out, err = run(capsys, *title_update_without_revision("--title", "New"))
+    assert code == 1
+    assert out == ""
+    assert "case not found" in err
+    assert not any(call["method"] == "PATCH" for call in api.calls)
+
+
+def test_title_update_forbidden_names_the_triager_permission(api, capsys):
+    api.route("PATCH", TITLE_PATH, status=403, body={"detail": "forbidden"})
+    code, out, err = run(
+        capsys,
+        "case",
+        "title",
+        "update",
+        CASE_ID,
+        "--title",
+        "New",
+        "--revision",
+        "3",
+        "--username",
+        "alice",
+    )
+    assert code == 1
+    assert "only a triager can change the case title" in err

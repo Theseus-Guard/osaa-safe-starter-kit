@@ -13,9 +13,11 @@ import {
   getReporterContact,
   listAssignments,
   listAwarenessEvents,
+  listDisclosures,
   listEvidence,
   listImpacts,
   listLegalDuties,
+  listNotices,
   listReviewRounds,
   openReviewRound,
 } from "../../api";
@@ -38,6 +40,8 @@ vi.mock("../../api", async (importOriginal) => {
     getClassification: vi.fn(),
     getPreliminaryReport: vi.fn(),
     getReporterContact: vi.fn(),
+    listDisclosures: vi.fn(),
+    listNotices: vi.fn(),
   };
 });
 
@@ -60,6 +64,8 @@ const legalDuties = vi.mocked(listLegalDuties);
 const classification = vi.mocked(getClassification);
 const report = vi.mocked(getPreliminaryReport);
 const read = vi.mocked(getReporterContact);
+const list = vi.mocked(listDisclosures);
+const notices = vi.mocked(listNotices);
 
 // Selects one of the case tabs, as a user would before reading or pressing anything inside it.
 async function openTab(name: string) {
@@ -133,6 +139,7 @@ const OPEN_CASE: CaseDetail = {
   awareness_time: "2026-11-01T05:00:00Z",
   status: "open",
   calendar_version: "2026.1",
+  revision: 3,
   created_at: "2026-11-01T06:00:00Z",
   closed_at: null,
   close_reason: null,
@@ -156,9 +163,9 @@ beforeEach(() => {
   close.mockReset();
   open.mockReset();
   assignments.mockReset().mockResolvedValue([]);
-  evidence.mockReset().mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
+  evidence.mockReset().mockResolvedValue({ items: [], next_cursor: null });
   reviews.mockReset().mockResolvedValue([]);
-  history.mockReset().mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
+  history.mockReset().mockResolvedValue({ items: [], next_cursor: null });
   awarenessEvents.mockReset().mockResolvedValue([]);
   impacts.mockReset().mockResolvedValue([]);
   legalDuties.mockReset().mockResolvedValue([]);
@@ -177,7 +184,7 @@ describe("CaseDetailPage", () => {
     expect(screen.getByRole("tab", { name: "Evidence" })).toBeInTheDocument();
     expect(screen.getByText("History")).toBeInTheDocument();
     expect(assignments).toHaveBeenCalledWith("case-1");
-    expect(evidence).toHaveBeenCalledWith("case-1", 20, 0);
+    expect(evidence).toHaveBeenCalledWith("case-1", 20, undefined);
   });
 
   it("reloads the history after the case is closed", async () => {
@@ -188,7 +195,7 @@ describe("CaseDetailPage", () => {
     await screen.findByText("Example incident");
     expect(history).toHaveBeenCalledTimes(1);
 
-    await user.type(await screen.findByLabelText("Reason"), "Done");
+    await user.type(await screen.findByLabelText(/^Reason/), "Done");
     await user.click(screen.getByRole("button", { name: "Close case" }));
 
     await waitFor(() => expect(history).toHaveBeenCalledTimes(2));
@@ -209,7 +216,7 @@ describe("CaseDetailPage", () => {
     render(<CaseDetailPage caseId="case-1" permissions={["cases:read_all", "evidence:read"]} />);
 
     expect(await screen.findByRole("tab", { name: "Evidence" })).toBeInTheDocument();
-    expect(evidence).toHaveBeenCalledWith("case-1", 20, 0);
+    expect(evidence).toHaveBeenCalledWith("case-1", 20, undefined);
     await openTab("Evidence");
     expect(screen.getByRole("tabpanel", { name: "Evidence" })).toBeInTheDocument();
     expect(screen.queryByLabelText(/Upload evidence/)).not.toBeInTheDocument();
@@ -220,6 +227,25 @@ describe("CaseDetailPage", () => {
 
     expect(await screen.findByLabelText(/Upload evidence/)).toBeInTheDocument();
     expect(evidence).not.toHaveBeenCalled();
+  });
+
+  it("shows only the packet to a disclosure approver without a case read, and does not load the case", async () => {
+    // The permissions are the ones /auth/me returns for the seeded approver (migration 0056): no case read.
+    list.mockResolvedValue({ items: [] });
+    notices.mockResolvedValue({ items: [] });
+    render(
+      <CaseDetailPage
+        caseId="case-1"
+        permissions={["disclosures:read", "disclosures:approve"]}
+        role="disclosure_approver"
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Disclosure packet" })).toBeInTheDocument();
+    expect(await screen.findByText("Disclosure packages")).toBeInTheDocument();
+    expect(list).toHaveBeenCalled();
+    expect(get).not.toHaveBeenCalled();
+    expect(screen.queryByRole("tab", { name: "Overview" })).not.toBeInTheDocument();
   });
 
   it("locks the close form for a reporter and offers no reopen", async () => {
@@ -345,6 +371,25 @@ describe("CaseDetailPage", () => {
     expect(screen.queryByRole("button", { name: "Add awareness event" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add legal duty" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit classification" })).not.toBeInTheDocument();
+  });
+
+  it("offers the title edit to a caller with cases:triage only, and not once the case is closed", async () => {
+    const { unmount } = render(<CaseDetailPage caseId="case-1" permissions={FULL_ACCESS} />);
+    expect(await screen.findByText("Example incident")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit title" })).toBeInTheDocument();
+    unmount();
+
+    render(<CaseDetailPage caseId="case-1" permissions={["cases:read_all", "evidence:read"]} />);
+    expect(await screen.findByText("Example incident")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit title" })).not.toBeInTheDocument();
+  });
+
+  it("hides the title edit once the case is closed", async () => {
+    get.mockResolvedValue({ ...OPEN_CASE, status: "closed", closed_at: "2026-11-01T07:00:00Z", close_reason: "Done" });
+    render(<CaseDetailPage caseId="case-1" permissions={FULL_ACCESS} />);
+
+    expect((await screen.findAllByText("Closed")).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "Edit title" })).not.toBeInTheDocument();
   });
 
   it("offers the reporter contact to a caller with reporter_contact:read, without reading it on load", async () => {

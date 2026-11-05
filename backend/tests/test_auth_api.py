@@ -624,6 +624,21 @@ def test_admin_cannot_reset_a_reporter_account_password(client, store):
     assert login(client, "reporter-one", PASSWORD).status_code == 200
 
 
+def test_admin_cannot_reset_an_institution_owner_password(client, store):
+    owner = "99999999-9999-9999-9999-999999999999"
+    store.add_user(owner, "owner-one", "institution_owner")
+    admin_token = login_tokens(client, "carol")["access_token"]
+    response = client.post(
+        f"/api/v1/users/{owner}/password",
+        headers=bearer_header(admin_token),
+        json={"temporary_password": "temporary passphrase"},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "institution_owner_reset_refused"
+    # The owner keeps its password: the administrator cannot take over the owner's rights.
+    assert login(client, "owner-one", PASSWORD).status_code == 200
+
+
 def test_non_admin_cannot_reset_passwords(client):
     triager_token = login_tokens(client, "alice")["access_token"]
     response = client.post(

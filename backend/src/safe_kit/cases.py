@@ -18,6 +18,7 @@ from safe_kit import audit
 from safe_kit import system_timezone
 from safe_kit.db import connect
 from safe_kit.idempotency import KeyScope, check, remember
+from safe_kit.pagination import encode_cursor
 from safe_kit.deadlines import (
     BusinessCalendar,
     deadline_start,
@@ -72,8 +73,12 @@ class Outcome(Enum):
     NOT_MARKED_NOT_APPLICABLE = "not_marked_not_applicable"
 
 
-REPORTER_CASE_SQL = "EXISTS (SELECT 1 FROM reporter_identities ri WHERE ri.case_id = cases.id AND NOT ri.is_deleted)"
-ASSIGNED_CASE_SQL = "EXISTS (SELECT 1 FROM case_assignments ca WHERE ca.case_id = cases.id AND NOT ca.is_deleted)"
+def _reporter_case_sql(alias: str) -> str:
+    return f"EXISTS (SELECT 1 FROM reporter_identities ri WHERE ri.case_id = {alias}.id AND NOT ri.is_deleted)"
+
+
+def _assigned_case_sql(alias: str) -> str:
+    return f"EXISTS (SELECT 1 FROM case_assignments ca WHERE ca.case_id = {alias}.id AND NOT ca.is_deleted)"
 
 
 @dataclass(frozen=True)
@@ -86,6 +91,9 @@ class CaseScope:
     hidden from it: the contact needs reporter_contact:read.
     reporter_contact: the caller holds reporter_contact:read. With read_all, such a caller sees every case in the same
     way, so the reporting owner can assign reporter-channel cases too.
+    approver: the caller holds disclosures:approve. It does not change the case rule above (visibility_sql ignores it):
+    a case is never opened to an approver by its case rule. The disclosure read path (safe_kit.disclosure) reads it to
+    show the one packet the approver may approve, and nothing else of the case.
     """
 
     user_id: str
@@ -94,6 +102,7 @@ class CaseScope:
     read_assigned: bool = False
     can_assign: bool = False
     reporter_contact: bool = False
+    approver: bool = False
 
     @classmethod
     def from_permissions(cls, user_id: str, permissions: frozenset[str]) -> "CaseScope":
@@ -104,34 +113,70 @@ class CaseScope:
             read_assigned="cases:read_assigned" in permissions,
             can_assign="cases:assign" in permissions,
             reporter_contact="reporter_contact:read" in permissions,
+            approver="disclosures:approve" in permissions,
         )
 
-    def visibility_sql(self) -> tuple[str, tuple[Any, ...]]:
-        """A condition on the cases table that holds exactly for the cases this scope may see.
-
-        A case opened through the reporter channel (it has an active reporter identity) is hidden from a read_all
-        caller until it has an active assignment, unless the caller holds cases:assign or reporter_contact:read. Those
-        two see it before assignment. A read_all caller with neither (for example the disclosure approver) keeps the
-        old rule.
-        """
+    def _own_rights_sql(self, alias: str) -> tuple[str, tuple[Any, ...]]:
+        """The condition on the table alias from the caller's own rights, without any link."""
         if self.read_all:
             if self.reporter_contact or self.can_assign:
                 return "TRUE", ()
-            return f"(NOT {REPORTER_CASE_SQL} OR {ASSIGNED_CASE_SQL})", ()
+            return (
+                f"(NOT {_reporter_case_sql(alias)} OR {_assigned_case_sql(alias)})",
+                (),
+            )
         clauses: list[str] = []
         params: list[Any] = []
         if self.read_own:
-            clauses.append("cases.created_by = %s")
+            clauses.append(f"{alias}.created_by = %s")
             params.append(self.user_id)
         if self.read_assigned:
             clauses.append(
-                "EXISTS (SELECT 1 FROM case_assignments ca WHERE ca.case_id = cases.id "
+                f"EXISTS (SELECT 1 FROM case_assignments ca WHERE ca.case_id = {alias}.id "
                 "AND ca.user_id = %s AND NOT ca.is_deleted)"
             )
             params.append(self.user_id)
         if not clauses:
             return "FALSE", ()
         return "(" + " OR ".join(clauses) + ")", tuple(params)
+
+    def visibility_sql(self, *, writing: bool = False) -> tuple[str, tuple[Any, ...]]:
+        """A condition on the cases table that holds exactly for the cases this scope may see.
+
+        A case opened through the reporter channel (it has an active reporter identity) is hidden from a read_all
+        caller until it has an active assignment, unless the caller holds cases:assign or reporter_contact:read. Those
+        two see it before assignment. A read_all caller with neither (for example the disclosure approver) keeps the
+        old rule.
+
+        Reads also see two kinds of link (case_links, see safe_kit.case_links):
+        - a link with share_visibility: a case the caller may see by its own rights shows the other case of the link;
+        - a root_sub link: a case the caller may see by its own rights shows its root case (the primary of the link).
+        Both extensions check the other case by its own rights only, so one link is one step, not a chain.
+
+        With writing=True only the own rights count. A case seen through a link can be read, never changed: every write
+        locks the case with this mode (lock_visible_case and the write paths that check visibility themselves).
+        """
+        own_sql, own_params = self._own_rights_sql("cases")
+        if writing:
+            return own_sql, own_params
+        peer_sql, peer_params = self._own_rights_sql("peer_case")
+        shared_sql = (
+            "EXISTS (SELECT 1 FROM case_links cl JOIN cases peer_case ON peer_case.id = "
+            "CASE WHEN cl.case_id = cases.id THEN cl.linked_case_id ELSE cl.case_id END "
+            "WHERE NOT cl.is_deleted AND cl.share_visibility AND (cl.case_id = cases.id OR cl.linked_case_id = cases.id) "
+            f"AND NOT peer_case.is_deleted AND {peer_sql})"
+        )
+        sub_sql, sub_params = self._own_rights_sql("sub_case")
+        root_sql = (
+            "EXISTS (SELECT 1 FROM case_links rl JOIN cases sub_case ON sub_case.id = "
+            "CASE WHEN rl.case_id = cases.id THEN rl.linked_case_id ELSE rl.case_id END "
+            "WHERE NOT rl.is_deleted AND rl.link_type = 'root_sub' AND rl.primary_case_id = cases.id "
+            f"AND NOT sub_case.is_deleted AND {sub_sql})"
+        )
+        return (
+            f"({own_sql} OR {shared_sql} OR {root_sql})",
+            (*own_params, *peer_params, *sub_params),
+        )
 
 
 @dataclass(frozen=True)
@@ -198,6 +243,11 @@ SAFE_DEADLINE_KINDS = (
     "preliminary_public_report",
     "remediation_status",
 )
+# The 30-day analysis obligation (plans/01, t0 + 30 days): its own task, due at t0 + 30 days like the public report.
+# It is not in SAFE_DEADLINE_KINDS, so the weekly update document keeps its five kinds.
+CONTROL_FAILURE_ANALYSIS_KIND = "preliminary_control_failure_analysis"
+# Every task whose due date follows t0. resync_deadlines moves these.
+T0_DEADLINE_KINDS = (*SAFE_DEADLINE_KINDS, CONTROL_FAILURE_ANALYSIS_KIND)
 
 
 # The 14-day broader advisory is conditional, and the case data has no field that records the condition. Until it
@@ -230,6 +280,11 @@ def deadline_tasks_for(t0: datetime, calendar: BusinessCalendar) -> list[Deadlin
         DeadlineTask(
             "preliminary_public_report", due.preliminary_public_report, "open"
         ),
+        DeadlineTask(
+            CONTROL_FAILURE_ANALYSIS_KIND,
+            due.preliminary_control_failure_analysis,
+            "open",
+        ),
         DeadlineTask("remediation_status", due.remediation_status, "open"),
     ]
 
@@ -259,7 +314,7 @@ def resync_deadlines(conn, case_id: str) -> tuple[datetime, dict[str, dict[str, 
     moved: dict[str, dict[str, str]] = {}
     stored = conn.execute(
         "SELECT id::text, kind, due_at FROM deadline_tasks WHERE case_id = %s AND NOT is_deleted AND kind = ANY(%s)",
-        (case_id, list(SAFE_DEADLINE_KINDS)),
+        (case_id, list(T0_DEADLINE_KINDS)),
     ).fetchall()
     for task_id, kind, due_at in stored:
         if due_at != expected[kind]:
@@ -366,9 +421,15 @@ def _load_tasks(conn, case_id: str) -> list[DeadlineTask]:
     ]
 
 
-def _lock_visible_case(conn, case_id: str, scope: CaseScope) -> tuple | None:
-    """Lock the case row until the transaction ends. Returns (status, closed_at, closed_by, revision) or None if not visible."""
-    visibility, params = scope.visibility_sql()
+def lock_visible_case(conn, case_id: str, scope: CaseScope) -> tuple | None:
+    """Lock the case row until the transaction ends. Returns (status, closed_at, closed_by, revision) or None if not visible.
+
+    The lock and the visibility check are one statement. A concurrent change that commits first is seen by the check;
+    a concurrent change that waits for this transaction runs after the caller's insert. Callers that write under a
+    case (assignment, closure, evidence upload) use it so their check and their write are serialized.
+    The check is the write check (writing=True): a case the caller sees only through a link is not locked for change.
+    """
+    visibility, params = scope.visibility_sql(writing=True)
     return conn.execute(
         f"SELECT status, closed_at, closed_by::text, revision FROM cases "
         f"WHERE id = %s AND NOT is_deleted AND {visibility} FOR UPDATE",
@@ -376,19 +437,21 @@ def _lock_visible_case(conn, case_id: str, scope: CaseScope) -> tuple | None:
     ).fetchone()
 
 
-def is_visible(case_id: str, scope: CaseScope) -> bool:
+def is_visible(case_id: str, scope: CaseScope, *, writing: bool = False) -> bool:
     """True when the case exists, is not deleted, and the scope includes it.
 
     This is the one check that answers "may this caller see this case" for a single case. Routes outside this
-    module (evidence_api) call it too, so the rule is not copied anywhere else.
+    module (evidence_api) call it too, so the rule is not copied anywhere else. writing=True is the check for a change.
     """
     with connect() as conn:
-        return is_visible_on(conn, case_id, scope)
+        return is_visible_on(conn, case_id, scope, writing=writing)
 
 
-def is_visible_on(conn, case_id: str, scope: CaseScope) -> bool:
+def is_visible_on(
+    conn, case_id: str, scope: CaseScope, *, writing: bool = False
+) -> bool:
     """The same check as is_visible, on the caller's connection, so it shares the caller's transaction."""
-    visibility, params = scope.visibility_sql()
+    visibility, params = scope.visibility_sql(writing=writing)
     row = conn.execute(
         f"SELECT 1 FROM cases WHERE id = %s AND NOT is_deleted AND {visibility}",
         (case_id, *params),
@@ -534,7 +597,7 @@ def restore_deadline(
     """
     with connect() as conn:
         check(conn, idempotency)
-        locked = _lock_visible_case(conn, case_id, scope)
+        locked = lock_visible_case(conn, case_id, scope)
         if locked is None:
             return Outcome.NOT_FOUND
         if locked[0] == "closed":
@@ -932,7 +995,7 @@ def assign_member(
     """
     with connect() as conn:
         check(conn, idempotency)
-        locked = _lock_visible_case(conn, case_id, scope)
+        locked = lock_visible_case(conn, case_id, scope)
         if locked is None:
             return Outcome.NOT_FOUND, None
         if locked[0] == "closed":
@@ -981,7 +1044,7 @@ def assign_member(
 def unassign_member(case_id: str, user_id: str, scope: CaseScope) -> Outcome:
     """Soft delete the active assignment. The row is kept, so the history stays complete."""
     with connect() as conn:
-        locked = _lock_visible_case(conn, case_id, scope)
+        locked = lock_visible_case(conn, case_id, scope)
         if locked is None:
             return Outcome.NOT_FOUND
         if locked[0] == "closed":
@@ -1030,7 +1093,7 @@ def update_deadline(
     new_reason = reason if status == "not_applicable" else None
     with connect() as conn:
         check(conn, idempotency)
-        locked = _lock_visible_case(conn, case_id, scope)
+        locked = lock_visible_case(conn, case_id, scope)
         if locked is None:
             return Outcome.NOT_FOUND, None
         if locked[0] == "closed":
@@ -1093,7 +1156,7 @@ def update_case_title(
     """
     with connect() as conn:
         check(conn, idempotency)
-        locked = _lock_visible_case(conn, case_id, scope)
+        locked = lock_visible_case(conn, case_id, scope)
         if locked is None:
             return Outcome.NOT_FOUND, 0
         status, _, _, revision = locked
@@ -1122,6 +1185,122 @@ def update_case_title(
     return Outcome.OK, revision
 
 
+def closure_blockers_on(conn, case_id: str) -> list[str]:
+    """The closure blockers of the case, from its current rows. Read only; the caller holds the case row lock.
+
+    Shared by close_case and by a duplicate link, which closes the duplicate with the same rules (case_links).
+    """
+    # A recorded layer outcome of any review round of the case (migrated F1 reviews included).
+    review_count = conn.execute(
+        """
+        SELECT count(*) FROM review_layers rl
+        JOIN review_rounds rr ON rr.id = rl.round_id
+        WHERE rr.case_id = %s AND NOT rr.is_deleted AND NOT rl.is_deleted AND rl.outcome IS NOT NULL
+        """,
+        (case_id,),
+    ).fetchone()[0]
+    tasks = conn.execute(
+        "SELECT kind, status FROM deadline_tasks WHERE case_id = %s AND NOT is_deleted ORDER BY due_at, kind",
+        (case_id,),
+    ).fetchall()
+    # A notice whose latest revision is receipt_unknown has no follow-up (only older notices can be in this state).
+    unknown_notices = conn.execute(
+        """
+        SELECT count(*) FROM (
+            SELECT DISTINCT ON (notice_id) state
+            FROM external_notices
+            WHERE case_id = %s AND NOT is_deleted
+            ORDER BY notice_id, revision DESC
+        ) latest
+        WHERE latest.state = 'receipt_unknown'
+        """,
+        (case_id,),
+    ).fetchone()[0]
+    return closure_blockers(review_count, tasks, unknown_notices)
+
+
+def link_closure_blockers_on(conn, case_id: str) -> list[str]:
+    """Why a duplicate case cannot be closed through a link yet. An empty list means it may be closed.
+
+    The closure blockers of closure_blockers_on (open deadline tasks included) plus the open review and external notice
+    records of the case. Read only; the caller holds the case row lock. Nothing is moved or deleted: the blockers are
+    cleared by the records themselves (a layer set, a notice closed or cancelled, a notice recorded for the version).
+    """
+    blockers = closure_blockers_on(conn, case_id)
+    # A review round is open while one of its layers is not set (rounds never close by themselves).
+    open_layers = conn.execute(
+        """
+        SELECT count(*) FROM review_layers rl
+        JOIN review_rounds rr ON rr.id = rl.round_id
+        WHERE rr.case_id = %s AND NOT rr.is_deleted AND NOT rl.is_deleted AND rl.outcome IS NULL
+        """,
+        (case_id,),
+    ).fetchone()[0]
+    if open_layers:
+        blockers.append(f"{open_layers} review layer(s) are not set")
+    # A notice is open while its latest state is sent (no receipt answer yet) or follow_up_required. A receipt_unknown
+    # notice without a follow-up is already counted by closure_blockers_on.
+    open_notices = conn.execute(
+        """
+        SELECT count(*) FROM (
+            SELECT DISTINCT ON (notice_id) state
+            FROM external_notices
+            WHERE case_id = %s AND NOT is_deleted
+            ORDER BY notice_id, revision DESC
+        ) latest
+        WHERE latest.state IN ('sent', 'follow_up_required')
+        """,
+        (case_id,),
+    ).fetchone()[0]
+    if open_notices:
+        blockers.append(f"{open_notices} external notice(s) are open")
+    # An escalation, or a recipient or package review, is open until a notice is recorded for its version.
+    for table, label in (
+        ("external_notice_escalations", "escalation(s)"),
+        ("external_notice_reviews", "notice review(s)"),
+    ):
+        pending = conn.execute(
+            f"""
+            SELECT count(*) FROM {table} r
+            WHERE r.case_id = %s AND NOT r.is_deleted
+              AND NOT EXISTS (
+                  SELECT 1 FROM external_notices n
+                  WHERE n.version_id = r.version_id AND NOT n.is_deleted
+              )
+            """,
+            (case_id,),
+        ).fetchone()[0]
+        if pending:
+            blockers.append(f"{pending} {label} have no notice recorded yet")
+    return blockers
+
+
+def close_locked(conn, case_id: str, reason: str, actor_id: str) -> None:
+    """Set the case closed, with its history and audit row. The caller holds the row lock and has checked the blockers."""
+    closed_at = conn.execute(
+        """
+        UPDATE cases SET status = 'closed', closed_at = now(), closed_by = %s, close_reason = %s
+        WHERE id = %s
+        RETURNING closed_at
+        """,
+        (actor_id, reason, case_id),
+    ).fetchone()[0]
+    _record_status_change(conn, case_id, "closed", reason, actor_id)
+    audit.record(
+        conn,
+        audit.CASE_CLOSE,
+        "case",
+        case_id,
+        actor_id=actor_id,
+        details={
+            "status": _change("open", "closed"),
+            "closed_at": _change(None, closed_at.isoformat()),
+            "closed_by": _change(None, actor_id),
+            "close_reason": _change(None, _text_marker(reason)),
+        },
+    )
+
+
 def close_case(
     case_id: str,
     reason: str,
@@ -1136,62 +1315,15 @@ def close_case(
     """
     with connect() as conn:
         check(conn, idempotency)
-        locked = _lock_visible_case(conn, case_id, scope)
+        locked = lock_visible_case(conn, case_id, scope)
         if locked is None:
             return Outcome.NOT_FOUND, []
         if locked[0] == "closed":
             return Outcome.CLOSED, []
-        # A recorded layer outcome of any review round of the case (migrated F1 reviews included).
-        review_count = conn.execute(
-            """
-            SELECT count(*) FROM review_layers rl
-            JOIN review_rounds rr ON rr.id = rl.round_id
-            WHERE rr.case_id = %s AND NOT rr.is_deleted AND NOT rl.is_deleted AND rl.outcome IS NOT NULL
-            """,
-            (case_id,),
-        ).fetchone()[0]
-        tasks = conn.execute(
-            "SELECT kind, status FROM deadline_tasks WHERE case_id = %s AND NOT is_deleted ORDER BY due_at, kind",
-            (case_id,),
-        ).fetchall()
-        # A notice whose latest revision is receipt_unknown has no follow-up (only older notices can be in this state).
-        unknown_notices = conn.execute(
-            """
-            SELECT count(*) FROM (
-                SELECT DISTINCT ON (notice_id) state
-                FROM external_notices
-                WHERE case_id = %s AND NOT is_deleted
-                ORDER BY notice_id, revision DESC
-            ) latest
-            WHERE latest.state = 'receipt_unknown'
-            """,
-            (case_id,),
-        ).fetchone()[0]
-        blockers = closure_blockers(review_count, tasks, unknown_notices)
+        blockers = closure_blockers_on(conn, case_id)
         if blockers:
             return Outcome.BLOCKED, blockers
-        closed_at = conn.execute(
-            """
-            UPDATE cases SET status = 'closed', closed_at = now(), closed_by = %s, close_reason = %s
-            WHERE id = %s
-            RETURNING closed_at
-            """,
-            (scope.user_id, reason, case_id),
-        ).fetchone()[0]
-        _record_status_change(conn, case_id, "closed", reason, scope.user_id)
-        audit.record(
-            conn,
-            audit.CASE_CLOSE,
-            "case",
-            case_id,
-            actor_id=scope.user_id,
-            details={
-                "status": _change("open", "closed"),
-                "closed_at": _change(None, closed_at.isoformat()),
-                "closed_by": _change(None, scope.user_id),
-                "close_reason": _change(None, _text_marker(reason)),
-            },
-        )
+        close_locked(conn, case_id, reason, scope.user_id)
         _remember_case(conn, idempotency, render, case_id)
     return Outcome.OK, []
 
@@ -1210,7 +1342,7 @@ def reopen_case(
     """
     with connect() as conn:
         check(conn, idempotency)
-        locked = _lock_visible_case(conn, case_id, scope)
+        locked = lock_visible_case(conn, case_id, scope)
         if locked is None:
             return Outcome.NOT_FOUND
         status, closed_at, closed_by, _ = locked
@@ -1244,12 +1376,14 @@ def case_history(
     case_id: str,
     scope: CaseScope,
     limit: int,
-    offset: int,
+    after: tuple[datetime, str] | None = None,
     *,
     include_evidence: bool = False,
-) -> tuple[list[HistoryEntry], int] | None:
-    """Audit rows of the case, newest first, or None when the scope may not see the case.
+) -> tuple[list[HistoryEntry], str | None] | None:
+    """One page of audit rows of the case, newest first, or None when the scope may not see the case.
 
+    after is the (created_at, id) position of the last row of the previous page. The second item of the result is
+    the cursor of the next page, or None on the last page.
     A closure or reopening gets its reason from case_status_changes, under the key "reason" in details.
     Evidence actions are left out unless include_evidence is set (the caller holds evidence:read).
     Details are not redacted here: the endpoint decides who sees them.
@@ -1270,29 +1404,33 @@ def case_history(
             AND (%s OR ae.action <> ALL(%s::text[]))
     """
     evidence_filter = (include_evidence, sorted(audit.EVIDENCE_AUDIT_ACTIONS))
+    # Matches the ORDER BY: created_at descending, then id descending.
+    if after is None:
+        keyset, keyset_params = "TRUE", ()
+    else:
+        created_at, row_id = after
+        keyset = "(ae.created_at < %s OR (ae.created_at = %s AND ae.id < %s::uuid))"
+        keyset_params = (created_at, created_at, row_id)
     with connect() as conn:
         if not is_visible_on(conn, case_id, scope):
             return None
+        # One extra row tells whether another page exists; it is not returned.
         rows = conn.execute(
             f"SELECT ae.id::text, ae.action, ae.created_at, ae.actor_id::text, ae.details, csc.reason {history_join}"
-            " ORDER BY ae.created_at DESC, ae.id DESC LIMIT %s OFFSET %s",
+            f" AND {keyset} ORDER BY ae.created_at DESC, ae.id DESC LIMIT %s",
             (
                 audit.CASE_CLOSE,
                 audit.CASE_REOPEN,
                 case_id,
                 case_id,
                 *evidence_filter,
-                limit,
-                offset,
+                *keyset_params,
+                limit + 1,
             ),
         ).fetchall()
-        total = conn.execute(
-            "SELECT count(*) FROM audit_events ae "
-            "WHERE ((ae.target_type = 'case' AND ae.target_id = %s)"
-            " OR (ae.target_type = 'evidence' AND ae.details->>'case_id' = %s))"
-            " AND NOT ae.is_deleted AND (%s OR ae.action <> ALL(%s::text[]))",
-            (case_id, case_id, *evidence_filter),
-        ).fetchone()[0]
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    next_cursor = encode_cursor(rows[-1][2], rows[-1][0]) if has_more else None
     entries = []
     for row in rows:
         details = row[4]
@@ -1307,4 +1445,4 @@ def case_history(
                 details=details,
             )
         )
-    return entries, total
+    return entries, next_cursor

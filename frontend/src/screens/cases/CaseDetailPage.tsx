@@ -3,6 +3,7 @@ import { CaseDetail, ImpactScores, getCase } from "../../api";
 import { describeError } from "../../messages";
 import { caseAbilities } from "../../permissions";
 import { CaseAssignments } from "./CaseAssignments";
+import { CaseLinkedCases } from "./CaseLinkedCases";
 import { CaseLinks } from "./CaseLinks";
 import { CaseAwarenessEvents } from "./CaseAwarenessEvents";
 import { CaseClassification } from "./CaseClassification";
@@ -18,6 +19,7 @@ import { CasePreliminaryReport } from "./CasePreliminaryReport";
 import { CaseReporterContact } from "./CaseReporterContact";
 import { CaseReview } from "./CaseReview";
 import { CaseRiskScore } from "./CaseRiskScore";
+import { CaseTitleEdit } from "./CaseTitleEdit";
 import { Tabs, type TabDefinition } from "@/components/tabs";
 import { Timestamp } from "@/components/timestamp";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -37,6 +39,8 @@ type CaseTab = "overview" | "deadlines" | "evidence" | "reviews" | "links" | "di
 
 export function CaseDetailPage({ caseId, permissions, role }: Props) {
   const abilities = caseAbilities(permissions, role);
+  // A disclosure approver without a case read (migration 0056) sees only its packet: the case is not loaded at all.
+  const packetOnly = !abilities.canReadRecords && abilities.canReadDisclosures;
   const [detail, setDetail] = useState<CaseDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<CaseTab>("overview");
@@ -44,6 +48,7 @@ export function CaseDetailPage({ caseId, permissions, role }: Props) {
   const [historyRevision, setHistoryRevision] = useState(0);
 
   useEffect(() => {
+    if (packetOnly) return undefined;
     let stale = false;
     setDetail(null);
     setError(null);
@@ -58,11 +63,33 @@ export function CaseDetailPage({ caseId, permissions, role }: Props) {
     return () => {
       stale = true;
     };
-  }, [caseId]);
+  }, [caseId, packetOnly]);
+
+  if (packetOnly) {
+    return (
+      <div className="grid gap-4">
+        <h2 className="text-lg font-semibold">Disclosure packet</h2>
+        <CaseDisclosures
+          key={caseId}
+          caseId={caseId}
+          closed={false}
+          canApprove={abilities.canApproveDisclosures}
+          canRecordNotices={abilities.canRecordNotices}
+        />
+      </div>
+    );
+  }
 
   function applyChange(updated: CaseDetail) {
     setDetail(updated);
     setHistoryRevision((value) => value + 1);
+  }
+
+  // Loads the case again, for example after a save was refused because the case changed on the server.
+  function reloadCase() {
+    getCase(caseId)
+      .then(setDetail)
+      .catch((caught: unknown) => setError(describeError(caught)));
   }
 
   // A change to the case record is audited, so the history reloads, and the preliminary report reloads with it.
@@ -213,7 +240,12 @@ export function CaseDetailPage({ caseId, permissions, role }: Props) {
       label: "Links and reporting",
       content: (
         <>
-          <CaseLinks caseId={detail.id} closed={closed} canWrite={abilities.canWriteRecords} />
+          <CaseLinks
+            caseId={detail.id}
+            closed={closed}
+            canWrite={abilities.canWriteRecords}
+            onChanged={() => setHistoryRevision((value) => value + 1)}
+          />
           {/* Keyed by case so a contact read for one case never shows on another. Nothing is read until the button is pressed. */}
           {abilities.canReadReporterContact && <CaseReporterContact key={detail.id} caseId={detail.id} />}
           {/* The preliminary report gathers the free text of every record, so it needs the full view. */}
@@ -269,7 +301,18 @@ export function CaseDetailPage({ caseId, permissions, role }: Props) {
                 <div className="flex flex-wrap items-center gap-3">
                   <h2 className="text-xl font-semibold tracking-tight break-words">{detail.title}</h2>
                   <Badge variant="secondary">{humanize(detail.status)}</Badge>
+                  {/* The title needs cases:triage, the permission the other case record edits use. Closed cases are read-only. */}
+                  <CaseTitleEdit
+                    caseId={detail.id}
+                    title={detail.title}
+                    revision={detail.revision}
+                    closed={closed}
+                    canWrite={abilities.canWriteRecords}
+                    onSaved={applyChange}
+                    onReload={reloadCase}
+                  />
                 </div>
+                <CaseLinkedCases caseId={detail.id} refreshKey={historyRevision} />
               </div>
               <CaseRiskScore
                 caseId={detail.id}

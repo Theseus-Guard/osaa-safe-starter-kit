@@ -369,17 +369,112 @@ def digest_of_version(version: Version) -> str:
     )
 
 
+# --- the approver's packet rule -------------------------------------------------------------------------------------------
+# A disclosure approver (disclosures:approve) holds no case read (migration 0056). Through the disclosure read path it
+# reads, and may approve, one packet of a case: a version that is the latest of its package and has no approval yet
+# (the packet awaiting approval), or a version it approved itself. The rule opens the version and the case status to the
+# disclosure routes only. It is never part of CaseScope.visibility_sql, so the case routes stay closed to the approver.
+# The approver's missing facts (the escalations of the version) are read on the same rule (external_notice_records_api).
+
+
+def _packet_condition(alias: str) -> str:
+    """The packet rule on one version row, with one %s for the approver's user ID (the approved_by check)."""
+    return f"""(
+        (
+            NOT EXISTS (SELECT 1 FROM disclosure_approvals pa WHERE pa.version_id = {alias}.id AND NOT pa.is_deleted)
+            AND {alias}.version = (
+                SELECT MAX(lv.version) FROM disclosure_versions lv
+                WHERE lv.package_id = {alias}.package_id AND NOT lv.is_deleted
+            )
+        )
+        OR EXISTS (
+            SELECT 1 FROM disclosure_approvals pa2
+            WHERE pa2.version_id = {alias}.id AND NOT pa2.is_deleted AND pa2.approved_by = %s
+        )
+    )"""
+
+
+def _packet_exists_sql() -> str:
+    """The packet rule for one version ID (%s) of the case in the outer query (cases.id)."""
+    return (
+        "EXISTS (SELECT 1 FROM disclosure_versions pv WHERE pv.id = %s AND pv.case_id = cases.id "
+        f"AND NOT pv.is_deleted AND {_packet_condition('pv')})"
+    )
+
+
+def _case_condition(
+    scope: CaseScope, *, writing: bool, version_id: str | None
+) -> tuple[str, tuple]:
+    """The condition on the cases table for a disclosure operation: the case rule, or for an approver the packet rule
+    on version_id as well. A non-approver, or no version, gets the case rule alone."""
+    visibility, params = scope.visibility_sql(writing=writing)
+    if version_id is None or not scope.approver:
+        return visibility, params
+    return (
+        f"({visibility} OR {_packet_exists_sql()})",
+        (*params, version_id, scope.user_id),
+    )
+
+
 # --- database helpers -----------------------------------------------------------------------------------------------
 
 
-def _lock_case(conn, case_id: str, scope: CaseScope) -> str | None:
-    """Lock the case row, then check the caller's visibility. Returns the case status, or None when not visible."""
-    visibility, params = scope.visibility_sql()
+def _lock_case(
+    conn, case_id: str, scope: CaseScope, version_id: str | None = None
+) -> str | None:
+    """Lock the case row, then check the caller's visibility. Returns the case status, or None when not visible.
+
+    version_id: the version the operation names. An approver may lock the case of its packet through that version (see
+    the packet rule above); no other caller is affected.
+    """
+    visibility, params = _case_condition(scope, writing=True, version_id=version_id)
     row = conn.execute(
         f"SELECT status FROM cases WHERE id = %s AND NOT is_deleted AND {visibility} FOR UPDATE",
         (case_id, *params),
     ).fetchone()
     return row[0] if row is not None else None
+
+
+def lock_case_for_version(
+    conn, case_id: str, scope: CaseScope, version_id: str
+) -> str | None:
+    """Lock the case for a write on one of its versions (a review, an approval). Returns the status, or None when the
+    caller may not write to it. The case rule applies, and an approver may also write through its packet."""
+    return _lock_case(conn, case_id, scope, version_id)
+
+
+def _case_access_on(
+    conn, case_id: str, scope: CaseScope, version_id: str | None
+) -> str | None:
+    """How the caller may read the case, or one of its versions: "case" when the case rule admits it, "packet" when only
+    the approver's packet rule does, None when neither. The caller checks that the version belongs to the case."""
+    visibility, params = scope.visibility_sql()
+    if (
+        conn.execute(
+            f"SELECT 1 FROM cases WHERE id = %s AND NOT is_deleted AND {visibility}",
+            (case_id, *params),
+        ).fetchone()
+        is not None
+    ):
+        return "case"
+    if version_id is None or not scope.approver:
+        return None
+    if (
+        conn.execute(
+            f"SELECT 1 FROM cases WHERE id = %s AND NOT is_deleted AND {_packet_exists_sql()}",
+            (case_id, version_id, scope.user_id),
+        ).fetchone()
+        is not None
+    ):
+        return "packet"
+    return None
+
+
+def access_for(case_id: str, version_id: str | None, scope: CaseScope) -> str | None:
+    """The read access of the caller to a case, or to one version of it: "case", "packet" or None (see _case_access_on).
+    The routes answer 404 for None, the same as for a missing case."""
+    with connect() as conn:
+        return _case_access_on(conn, case_id, scope, version_id)
 
 
 def _is_assigned(conn, case_id: str, user_id: str) -> bool:
@@ -680,40 +775,43 @@ def create_version(
 
 
 def list_versions(case_id: str, scope: CaseScope, limit: int) -> list[Version] | None:
-    """The newest versions of the case, newest first. None when the case is not visible to the caller."""
+    """The newest versions of the case, newest first. None when the case is not visible to the caller.
+
+    An approver without the case rule gets only the versions the packet rule admits (the packet awaiting its approval,
+    and its own approvals), in the same order. For it an unknown case and a case it may not see give the same empty list.
+    """
     with connect() as conn:
-        visibility, params = scope.visibility_sql()
-        if (
-            conn.execute(
-                f"SELECT 1 FROM cases WHERE id = %s AND NOT is_deleted AND {visibility}",
-                (case_id, *params),
-            ).fetchone()
-            is None
-        ):
+        access = _case_access_on(conn, case_id, scope, None)
+        if access == "case":
+            ids = conn.execute(
+                """
+                SELECT id::text FROM disclosure_versions
+                WHERE case_id = %s AND NOT is_deleted
+                ORDER BY created_at DESC, id DESC
+                LIMIT %s
+                """,
+                (case_id, limit),
+            ).fetchall()
+        elif scope.approver:
+            ids = conn.execute(
+                f"""
+                SELECT v.id::text FROM disclosure_versions v
+                WHERE v.case_id = %s AND NOT v.is_deleted AND {_packet_condition("v")}
+                ORDER BY v.created_at DESC, v.id DESC
+                LIMIT %s
+                """,
+                (case_id, scope.user_id, limit),
+            ).fetchall()
+        else:
             return None
-        ids = conn.execute(
-            """
-            SELECT id::text FROM disclosure_versions
-            WHERE case_id = %s AND NOT is_deleted
-            ORDER BY created_at DESC, id DESC
-            LIMIT %s
-            """,
-            (case_id, limit),
-        ).fetchall()
         return [load_version_on(conn, case_id, row[0]) for row in ids]
 
 
 def get_version(case_id: str, version_id: str, scope: CaseScope) -> Version | None:
-    """One version. None when the case is not visible or the version is not part of it (the caller cannot tell which)."""
+    """One version. None when the caller has no access to the case or to this version through the packet rule, or when
+    the version is not part of the case (the caller cannot tell which)."""
     with connect() as conn:
-        visibility, params = scope.visibility_sql()
-        if (
-            conn.execute(
-                f"SELECT 1 FROM cases WHERE id = %s AND NOT is_deleted AND {visibility}",
-                (case_id, *params),
-            ).fetchone()
-            is None
-        ):
+        if _case_access_on(conn, case_id, scope, version_id) is None:
             return None
         return load_version_on(conn, case_id, version_id)
 
@@ -783,6 +881,119 @@ def preview(version: Version, recipient: tlp.Recipient) -> dict[str, Any]:
 # --- approval -------------------------------------------------------------------------------------------------------
 
 
+def check_approval_on(
+    conn,
+    case_id: str,
+    version: Version,
+    approver_id: str,
+    approval_values: Mapping[str, str],
+    recipient: tlp.Recipient,
+) -> Outcome | None:
+    """The rules of one approval, on the caller's connection. None when the approval may be written.
+
+    Refused: a version that already has an approval (ALREADY_APPROVED), a version that is not the latest (NOT_LATEST),
+    the preparer as approver (PREPARER_IS_APPROVER), approval values that differ from the version (BINDING_MISMATCH), an
+    approver who cannot see a non-CLEAR item (EVIDENCE_NOT_VISIBLE), and a stored digest that no longer matches (INTEGRITY_FAILED).
+    Used by the approver (approve_version) and by a backup's approve decision (safe_kit.external_notice_backup).
+    """
+    if version.approval is not None:
+        return Outcome.ALREADY_APPROVED
+    if not version.is_latest:
+        return Outcome.NOT_LATEST
+    if version.created_by == approver_id:
+        return Outcome.PREPARER_IS_APPROVER
+    if (
+        approval_values["recipient"] != version.recipient
+        or approval_values["purpose"] != version.purpose
+        or approval_values["digest"] != version.digest
+    ):
+        return Outcome.BINDING_MISMATCH
+    if not all(
+        _labels_visible(
+            conn, case_id, recipient, [item.tlp_label for item in version.items]
+        )
+    ):
+        return Outcome.EVIDENCE_NOT_VISIBLE
+    if digest_of_version(version) != version.digest:
+        return Outcome.INTEGRITY_FAILED
+    return None
+
+
+def write_approval_on(
+    conn,
+    case_id: str,
+    version: Version,
+    approver_id: str,
+    approval_values: Mapping[str, str],
+    *,
+    extra_details: Mapping[str, Any] | None = None,
+) -> Version:
+    """Write the approval row of a version, the release approvals of its CLEAR items, and the audit row, on the caller's
+    connection. The caller has run check_approval_on first. The approval row is the only record of the approval: the
+    version's approval state is derived from it (Version.approval_state).
+
+    extra_details: identifiers added to the audit row (for example the escalation of a backup's decision). No free text.
+    """
+    release_recorded = 0
+    for item in version.items:
+        if item.tlp_label == tlp.CLEAR and not tlp.is_release_approved_on(
+            conn, item.evidence_id
+        ):
+            tlp.record_release_approval_on(conn, item.evidence_id, approver_id)
+            release_recorded += 1
+
+    approval_id, approved_at = conn.execute(
+        """
+        INSERT INTO disclosure_approvals
+            (version_id, package_id, case_id, recipient, purpose, digest, preparer_id, approved_by,
+             separation_rule, recipient_ref)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'preparer_differs_from_approver', %s)
+        RETURNING id::text, approved_at
+        """,
+        (
+            version.id,
+            version.package_id,
+            case_id,
+            version.recipient,
+            version.purpose,
+            version.digest,
+            version.created_by,
+            approver_id,
+            approval_values["recipient_ref"],
+        ),
+    ).fetchone()
+    details: dict[str, Any] = {
+        "case_id": case_id,
+        "package_id": version.package_id,
+        "version": version.version,
+        "digest": version.digest,
+        "tlp_audience": version.tlp_audience,
+        "release_approvals_recorded": release_recorded,
+    }
+    if extra_details:
+        details.update(extra_details)
+    audit.record(
+        conn,
+        audit.DISCLOSURE_APPROVAL,
+        "disclosure_version",
+        version.id,
+        actor_id=approver_id,
+        details=details,
+    )
+    approval = Approval(
+        id=approval_id,
+        version_id=version.id,
+        recipient=version.recipient,
+        purpose=version.purpose,
+        digest=version.digest,
+        preparer_id=version.created_by,
+        approved_by=approver_id,
+        approved_at=approved_at,
+        recipient_ref=approval_values["recipient_ref"],
+    )
+    return replace(version, approval=approval)
+
+
 def approve_version(
     case_id: str,
     version_id: str,
@@ -804,7 +1015,7 @@ def approve_version(
     try:
         with connect() as conn:
             check(conn, idempotency)
-            status = _lock_case(conn, case_id, scope)
+            status = _lock_case(conn, case_id, scope, version_id)
             if status is None:
                 return Result(Outcome.NOT_FOUND)
             if status == "closed":
@@ -812,84 +1023,14 @@ def approve_version(
             version = load_version_on(conn, case_id, version_id)
             if version is None:
                 return Result(Outcome.VERSION_NOT_FOUND)
-            if version.approval is not None:
-                return Result(Outcome.ALREADY_APPROVED)
-            if not version.is_latest:
-                return Result(Outcome.NOT_LATEST)
-            if version.created_by == scope.user_id:
-                return Result(Outcome.PREPARER_IS_APPROVER)
-            if (
-                approval_values["recipient"] != version.recipient
-                or approval_values["purpose"] != version.purpose
-                or approval_values["digest"] != version.digest
-            ):
-                return Result(Outcome.BINDING_MISMATCH)
-            if not all(
-                _labels_visible(
-                    conn, case_id, recipient, [item.tlp_label for item in version.items]
-                )
-            ):
-                return Result(Outcome.EVIDENCE_NOT_VISIBLE)
-            if digest_of_version(version) != version.digest:
-                return Result(Outcome.INTEGRITY_FAILED)
-
-            release_recorded = 0
-            for item in version.items:
-                if item.tlp_label == tlp.CLEAR and not tlp.is_release_approved_on(
-                    conn, item.evidence_id
-                ):
-                    tlp.record_release_approval_on(
-                        conn, item.evidence_id, scope.user_id
-                    )
-                    release_recorded += 1
-
-            approval_id, approved_at = conn.execute(
-                """
-                INSERT INTO disclosure_approvals
-                    (version_id, package_id, case_id, recipient, purpose, digest, preparer_id, approved_by,
-                     separation_rule, recipient_ref)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'preparer_differs_from_approver', %s)
-                RETURNING id::text, approved_at
-                """,
-                (
-                    version.id,
-                    version.package_id,
-                    case_id,
-                    version.recipient,
-                    version.purpose,
-                    version.digest,
-                    version.created_by,
-                    scope.user_id,
-                    approval_values["recipient_ref"],
-                ),
-            ).fetchone()
-            audit.record(
-                conn,
-                audit.DISCLOSURE_APPROVAL,
-                "disclosure_version",
-                version.id,
-                actor_id=scope.user_id,
-                details={
-                    "case_id": case_id,
-                    "package_id": version.package_id,
-                    "version": version.version,
-                    "digest": version.digest,
-                    "tlp_audience": version.tlp_audience,
-                    "release_approvals_recorded": release_recorded,
-                },
+            refusal = check_approval_on(
+                conn, case_id, version, scope.user_id, approval_values, recipient
             )
-            approval = Approval(
-                id=approval_id,
-                version_id=version.id,
-                recipient=version.recipient,
-                purpose=version.purpose,
-                digest=version.digest,
-                preparer_id=version.created_by,
-                approved_by=scope.user_id,
-                approved_at=approved_at,
-                recipient_ref=approval_values["recipient_ref"],
+            if refusal is not None:
+                return Result(refusal)
+            approved = write_approval_on(
+                conn, case_id, version, scope.user_id, approval_values
             )
-            approved = replace(version, approval=approval)
             if idempotency is not None:
                 assert render is not None
                 remember(conn, idempotency, 201, render(approved))
@@ -1175,20 +1316,14 @@ def export_version(
     """The export of one version, and its audit row, in one transaction.
 
     The export is a release: it opens a release attempt (purpose export) before the release check, and closes it with
-    the outcome in the same transaction. Refused: a case the caller cannot see (NOT_FOUND), a version of another case
-    (VERSION_NOT_FOUND), and any failed release rule (NOT_APPROVED, INTEGRITY_FAILED, APPROVAL_MISMATCH,
-    RELEASE_APPROVAL_MISSING, or RELEASE_TRACE_MISSING). A refused export is recorded as a refused attempt. The audit row
-    holds the identifiers, the digest, and the status; the export itself is never written to the log.
+    the outcome in the same transaction. Refused: a case or version the caller cannot read (NOT_FOUND), where an approver
+    reads only its own packet (see _case_access_on), a version of another case (VERSION_NOT_FOUND), and any failed
+    release rule (NOT_APPROVED, INTEGRITY_FAILED, APPROVAL_MISMATCH, RELEASE_APPROVAL_MISSING, or RELEASE_TRACE_MISSING).
+    A refused export is recorded as a refused attempt. The audit row holds the identifiers, the digest, and the status;
+    the export itself is never written to the log.
     """
     with connect() as conn:
-        visibility, params = scope.visibility_sql()
-        if (
-            conn.execute(
-                f"SELECT 1 FROM cases WHERE id = %s AND NOT is_deleted AND {visibility}",
-                (case_id, *params),
-            ).fetchone()
-            is None
-        ):
+        if _case_access_on(conn, case_id, scope, version_id) is None:
             return Result(Outcome.NOT_FOUND)
         version = load_version_on(conn, case_id, version_id)
         if version is None:

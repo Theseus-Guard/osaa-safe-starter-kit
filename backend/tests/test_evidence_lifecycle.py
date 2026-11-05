@@ -154,7 +154,7 @@ def ledger(monkeypatch) -> Ledger:
         evidence_id = str(uuid.uuid4())
         book.rows[evidence_id] = "pending"
         book.events.append("pending")
-        return evidence_id
+        return evidence_id, False
 
     def mark_available(
         evidence_id, uploader_id, sha_plaintext, sha_ciphertext, **kwargs

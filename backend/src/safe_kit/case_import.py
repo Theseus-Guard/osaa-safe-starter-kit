@@ -367,7 +367,7 @@ def _store(index: int, prepared: PreparedRecord, scope: CaseScope) -> RecordResu
         ).fetchone()
         if existing is not None:
             status = "duplicate" if existing[2] == prepared.fingerprint else "conflict"
-            if not cases.is_visible_on(conn, existing[0], scope):
+            if not cases.is_visible_on(conn, existing[0], scope, writing=True):
                 return RecordResult(
                     index=index, status=status, source_case_id=prepared.source_case_id
                 )

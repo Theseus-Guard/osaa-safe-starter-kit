@@ -155,6 +155,7 @@ export function CaseAssignments({ caseId, closed, canAssign }: Props) {
                           size="sm"
                           variant="outline"
                           disabled={closed || !canAssign || busyUserId === assignment.user_id}
+                          aria-label={`Remove ${assignment.username} from the case`}
                           onClick={() => void remove(assignment)}
                         >
                           Remove
@@ -183,7 +184,9 @@ export function CaseAssignments({ caseId, closed, canAssign }: Props) {
             {available.length > 0 && (
               <div className="flex flex-wrap items-end gap-2">
                 <Field className="min-w-64 flex-1">
-                  <FieldLabel htmlFor="assign-user">Add a user</FieldLabel>
+                  <FieldLabel htmlFor="assign-user">
+                    Add a user <span className="font-normal text-muted-foreground">(required)</span>
+                  </FieldLabel>
                   <Select
                     value={selectedUserId}
                     onValueChange={(value) => {

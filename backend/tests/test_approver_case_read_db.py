@@ -1,5 +1,5 @@
-"""F2 approver case read (database): the disclosure approver reads the case and its disclosure versions, and is refused
-what cases:read_all does not cover for this role: the deadline changes, the appeal, the reporter contact, the audit
+"""The disclosure approver's read after migration 0056 (database): the approver reads only the packet it approves through
+the disclosure routes, and is refused the case itself. The refusals below are what the approver gets for the rest: the deadline changes, the appeal, the reporter contact, the audit
 summary and the users. The refusals use the same 403 "forbidden" the other permission checks use.
 
 The approver here holds the seeded role (no monkeypatched permissions), so these tests check migration 0044 end to end.
@@ -28,15 +28,16 @@ def idem() -> dict:
 
 
 @requires_database
-def test_the_approver_reads_the_case_detail(world):
+def test_the_approver_is_refused_the_case_detail(world):
+    # Migration 0056: the approver holds no case read, so the case itself is refused by role (403 forbidden_role).
     approver = db_user("disclosure_approver")
     response = request_as(approver, "get", f"/api/v1/cases/{world['case_id']}")
-    assert response.status_code == 200
-    assert response.json()["id"] == world["case_id"]
+    assert response.status_code == 403
 
 
 @requires_database
 def test_the_approver_reads_the_disclosure_versions(world):
+    # Its packet (the version awaiting approval) is readable through the disclosure routes.
     view, _ = first_version(world)
     approver = db_user("disclosure_approver")
     assert request_as(approver, "get", case_url(world)).status_code == 200
@@ -133,7 +134,6 @@ def test_the_migration_grants_the_approver_only_the_case_read_row(world):
             """
         ).fetchall()
     assert [row[0] for row in rows] == [
-        "cases:read_all",
         "disclosures:approve",
         "disclosures:read",
     ]

@@ -43,6 +43,7 @@ const MESSAGES: Record<string, string> = {
     "The impact values were changed by someone else. Reload them, check the current version and save again.",
   reporter_contact_not_grantable: "The reporter contact permission cannot be granted to any role.",
   reporting_owner_fixed: "The reporting_owner role is fixed. Its permissions cannot be changed.",
+  institution_owner_fixed: "The institution_owner role is fixed. Its permissions cannot be changed.",
   reporter_contact_window_closed:
     "The reporter contact can no longer be read. It is available while the case is open and for 72 hours after it was closed.",
   "only an assigned reviewer can record a review": "Only an assigned reviewer can record a review on this case.",
@@ -147,6 +148,7 @@ const MESSAGES: Record<string, string> = {
 // Codes that carry a variable part after a fixed prefix.
 const PREFIXED_MESSAGES: [prefix: string, render: (rest: string) => string][] = [
   ["case cannot be closed: ", (blockers) => `The case cannot be closed yet: ${blockers}.`],
+  ["duplicate case cannot be closed: ", (blockers) => `The duplicate cannot be closed yet: ${blockers}. No link was made.`],
   ["file exceeds the limit of ", (limit) => `The file is larger than the limit of ${limit}.`],
   ["request exceeds the limit of ", (limit) => `The upload is larger than the limit of ${limit}.`],
 ];

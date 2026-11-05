@@ -56,7 +56,7 @@ CASE_BODY = {
         },
     ],
 }
-EVIDENCE_PAGE = {"items": [EVIDENCE_BODY], "total": 1, "limit": 20, "offset": 0}
+EVIDENCE_PAGE = {"items": [EVIDENCE_BODY], "next_cursor": None}
 
 
 def compact(body) -> bytes:
@@ -331,10 +331,10 @@ def test_add_to_a_case_the_user_cannot_see_says_case_not_found(api, capsys, pdf_
 
 def test_list_sends_the_paging_arguments_and_prints_the_page(api, capsys):
     api.route("GET", f"/api/v1/cases/{CASE_ID}/evidence", body=EVIDENCE_PAGE)
-    code, out, _ = run(capsys, *list_args("--limit", "5", "--offset", "3"))
+    code, out, _ = run(capsys, *list_args("--limit", "5", "--cursor", "abc-123"))
     assert code == 0
     call = api.api_calls()[0]
-    assert call["query"] == {"limit": ["5"], "offset": ["3"]}
+    assert call["query"] == {"limit": ["5"], "cursor": ["abc-123"]}
     lines = out.splitlines()
     assert lines[0].split() == [
         "ID",
@@ -348,28 +348,51 @@ def test_list_sends_the_paging_arguments_and_prints_the_page(api, capsys):
     assert (
         EVIDENCE_ID in lines[1] and "available" in lines[1] and "scan.pdf" in lines[1]
     )
-    assert lines[-1] == "Showing 1-1 of 1"
+    # The last page has no next cursor, so no line follows the table.
+    assert len(lines) == 2
 
 
-def test_list_uses_the_default_page_size(api, capsys):
+def test_list_prints_the_next_page_cursor(api, capsys):
+    page = {"items": [EVIDENCE_BODY], "next_cursor": "eyJhIjoxfQ"}
+    api.route("GET", f"/api/v1/cases/{CASE_ID}/evidence", body=page)
+    code, out, _ = run(capsys, *list_args())
+    assert code == 0
+    assert out.splitlines()[-1] == "Next page: --cursor eyJhIjoxfQ"
+
+
+def test_list_reports_an_invalid_cursor_with_a_clear_message(api, capsys):
     api.route(
         "GET",
         f"/api/v1/cases/{CASE_ID}/evidence",
-        body={"items": [], "total": 0, "limit": 20, "offset": 0},
+        status=400,
+        body={"detail": {"status": "invalid_cursor"}},
+    )
+    code, out, err = run(capsys, *list_args("--cursor", "not-a-cursor"))
+    assert code == 1
+    assert out == ""
+    assert "error: the cursor is not valid" in err
+    assert "'evidence list' again without --cursor" in err
+
+
+def test_list_uses_the_default_page_size_and_no_cursor(api, capsys):
+    api.route(
+        "GET",
+        f"/api/v1/cases/{CASE_ID}/evidence",
+        body={"items": [], "next_cursor": None},
     )
     run(capsys, *list_args())
-    assert api.api_calls()[0]["query"] == {"limit": ["20"], "offset": ["0"]}
+    assert api.api_calls()[0]["query"] == {"limit": ["20"]}
 
 
 def test_list_of_an_empty_case_says_so(api, capsys):
     api.route(
         "GET",
         f"/api/v1/cases/{CASE_ID}/evidence",
-        body={"items": [], "total": 0, "limit": 20, "offset": 0},
+        body={"items": [], "next_cursor": None},
     )
     code, out, _ = run(capsys, *list_args())
     assert code == 0
-    assert out == "No evidence for this case. Total: 0\n"
+    assert out == "No evidence for this case.\n"
 
 
 def test_list_json_prints_the_api_body_exactly(api, capsys):
@@ -379,13 +402,17 @@ def test_list_json_prints_the_api_body_exactly(api, capsys):
     assert out == compact(EVIDENCE_PAGE).decode() + "\n"
 
 
-@pytest.mark.parametrize(
-    "extra", [("--limit", "0"), ("--limit", "201"), ("--offset", "-1")]
-)
+@pytest.mark.parametrize("extra", [("--limit", "0"), ("--limit", "201")])
 def test_list_rejects_out_of_range_paging_without_a_request(api, capsys, extra):
     code, _, err = run(capsys, *list_args(*extra))
     assert code == 2
     assert err.startswith("error: --")
+    assert api.calls == []
+
+
+def test_list_no_longer_takes_an_offset(api, capsys):
+    code, _, _ = run(capsys, *list_args("--offset", "20"))
+    assert code == 2
     assert api.calls == []
 
 

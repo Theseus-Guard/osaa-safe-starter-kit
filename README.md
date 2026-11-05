@@ -2,7 +2,7 @@
 
 A self-hosted starter kit for organizations that take part in the Shared AI Findings Exchange (SAFE). It supports the SAFE workflow for AI incidents and near misses: intake, deadline tracking, evidence preservation, review, controlled disclosure, and corrective actions.
 
-> **Status: early development.** This is not a production system. It has HTTPS with a development certificate, but no production certificate and no OIDC/SSO. The disclosure workflow is partly built: disclosure packages with human approval, export, and records of external notices. Do not use it with real incident data. [CHANGELOG.md](CHANGELOG.md) lists what is built and what is not, and [ROADMAP.md](ROADMAP.md) describes the phases.
+> **Status: early development.** This is not a production system. It has HTTPS with a development certificate, but no production certificate and no OIDC/SSO. The disclosure workflow is partly built: disclosure packages with human approval, export, records of external notices, and backup approval and escalation records (API only, no screens yet). Do not use it with real incident data. [CHANGELOG.md](CHANGELOG.md) lists what is built and what is not, and [ROADMAP.md](ROADMAP.md) describes the phases.
 
 ## Independence and SAFE baseline
 
@@ -95,13 +95,13 @@ cd frontend && npm install && npm run build
 
 ## Test coverage
 
-Measured on 2026-11-04 with the commands below. Figures are statement coverage of owned code; generated and third-party code is excluded.
+Measured on 2026-11-05 with the commands below. Figures are statement coverage of owned code; generated and third-party code is excluded.
 
 | Part | Command | Tests | Coverage |
 |---|---|---|---|
-| Backend, without database | `scripts/test-backend.sh` | 2176 passed, 622 skipped | 77% |
-| Backend, with database | `scripts/test-backend.sh --db` | 2798 passed | 96% |
-| Frontend | `cd frontend && npm run test:coverage` | 583 passed | 77% statements |
+| Backend, without database | `scripts/test-backend.sh` | 2300 passed, 734 skipped | 75% |
+| Backend, with database | `scripts/test-backend.sh --db` | 3034 passed | 96% |
+| Frontend | `cd frontend && npm run test:coverage` | 609 passed | 78% statements |
 
 The backend `--db` mode starts a throwaway PostgreSQL container and removes it afterwards. Database-backed tests are skipped unless `SAFE_TEST_DATABASE=1` is set, which the script does for you.
 
@@ -135,7 +135,7 @@ The service does not import these documents yet. The case import file (`import_f
 ## API conventions
 
 - **Errors.** Every error response has the `detail` field and an `error` object with a stable `code`, a safe `message`, the `request_id`, and `retryable`. A validation error also lists `fields`, with the path and the problem, never the rejected value. Every response carries `X-Request-ID`.
-- **Paging.** `GET /api/v1/cases` pages by cursor: `limit` (1 to 200, default 50), an opaque `cursor`, and `next_cursor`, which is null on the last page. Catalog entries and recommendations also page by cursor. The other list endpoints (users, case history, evidence) still use offset paging; they are planned for F3.
+- **Paging.** The paged list endpoints (cases, catalog entries, recommendations, users, case history and evidence) page by cursor: `limit` (1 to 200, default 50), an opaque `cursor`, and `next_cursor`, which is null on the last page. An invalid cursor is refused with 400 and `detail.status` `invalid_cursor`.
 - **Concurrency.** The case title change, the review layer changes, the deadline task changes, the legal duty changes and the user account changes need `If-Match` with the revision that was read (sent as the `ETag`). A missing value is refused with `428`, a malformed one with `400` (`invalid_if_match`), and a stale one with `412`, which also returns the current revision (`current_revision`). Each record has its own revision. The case ETag is the case revision, and changes to a deadline task, a legal duty or a user do not raise it. So a deadline task ETag and a case ETag are different numbers. The user list and the case's deadline and legal duty lists carry each item's revision in the body, because a list has one ETag. Some changes to a deadline task raise its revision without `If-Match`: the recalculation of SAFE due dates, the weekly update task, and the restore route, which does not check `If-Match`. Other changes do not check a revision yet.
 - **Idempotency.** Case writes that change state take an `Idempotency-Key` header.
 

@@ -61,9 +61,8 @@ export interface UserSummary extends UserProfile {
 
 export interface UserPage {
   items: UserSummary[];
-  total: number;
-  limit: number;
-  offset: number;
+  // Pass this as the cursor of the next call. Null when there is no further page.
+  next_cursor: string | null;
 }
 
 export interface UserUpdate {
@@ -341,8 +340,10 @@ export function updateUserProfile(userId: string, body: ProfileUpdate): Promise<
   return request(`/users/${encodeURIComponent(userId)}/profile`, { method: "PATCH", json: body });
 }
 
-export function listUsers(limit: number, offset: number): Promise<UserPage> {
-  return request<UserPage>(`/users?limit=${limit}&offset=${offset}`);
+// cursor is the next_cursor of the previous page. Omitted means the first page.
+export function listUsers(limit: number, cursor?: string): Promise<UserPage> {
+  const position = cursor === undefined ? "" : `&cursor=${encodeURIComponent(cursor)}`;
+  return request<UserPage>(`/users?limit=${limit}${position}`);
 }
 
 // revision is the account revision the caller read (UserSummary.revision), sent as If-Match. A stale revision answers
@@ -436,6 +437,8 @@ export interface CaseDetail extends RiskFields {
   close_reason: string | null;
   // Reason of the latest reopen. Null or absent when the case has never been reopened.
   reopen_reason?: string | null;
+  // Sent as If-Match when the title is changed (updateCaseTitle). The ETag of the case.
+  revision: number;
   deadlines: DeadlineTask[];
 }
 
@@ -469,6 +472,16 @@ export function listCases(limit: number, cursor?: string, q?: string, status?: C
 
 export function getCase(caseId: string): Promise<CaseDetail> {
   return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}`);
+}
+
+// Changes the case title only. revision is the case revision the caller read (CaseDetail.revision), sent as If-Match.
+// A stale revision answers 412 with ApiError.currentRevision and changes nothing. Needs cases:triage.
+export function updateCaseTitle(caseId: string, title: string, revision: number): Promise<CaseDetail> {
+  return request<CaseDetail>(`/cases/${encodeURIComponent(caseId)}`, {
+    method: "PATCH",
+    json: { title },
+    headers: { ...idempotencyHeaders(), "If-Match": `"${revision}"` },
+  });
 }
 
 // Every state-changing request sends a new Idempotency-Key, so a repeated submit returns the first answer.
@@ -733,12 +746,32 @@ export function removeAssignment(caseId: string, userId: string): Promise<void> 
   });
 }
 
-// A link between two cases that concern the same incident. Linking changes nothing else on either case.
-// linked_case_id and linked_case_title are null when the caller cannot see the other case.
+// The three link types. A duplicate closes the duplicate case when the link is made; a related link is reference
+// only; a root_sub link lets a reader of the sub-case read the root case (read only).
+export type CaseLinkType = "duplicate" | "related" | "root_sub";
+
+// A link between two cases. linked_case_id, linked_case_title and reason are null when the caller cannot see the other
+// case. reason is also null for a link made before link types existed.
+// primary_side says which case is the main case of a duplicate or the root case of a root_sub link: "this" or "linked".
+// It is null for a related link. primary_case_id is that case's ID; it is null when the caller cannot see it.
 export interface CaseLink {
   linked_case_id: string | null;
   linked_case_title: string | null;
+  link_type: CaseLinkType;
+  reason: string | null;
+  share_visibility: boolean;
+  primary_side: "this" | "linked" | null;
+  primary_case_id: string | null;
   created_at: string;
+}
+
+export interface AddCaseLinkRequest {
+  linked_case_id: string;
+  link_type: CaseLinkType;
+  reason: string;
+  share_visibility: boolean;
+  // The main case of a duplicate or the root case of a root_sub link. One of the two cases. Not sent for related.
+  primary_case_id?: string;
 }
 
 // Needs case read access. Answers 404 when the caller cannot see the case.
@@ -746,11 +779,12 @@ export function listCaseLinks(caseId: string): Promise<CaseLink[]> {
   return request<CaseLink[]>(`/cases/${encodeURIComponent(caseId)}/links`);
 }
 
-// Needs cases:triage. Both cases must be visible to the caller and open, and not linked yet.
-export function addCaseLink(caseId: string, linkedCaseId: string): Promise<CaseLink> {
+// Needs cases:triage. Both cases must be visible to the caller for a change and open, and not linked yet.
+// A duplicate link closes the duplicate in the same step, and is refused while that case has an open deadline task.
+export function addCaseLink(caseId: string, link: AddCaseLinkRequest): Promise<CaseLink> {
   return request<CaseLink>(`/cases/${encodeURIComponent(caseId)}/links`, {
     method: "POST",
-    json: { linked_case_id: linkedCaseId },
+    json: link,
     headers: idempotencyHeaders(),
   });
 }
@@ -789,13 +823,14 @@ export interface HistoryEntry {
 
 export interface HistoryPage {
   items: HistoryEntry[];
-  total: number;
-  limit: number;
-  offset: number;
+  // Pass this as the cursor of the next call. Null when there is no further page.
+  next_cursor: string | null;
 }
 
-export function getCaseHistory(caseId: string, limit: number, offset: number): Promise<HistoryPage> {
-  return request<HistoryPage>(`/cases/${encodeURIComponent(caseId)}/history?limit=${limit}&offset=${offset}`);
+// cursor is the next_cursor of the previous page. Omitted means the first page.
+export function getCaseHistory(caseId: string, limit: number, cursor?: string): Promise<HistoryPage> {
+  const position = cursor === undefined ? "" : `&cursor=${encodeURIComponent(cursor)}`;
+  return request<HistoryPage>(`/cases/${encodeURIComponent(caseId)}/history?limit=${limit}${position}`);
 }
 
 // Evidence. The list, download and custody log need evidence:read. Upload needs evidence:write. Both also need the case to be visible.
@@ -861,9 +896,8 @@ export interface RedactionRangeBody {
 
 export interface EvidencePage {
   items: EvidenceItem[];
-  total: number;
-  limit: number;
-  offset: number;
+  // Pass this as the cursor of the next call. Null when there is no further page.
+  next_cursor: string | null;
 }
 
 export interface CustodyEvent {
@@ -874,8 +908,10 @@ export interface CustodyEvent {
   created_at: string;
 }
 
-export function listEvidence(caseId: string, limit: number, offset: number): Promise<EvidencePage> {
-  return request<EvidencePage>(`/cases/${encodeURIComponent(caseId)}/evidence?limit=${limit}&offset=${offset}`);
+// cursor is the next_cursor of the previous page. Omitted means the first page.
+export function listEvidence(caseId: string, limit: number, cursor?: string): Promise<EvidencePage> {
+  const position = cursor === undefined ? "" : `&cursor=${encodeURIComponent(cursor)}`;
+  return request<EvidencePage>(`/cases/${encodeURIComponent(caseId)}/evidence?limit=${limit}${position}`);
 }
 
 export function uploadEvidence(caseId: string, file: File): Promise<EvidenceItem> {
@@ -1223,6 +1259,7 @@ export interface PrivacyInventoryItem {
   description: string;
   category: string;
   contains_personal_data: boolean;
+  may_contain_personal_data: boolean;
   personal_fields: string[];
   purpose: string;
   storage: string;
@@ -1577,6 +1614,25 @@ export interface ExternalNoticeBody {
 export function listNotices(caseId: string, versionId: string): Promise<ExternalNoticeList> {
   return request<ExternalNoticeList>(
     `/cases/${encodeURIComponent(caseId)}/disclosures/${encodeURIComponent(versionId)}/notices`,
+  );
+}
+
+// An escalation of one version to a backup approver. The API gives a reader with only its packet the missing facts and
+// the time, and gives every other reader the full record. The screen shows only these two fields.
+export interface Escalation {
+  id: string;
+  version_id: string;
+  missing_facts: string;
+  escalated_at: string;
+}
+
+export interface EscalationList {
+  items: Escalation[];
+}
+
+export function listEscalations(caseId: string, versionId: string): Promise<EscalationList> {
+  return request<EscalationList>(
+    `/cases/${encodeURIComponent(caseId)}/disclosures/${encodeURIComponent(versionId)}/escalations`,
   );
 }
 

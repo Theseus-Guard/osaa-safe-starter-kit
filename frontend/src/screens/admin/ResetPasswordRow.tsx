@@ -20,13 +20,17 @@ interface Props {
 export function ResetPasswordRow({ userId, username, colSpan, onDone, onCancel }: Props) {
   const [temporary, setTemporary] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // The field the current error is about, so that the field can point at the message.
+  const [errorField, setErrorField] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const inputId = `reset-password-${userId}`;
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
+    setErrorField(null);
     if (temporary.length < MIN_PASSWORD_LENGTH) {
+      setErrorField(inputId);
       setError(`The temporary password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
       return;
     }
@@ -46,9 +50,13 @@ export function ResetPasswordRow({ userId, username, colSpan, onDone, onCancel }
         <form onSubmit={handleSubmit} aria-label={`Reset password for ${username}`} className="flex max-w-md flex-col gap-4">
           <FieldGroup>
             <Field>
-              <FieldLabel htmlFor={inputId}>New temporary password for {username}</FieldLabel>
+              <FieldLabel htmlFor={inputId}>
+                New temporary password for {username} <span className="font-normal text-muted-foreground">(required)</span>
+              </FieldLabel>
               <Input
                 id={inputId}
+                aria-invalid={errorField === inputId || undefined}
+                aria-describedby={errorField === inputId ? `${inputId}-error` : undefined}
                 type="password"
                 value={temporary}
                 onChange={(e) => setTemporary(e.target.value)}
@@ -62,7 +70,7 @@ export function ResetPasswordRow({ userId, username, colSpan, onDone, onCancel }
             </Field>
           </FieldGroup>
           {error && (
-            <Alert variant="destructive">
+            <Alert variant="destructive" id={`${inputId}-error`}>
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           )}

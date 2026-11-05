@@ -72,13 +72,19 @@ from safe_kit.cases import (
 )
 from safe_kit.client_address import resolve_client_address
 from safe_kit.config_guard import (
+    check_tls_files,
     is_demo,
     load_settings,
     retention_years,
     trusted_proxies,
 )
 from safe_kit.db import connect
-from safe_kit.pagination import decode_cursor, encode_cursor
+from safe_kit.pagination import (
+    decode_cursor,
+    decode_name_cursor,
+    encode_cursor,
+    encode_name_cursor,
+)
 from safe_kit.demo_auth import (
     DEMO_ROLES,
     DEMO_USERNAMES,
@@ -106,6 +112,7 @@ from safe_kit.rate_limit import hit as hit_rate_limit
 from safe_kit.privacy import CSV_COLUMNS, inventory, inventory_csv_rows
 from safe_kit.rbac import (
     DISCLOSURE_APPROVER_ROLE,
+    INSTITUTION_OWNER_ROLE,
     RoleOutcome,
     list_catalog,
     list_role_permissions,
@@ -150,7 +157,6 @@ from safe_kit.users import (
     User,
     admin_exists,
     change_own_password,
-    count_users,
     create_user_with_profile,
     find_user,
     find_user_by_id,
@@ -165,11 +171,11 @@ from safe_kit.users import (
 async def _startup_guard(_app: FastAPI) -> AsyncIterator[None]:
     # uvicorn imports this module and runs the lifespan before it serves any request. ConfigError makes the startup
     # fail, so the server does not start. No database connection is opened before this check.
-    load_settings(os.environ)
+    check_tls_files(load_settings(os.environ))
     yield
 
 
-app = FastAPI(title="SAFE-Starter-Kit API", version="0.2.1", lifespan=_startup_guard)
+app = FastAPI(title="SAFE-Starter-Kit API", version="0.3.0", lifespan=_startup_guard)
 
 # Error contract (plans/f0/api-draft.md sections 3.3 and 3.6). Every error response has the same body: the existing
 # "detail" field, which the web UI and the CLI read, and an "error" object with a stable code, a safe message, the
@@ -539,9 +545,7 @@ class UserSummary(BaseModel):
 
 class UserPage(BaseModel):
     items: list[UserSummary]
-    total: int
-    limit: int
-    offset: int
+    next_cursor: str | None
 
 
 class RoleSummary(BaseModel):
@@ -583,6 +587,9 @@ PROTECTED_DETAIL = "the protected admin account cannot be disabled, deleted, or 
 PASSWORD_REUSED_DETAIL = "password_reused"
 # Detail code of the 409 when an administrator tries to reset the password of a reporter account.
 REPORTER_RESET_REFUSED_DETAIL = "reporter_account_reset_refused"
+# Detail code of the 409 when an administrator tries to reset the password of an institution_owner account. The owner's
+# rights would pass to whoever sets the password, so only the operator in the container resets it (admin.py).
+OWNER_RESET_REFUSED_DETAIL = "institution_owner_reset_refused"
 # Detail code of the 409 when a demo account asks to change its password. A demo account signs in only with its demo
 # credential (safe_kit.demo_auth), so its stored password is not one the user knows and cannot be the one it checks.
 DEMO_ACCOUNT_PASSWORD_DETAIL = "demo_account_password_unchangeable"
@@ -858,15 +865,36 @@ def admin_set_system_timezone(
 @app.get("/api/v1/users", response_model=UserPage)
 def admin_list_users(
     limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
+    # Opaque. Omit it for the first page; use next_cursor from the previous page for the next one.
+    cursor: str | None = Query(default=None, max_length=200),
     actor: User = Depends(require_permission("users:manage")),
 ) -> UserPage:
+    after = None
+    if cursor is not None:
+        after = decode_name_cursor(cursor)
+        if after is None:
+            raise HTTPException(status_code=400, detail={"status": "invalid_cursor"})
+    # One extra row tells whether another page exists; it is not returned.
+    page_users = list_users(limit + 1, after)
+    has_more = len(page_users) > limit
+    page_users = page_users[:limit]
     return UserPage(
-        items=[_summary(user) for user in list_users(limit, offset)],
-        total=count_users(),
-        limit=limit,
-        offset=offset,
+        items=[_summary(user) for user in page_users],
+        next_cursor=encode_name_cursor(page_users[-1].username, page_users[-1].id)
+        if has_more
+        else None,
     )
+
+
+def _refuse_owner_change(*roles: str | None) -> None:
+    """The one check for the institution_owner role in the user administration: no request creates an account with it,
+    gives it, takes it away, or changes or removes an account that holds it. The role is set outside the application, by the
+    operator with `python -m safe_kit.admin owner grant` or `owner revoke`. Otherwise the administrator, who holds the user
+    rights, could make an account that holds the owner rights (the administrator may not hold them, migration 0055)."""
+    if INSTITUTION_OWNER_ROLE in roles:
+        raise HTTPException(
+            status_code=403, detail={"status": "institution_owner_not_assignable"}
+        )
 
 
 @app.post("/api/v1/users", status_code=201, response_model=UserCreatedResponse)
@@ -874,6 +902,7 @@ def admin_create_user(
     body: UserCreateRequest,
     actor: User = Depends(require_permission("users:manage")),
 ) -> UserCreatedResponse:
+    _refuse_owner_change(body.role)
     try:
         user_id = create_user_with_profile(
             body.username,
@@ -919,6 +948,8 @@ def admin_update_user(
         raise HTTPException(
             status_code=409, detail="cannot change your own role or status"
         )
+    target = find_user_by_id(str(user_id))
+    _refuse_owner_change(body.role, target.role if target is not None else None)
     outcome = update_user(
         str(user_id),
         role=body.role,
@@ -963,6 +994,8 @@ def admin_delete_user(
         raise HTTPException(
             status_code=409, detail="cannot change your own role or status"
         )
+    target = find_user_by_id(str(user_id))
+    _refuse_owner_change(target.role if target is not None else None)
     outcome = soft_delete_user(str(user_id), actor_id=actor.id)
     if outcome is UpdateOutcome.NOT_FOUND:
         raise HTTPException(status_code=404, detail="user not found")
@@ -983,6 +1016,9 @@ def admin_reset_password(
 ) -> Response:
     # Self-service reset is intentionally not offered. The admin sets a temporary password
     # and the user must replace it at next login.
+    target = find_user_by_id(str(user_id))
+    if target is not None and target.role == INSTITUTION_OWNER_ROLE:
+        raise HTTPException(status_code=409, detail=OWNER_RESET_REFUSED_DETAIL)
     try:
         found = reset_password(str(user_id), body.temporary_password, actor_id=actor.id)
     except PasswordReused:
@@ -1037,9 +1073,15 @@ def admin_set_role_permissions(
         )
     if outcome is RoleOutcome.REPORTING_OWNER_FIXED:
         raise HTTPException(status_code=409, detail={"status": "reporting_owner_fixed"})
+    if outcome is RoleOutcome.INSTITUTION_OWNER_FIXED:
+        raise HTTPException(status_code=409, detail={"status": "institution_owner_fixed"})
     if outcome is RoleOutcome.REPORTER_CONTACT_NOT_GRANTABLE:
         raise HTTPException(
             status_code=409, detail={"status": "reporter_contact_not_grantable"}
+        )
+    if outcome is RoleOutcome.OWNER_PERMISSION_NOT_GRANTABLE:
+        raise HTTPException(
+            status_code=409, detail={"status": "owner_permission_not_grantable"}
         )
     return RoleSummary(role=role, permissions=list_role_permissions()[role])
 
@@ -1185,9 +1227,7 @@ class HistoryEntryResponse(BaseModel):
 
 class HistoryPage(BaseModel):
     items: list[HistoryEntryResponse]
-    total: int
-    limit: int
-    offset: int
+    next_cursor: str | None
 
 
 class CaseImportRecordResult(BaseModel):
@@ -1965,20 +2005,26 @@ def restore_case_deadline(
 def get_case_history(
     case_id: uuid.UUID,
     limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
+    # Opaque. Omit it for the first page; use next_cursor from the previous page for the next one.
+    cursor: str | None = Query(default=None, max_length=200),
     actor: User = Depends(require_any_permission(*CASE_READ_PERMISSIONS)),
 ) -> HistoryPage:
     permissions = permissions_of(actor)
+    after = None
+    if cursor is not None:
+        after = decode_cursor(cursor)
+        if after is None:
+            raise HTTPException(status_code=400, detail={"status": "invalid_cursor"})
     result = case_history(
         str(case_id),
         _scope(actor),
         limit,
-        offset,
+        after,
         include_evidence="evidence:read" in permissions,
     )
     if result is None:
         raise CASE_NOT_FOUND
-    entries, total = result
+    entries, next_cursor = result
     # The reporter's account is never shown, not even to triagers: the reporter must not be exposed to retaliation.
     entries = hide_reporter(entries)
     # Full details go to callers who can read every case (the triager). Everyone else sees action and time only.
@@ -1995,9 +2041,7 @@ def get_case_history(
             )
             for entry in entries
         ],
-        total=total,
-        limit=limit,
-        offset=offset,
+        next_cursor=next_cursor,
     )
 
 
@@ -2101,5 +2145,17 @@ app.include_router(disclosure_router)
 from safe_kit.external_notices_api import notice_router  # noqa: E402
 
 app.include_router(notice_router)
+
+# T12-A records of a disclosure version: escalation to a backup, recipient review, package review (see
+# safe_kit.external_notice_records_api).
+from safe_kit.external_notice_records_api import record_router  # noqa: E402
+
+app.include_router(record_router)
+
+# The backup approver of an external notice: the owner's backup pool, the backup's narrow read and decision (see
+# safe_kit.external_notice_backup_api).
+from safe_kit.external_notice_backup_api import backup_router  # noqa: E402
+
+app.include_router(backup_router)
 
 app.include_router(profile_router)

@@ -46,6 +46,13 @@ def test_every_entry_is_complete():
             assert not entry.personal_fields, entry.table
 
 
+def test_a_potential_personal_data_table_is_not_also_marked_as_containing_it():
+    potential = [entry for entry in CATALOG if entry.may_contain_personal_data]
+    assert [entry.table for entry in potential] == ["deadline_tasks"]
+    for entry in potential:
+        assert not entry.contains_personal_data, entry.table
+
+
 def test_every_table_has_a_retention_period_shown_from_the_setting(monkeypatch):
     # The period comes from SAFE_RETENTION_YEARS for every table. Nothing reports "undefined" any more.
     monkeypatch.setattr(
