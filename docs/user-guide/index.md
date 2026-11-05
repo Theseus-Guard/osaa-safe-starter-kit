@@ -2,7 +2,7 @@
 
 SAFE-Starter-Kit is a self-hosted web application for the SAFE workflow for AI incidents and near misses. A team uses it to record an incident as a case, follow the SAFE deadlines that are calculated from the awareness time, keep evidence with a custody log, record reviews, prepare disclosure package versions for human approval, and record the external notices that a person sent. It also keeps a versioned catalog of defences with their verification history.
 
-This is early development software. It is not a production system, it has no single sign-on, and it must not be used with real incident data yet. The project is developed to conform to SAFE v1.0. It is not certified or endorsed by the Open Secure AI Alliance. The [Overview](../../README.md) has the full status.
+This is development in progress. We do not yet recommend production use; try it with the synthetic demo data. The project is developed to conform to SAFE v1.0. It is not certified or endorsed by the Open Secure AI Alliance. The [Overview](../../README.md) has the full status.
 
 ## Who uses it
 
@@ -38,6 +38,7 @@ Then, by task:
 
 - [Screens](./screens.md): each screen, its tabs, who can change what, and what is audited.
 - [Workflows](./workflows.md): the steps of the main workflows, including backup approval, and what is not built yet.
+- [Expected operation flow](./expected-operation-flow.md): one finding followed from the report to the closed case, with what each role does.
 - [Operator guide](./operator-guide.md): running the stack, secrets, upgrades, operator commands, and troubleshooting.
 - [Demo](./demo.md): the synthetic demo and its sign-in roles.
 - [FAQ](./faq.md): short answers to common questions.

@@ -2,7 +2,9 @@
 
 A self-hosted starter kit for organizations that take part in the Shared AI Findings Exchange (SAFE). It supports the SAFE workflow for AI incidents and near misses: intake, deadline tracking, evidence preservation, review, controlled disclosure, and corrective actions.
 
-> **Status: early development.** This is not a production system. It has HTTPS with a development certificate, but no production certificate and no OIDC/SSO. The disclosure workflow is partly built: disclosure packages with human approval, export, records of external notices, and backup approval and escalation records (API only, no screens yet). Do not use it with real incident data. [CHANGELOG.md](CHANGELOG.md) lists what is built and what is not, and [ROADMAP.md](ROADMAP.md) describes the phases.
+> **Status: development in progress.** We do not yet recommend production use. Try it with the synthetic demo data. [CHANGELOG.md](CHANGELOG.md) lists what is built and what is not, and [ROADMAP.md](ROADMAP.md) describes the phases.
+
+Documentation: https://theseus-guard.github.io/osaa-safe-starter-kit/
 
 ## Independence and SAFE baseline
 
