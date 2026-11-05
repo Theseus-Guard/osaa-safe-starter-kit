@@ -4,6 +4,8 @@ A self-hosted starter kit for organizations that take part in the Shared AI Find
 
 > **Status: development in progress.** We do not yet recommend production use. Try it with the synthetic demo data. [CHANGELOG.md](CHANGELOG.md) lists what is built and what is not, and [ROADMAP.md](ROADMAP.md) describes the phases.
 
+Documentation: https://theseus-guard.github.io/osaa-safe-starter-kit/
+
 ## Independence and SAFE baseline
 
 - SAFE-Starter-Kit is an independent open-source project. It is not an official Alliance product.
