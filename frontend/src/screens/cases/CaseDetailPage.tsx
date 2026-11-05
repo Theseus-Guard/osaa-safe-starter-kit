@@ -3,6 +3,7 @@ import { CaseDetail, ImpactScores, getCase } from "../../api";
 import { describeError } from "../../messages";
 import { caseAbilities } from "../../permissions";
 import { CaseAssignments } from "./CaseAssignments";
+import { CaseLinkedCases } from "./CaseLinkedCases";
 import { CaseLinks } from "./CaseLinks";
 import { CaseAwarenessEvents } from "./CaseAwarenessEvents";
 import { CaseClassification } from "./CaseClassification";
@@ -306,6 +307,7 @@ export function CaseDetailPage({ caseId, permissions, role }: Props) {
                     onReload={reloadCase}
                   />
                 </div>
+                <CaseLinkedCases caseId={detail.id} />
               </div>
               <CaseRiskScore
                 caseId={detail.id}

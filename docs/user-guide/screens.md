@@ -93,6 +93,8 @@ Shows the review rounds of the case. A round has eleven layers, and each layer h
 - Saving a layer checks the revision that was read. A stale save is refused and nothing changes.
 - Audited: `case.review_round_opened`, `case.review_layer_set`, `case.review_conflict_recorded`, `case.review_recusal_recorded`, `case.review_appeal_recorded`.
 
+On the case detail page, a **Linked cases** list appears under the title when the case has links. Each visible linked case is a link to that case, with its link type. A linked case the account cannot see is counted but not named. The full list and the link forms are on the Links and reporting tab.
+
 ### Links and reporting tab
 
 Shows **Linked cases**, the **Reporter contact** and the **Preliminary report**.
