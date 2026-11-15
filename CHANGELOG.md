@@ -6,7 +6,16 @@ Every release entry states the **SAFE compatibility baseline**: the SAFE version
 
 ## Unreleased
 
-Changes after 0.3.0 go here.
+Changes after 0.3.1 go here.
+
+## 0.3.1 - 2026-11-15
+
+**SAFE compatibility baseline:** SAFE v1.0 (2026-10-21), wg-safe commit `08c0d6a11163d10ac878a15dc9f53b5b322fd7cb`. Same baseline as 0.3.0.
+
+This patch release fixes a high-severity Dependabot advisory. It has no API or schema change.
+
+### Security
+- The backend dependency `dnspython` is updated from 2.9.1 to 2.9.2, which fixes an advisory about excessive memory and CPU use (Dependabot alert 11).
 
 ### Added
 - User guide page **Expected operation flow**: one example finding followed through every role, with why the roles are separate. It describes version 0.3.0.
